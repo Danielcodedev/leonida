@@ -213,7 +213,15 @@ jobs:
           retention-days: 7
           if-no-files-found: error
       - name: CPU runtime tests
+        id: windows-cpu-tests
         run: ctest --test-dir runtime/build --output-on-failure
+      # The job log needs a login to read; annotations do not. CTest lists the failed tests as "<number>:<name>".
+      - name: Name the failed CPU runtime tests
+        if: ${{ failure() && steps.windows-cpu-tests.outcome == 'failure' }}
+        shell: bash
+        run: |
+          tr -d '\r' < runtime/build/Testing/Temporary/LastTestsFailed.log |
+            sed -nE 's/^[0-9]+:(.+)$/::error::\1 failed/p'
 
   # Runs the Windows build's tests under Wine, so a change that breaks the loader on Linux (through Wine or Proton)
   # shows up. The required ones are the loader and the stand-in game run end to end; the table in the job summary
