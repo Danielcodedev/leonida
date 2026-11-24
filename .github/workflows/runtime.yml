@@ -356,10 +356,8 @@ jobs:
       - name: GPU tests on llvmpipe
         shell: bash
         env:
-          # cs_imgload_*_tfe: Mesa llvmpipe mishandles the tfe status VGPR (same symptom as MoltenVK / AMD 780M).
-          EXPECTED_FAILURES: >-
-            cs_imgload_tfe
-            cs_imgload_d16_tfe
+          # Empty: add names here when an llvmpipe run still fails them; ci_expected_failures.py notices when they pass.
+          EXPECTED_FAILURES:
         run: |
           vulkaninfo --summary | grep -E 'deviceName.*llvmpipe'  # fails the step if llvmpipe isn't there
           set +e
@@ -410,10 +408,8 @@ jobs:
         shell: bash
         env:
           LEONIDA_W64_EMULATE: "1"
-          # cs_imgload_*_tfe: the tfe status VGPR fails emulated as it does native (the llvmpipe step above).
-          EXPECTED_FAILURES: >-
-            cs_imgload_tfe
-            cs_imgload_d16_tfe
+          # Empty: add names here when an emulated run still fails them; ci_expected_failures.py notices when they pass.
+          EXPECTED_FAILURES:
         run: |
           set +e
           python3 -I scripts/run_gpu_tests.py --build runtime/build --llvm-mc /usr/lib/llvm-19/bin/llvm-mc --work "$RUNNER_TEMP/gpu-w64" --filter cs_ 2>&1 |
@@ -430,10 +426,8 @@ jobs:
         shell: bash
         env:
           LEONIDA_BARY_FALLBACK: "1"
-          # cs_imgload_*_tfe: the full suite runs here too, and they fail as in the native llvmpipe step above.
-          EXPECTED_FAILURES: >-
-            cs_imgload_tfe
-            cs_imgload_d16_tfe
+          # Empty: add names here when a fallback run still fails them; ci_expected_failures.py notices when they pass.
+          EXPECTED_FAILURES:
         run: |
           log="$RUNNER_TEMP/gpu-bary.log"
           set +e
@@ -516,12 +510,9 @@ jobs:
         env:
           # ps_ssharp: #1845 (the S#'s LOD bias, which a Metal sampler can't take). cs_fma_fused is newer than the job
           # and wrong on MoltenVK: https://github.com/ItsNotRexed/Leonida/issues/3796#issuecomment-7086691314
-          # cs_imgload_*_tfe: TFE status VGPR behaviour on MoltenVK (Paravirtual); same symptom as AMD 780M on Windows.
           EXPECTED_FAILURES: >-
             ps_ssharp
             cs_fma_fused
-            cs_imgload_tfe
-            cs_imgload_d16_tfe
         run: |
           set +e
           python3 -I scripts/run_gpu_tests.py --build runtime/build --llvm-mc "$LLVM_MC" --work "$RUNNER_TEMP/gpu" 2>&1 |
