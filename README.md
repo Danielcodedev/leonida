@@ -1,4 +1,4 @@
-<p align="center">
+﻿<p align="center">
   <strong><a href="https://discord.com/invite/projectleonida">Discord — Leonida Legacy Community</a></strong>
 </p>
 
@@ -66,7 +66,7 @@ The port isn't downloaded ready-made. It's built on your PC from your own copy.
 **The easy way:**
 
 1. Install the prerequisites below (or double-click **`Install-Prerequisites.bat`** / let **`Build.bat`** install missing tools automatically).
-2. Download this project **with its submodule**: `git clone --recursive https://github.com/orkan1k/Leonida-Legacy`. A
+2. Download this project **with its submodule**: `git clone --recursive https://github.com/ProjectLeonidaL/leonida`. A
    "Download ZIP" from GitHub leaves out `third_party/rpf9-explorer`. The build fetches it if `git` is installed,
    and otherwise tells you what to do.
 3. Double-click **`Build.bat`**.

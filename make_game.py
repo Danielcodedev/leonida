@@ -1062,7 +1062,7 @@ def ensure_submodule() -> None:
     core = os.path.join(ROOT, "third_party", "rpf9-explorer", "Core")
     if submodule_ready():
         return
-    clone = "git clone --recursive https://github.com/ubiquitarianism/leonida"
+    clone = "git clone --recursive https://github.com/ProjectLeonidaL/leonida"
     git = shutil.which("git")
     if not git:
         fail("third_party/rpf9-explorer is missing (a \"Download ZIP\" from GitHub leaves it out). Install Git "

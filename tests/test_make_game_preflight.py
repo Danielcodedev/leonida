@@ -673,7 +673,7 @@ class PreflightPrerequisiteTest(PreflightTestBase):
             with mock.patch.object(make_game, "ROOT", tmp), \
                  mock.patch("shutil.which", return_value=None):
                 self.assert_fails(make_game.ensure_submodule,
-                                  match="git clone --recursive https://github.com/ubiquitarianism/leonida")
+                                  match="git clone --recursive https://github.com/ProjectLeonidaL/leonida")
 
     def test_ensure_submodule_zip_with_git_does_not_say_install_git(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -682,7 +682,7 @@ class PreflightPrerequisiteTest(PreflightTestBase):
                  mock.patch("shutil.which", return_value="/usr/bin/git"), \
                  mock.patch("subprocess.run", return_value=not_a_repo):
                 err = self.assert_fails(make_game.ensure_submodule,
-                                        match="git clone --recursive https://github.com/ubiquitarianism/leonida")
+                                        match="git clone --recursive https://github.com/ProjectLeonidaL/leonida")
                 self.assertNotIn("Install Git", err)
 
     def test_ensure_submodule_names_the_clone_command_the_readme_gives(self):
@@ -890,12 +890,12 @@ class PathAndGameSelectionTest(PreflightTestBase):
     def default_out_in(self, platform, icloud_documents, earlier_build=False, call=None):
         """default_out() (or `call`) with a temporary home folder; icloud_documents makes the folder macOS keeps in
         iCloud Drive when Desktop & Documents sync is on (~/Library/Mobile Documents/com~apple~CloudDocs/Documents),
-        earlier_build a ~/Documents/Leonida from before the change."""
+        earlier_build a ~/Documents/Leonida Legacy from before the change."""
         with tempfile.TemporaryDirectory() as home:
             if icloud_documents:
                 os.makedirs(os.path.join(home, "Library", "Mobile Documents", "com~apple~CloudDocs", "Documents"))
             if earlier_build:
-                os.makedirs(os.path.join(home, "Documents", "Leonida", "work"))
+                os.makedirs(os.path.join(home, "Documents", "Leonida Legacy", "work"))
             with mock.patch.object(make_game.os.path, "expanduser", lambda p: home + p[1:] if p.startswith("~") else p), \
                     mock.patch.object(make_game.sys, "platform", platform):
                 if call:
@@ -903,25 +903,25 @@ class PathAndGameSelectionTest(PreflightTestBase):
                 return os.path.relpath(make_game.default_out(), home)
 
     def test_icloud_note_names_an_earlier_build_in_documents(self):
-        # A Mac that built into ~/Documents/Leonida before the default moved: say where that resumable build is.
+        # A Mac that built into ~/Documents/Leonida Legacy before the default moved: say where that resumable build is.
         notes = self.default_out_in("darwin", True, earlier_build=True, call=make_game.icloud_default_notes)
         self.assertEqual(len(notes), 2, notes)
         self.assertIn("off iCloud", notes[0])
-        self.assertIn(os.path.join("~", "Documents", "Leonida"), notes[1])
-        self.assertIn(os.path.join("~", "Leonida") + " to resume", notes[1])
+        self.assertIn(os.path.join("~", "Documents", "Leonida Legacy"), notes[1])
+        self.assertIn(os.path.join("~", "Leonida Legacy") + " to resume", notes[1])
         self.assertIn("--out", notes[1])
         self.assertEqual(len(self.default_out_in("darwin", True, call=make_game.icloud_default_notes)), 1)
 
     def test_default_out_matches_documents_folder(self):
         for platform in ("win32", "linux", "darwin"):
-            self.assertEqual(self.default_out_in(platform, False), os.path.join("Documents", "Leonida"), platform)
+            self.assertEqual(self.default_out_in(platform, False), os.path.join("Documents", "Leonida Legacy"), platform)
 
     def test_default_out_leaves_icloud_synced_documents_on_a_mac(self):
-        # Before: with iCloud Desktop & Documents sync on, ~/Documents/Leonida (and its work folder, hundreds of GB
+        # Before: with iCloud Desktop & Documents sync on, ~/Documents/Leonida Legacy (and its work folder, hundreds of GB
         # made from the game) went into iCloud Drive, which uploads it and can evict the work files from the disk.
-        self.assertEqual(self.default_out_in("darwin", True), "Leonida")
+        self.assertEqual(self.default_out_in("darwin", True), "Leonida Legacy")
         # Only macOS keeps Documents in iCloud Drive this way; elsewhere the folder means nothing.
-        self.assertEqual(self.default_out_in("linux", True), os.path.join("Documents", "Leonida"))
+        self.assertEqual(self.default_out_in("linux", True), os.path.join("Documents", "Leonida Legacy"))
 
     def test_constants_definitions(self):
         self.assertEqual(make_game.STAGES, ["check", "shaders", "assets", "runtime", "pipelines"])
