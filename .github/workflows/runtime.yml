@@ -354,9 +354,22 @@ jobs:
           spirv-val --target-env vulkan1.2 runtime/build/predicated_copy.spv
           runtime/build/vk_predicated_copy_test
       - name: GPU tests on llvmpipe
+        shell: bash
+        env:
+          # cs_imgload_*_tfe: Mesa llvmpipe mishandles the tfe status VGPR (same symptom as MoltenVK / AMD 780M).
+          EXPECTED_FAILURES: >-
+            cs_imgload_tfe
+            cs_imgload_d16_tfe
         run: |
           vulkaninfo --summary | grep -E 'deviceName.*llvmpipe'  # fails the step if llvmpipe isn't there
-          python3 -I scripts/run_gpu_tests.py --build runtime/build --llvm-mc /usr/lib/llvm-19/bin/llvm-mc --work "$RUNNER_TEMP/gpu-native"
+          set +e
+          python3 -I scripts/run_gpu_tests.py --build runtime/build --llvm-mc /usr/lib/llvm-19/bin/llvm-mc --work "$RUNNER_TEMP/gpu-native" 2>&1 |
+            tee "$RUNNER_TEMP/gpu-native.log"
+          status=${PIPESTATUS[0]}
+          set -e
+          sed -n '/=== GPU TEST RESULTS ===/,$p' "$RUNNER_TEMP/gpu-native.log" | awk '$1 == "FAIL" { print $2 }' > "$RUNNER_TEMP/failed.txt"
+          tail -n 1 "$RUNNER_TEMP/gpu-native.log" >> "$GITHUB_STEP_SUMMARY"
+          python3 -I scripts/ci_expected_failures.py "$RUNNER_TEMP/failed.txt" "$status" "$EXPECTED_FAILURES"
       - name: Pipeline checker exit status on llvmpipe
         shell: bash
         run: |
