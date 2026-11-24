@@ -73,7 +73,8 @@ class PipelinesJobsTest(unittest.TestCase):
         with mock.patch.object(sys, "argv", argv), mock.patch.object(make_game, "ROOT", self.root), \
                 mock.patch("os.name", "nt"), mock.patch.object(make_game, "below_normal"), \
                 mock.patch.object(make_game, "check", return_value={"expected_exe": "g.exe"}), \
-                mock.patch.object(make_game, "log"), mock.patch.object(make_game, "run") as run:
+                mock.patch.object(make_game, "log"), mock.patch.object(make_game, "run") as run, \
+                mock.patch.object(make_game, "verify_runtime_build"):
             self.assertEqual(make_game.main(), 0)
         run.assert_called_once()
         self.assertEqual(run.call_args.args[0][0], checker)
