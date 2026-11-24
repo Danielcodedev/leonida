@@ -1,5 +1,5 @@
 ﻿<p align="center">
-  <strong><a href="https://discord.gg/TT65G2uG2h">Discord — Leonida Legacy Community</a></strong>
+  <strong><a href="https://t.me/projectleonidal">Telegram — Leonida Legacy</a></strong>
 </p>
 
 <h1 align="center">
@@ -143,7 +143,7 @@ pull requests.
 
 ## Contact
 
-- **Discord:** [discord.gg/TT65G2uG2h](https://discord.gg/TT65G2uG2h)
+- **Discord:** [discord.gg/dxMD2XqyEJ](https://discord.gg/dxMD2XqyEJ)
 - **Telegram:** [@wouldscams](https://t.me/wouldscams)
 - **News & updates:** [Leonida Legacy on Telegram](https://t.me/projectleonidal)
 
