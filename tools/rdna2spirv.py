@@ -13346,10 +13346,11 @@ class Gen:
                 iv = self.tmp()
                 self.emit(f"{iv} = OpCompositeConstruct {'%v2int' if ncoord == 2 else '%v3int'} {' '.join(ints)}")
             if coherent:
-                self.image_load_coherent(view_dim, self.sgpr_word(a[2], 1), iv, img_idx, dmask, vdata, d16)
+                self.image_load_coherent(view_dim, self.sgpr_word(a[2], 1), iv, img_idx, dmask, vdata, d16,
+                                         tfe="tfe" in mods or "lwe" in mods)
                 return
             self.image_load_typed(view_dim, self.sgpr_word(a[2], 1), iv, img, img_idx,
-                                  dmask, vdata, self.cu(0), d16)
+                                  dmask, vdata, self.cu(0), d16, tfe="tfe" in mods or "lwe" in mods)
             return
         else:
             smp_idx = self.desc_lookup_sgpr(a[3], 4)
@@ -13801,14 +13802,14 @@ class Gen:
             self.emit(f"{half} = OpExtInst %uint %glsl UMin {bits} {self.cu(0xFFFF)}")
         return half
 
-    def image_load_typed(self, dim, t1, iv, img, idx, dmask, vdata, lod, d16=False):
+    def image_load_typed(self, dim, t1, iv, img, idx, dmask, vdata, lod, d16=False, tfe=False):
         def fetch(image, _cls, ty):
             res = self.tmp()
             self.emit(f"{res} = OpImageFetch {ty} {image} {iv} Lod {lod}")
             return res
-        self.image_read_typed(dim, t1, img, idx, dmask, vdata, d16, fetch)
+        self.image_read_typed(dim, t1, img, idx, dmask, vdata, d16, fetch, tfe=tfe)
 
-    def image_load_coherent(self, dim, t1, iv, idx, dmask, vdata, d16):
+    def image_load_coherent(self, dim, t1, iv, idx, dmask, vdata, d16, tfe=False):
         """image_load with glc: a coherent read. On GFX10 a device-scope load is glc + dlc and a device-scope store
         glc (Mesa ac_get_hw_cache_flags maps ACCESS_COHERENT to exactly these bits); the POPS pixel shaders read and
         write their ordered images that way. Through the sampled array (image_load_typed) the read could not see
@@ -13831,9 +13832,9 @@ class Gen:
             res = self.tmp()
             self.emit(f"{res} = OpImageRead {ty} {image} {iv}")
             return res
-        self.image_read_typed(dim, t1, None, idx, dmask, vdata, d16, read, view)
+        self.image_read_typed(dim, t1, None, idx, dmask, vdata, d16, read, view, tfe=tfe)
 
-    def image_read_typed(self, dim, t1, img, idx, dmask, vdata, d16, read, view=None):
+    def image_read_typed(self, dim, t1, img, idx, dmask, vdata, d16, read, view=None, tfe=False):
         """Read an image using the component type selected by FORMAT in T# word 1.
         read(image, cls, ty) emits the fetch or gather and returns its four components. The float view also
         handles a lookup miss: index zero holds the RGBA8_UNORM fallback. view(cls) loads the image of class cls
@@ -13877,6 +13878,10 @@ class Gen:
             if not d16:
                 for k, x in enumerate(xs):
                     self.dst({"k": "vgpr", "r": vdata["r"] + k, "n": 1}, x)
+                if tfe:
+                    # MIMG TFE/LWE: the fetch status follows the data at vdata[data_count]; a Vulkan image is
+                    # always resident, so the status is 0.
+                    self.dst({"k": "vgpr", "r": vdata["r"] + len(xs), "n": 1}, self.cu(0))
                 return
             # D16 packs saturated integer or RTE floating-point halves, low half first.
             for i in range(0, len(xs), 2):
@@ -13895,6 +13900,10 @@ class Gen:
                     self.emit(f"{hi} = OpShiftLeftLogical %uint {xs[i + 1]} {self.cu(16)}")
                     self.emit(f"{w} = OpBitwiseOr %uint {xs[i]} {hi}")
                 self.dst(dest, w)
+            if tfe:
+                # MIMG TFE/LWE: the fetch status follows the d16 data at vdata[data_count]; a Vulkan image is
+                # always resident, so the status is 0.
+                self.dst({"k": "vgpr", "r": vdata["r"] + (len(xs) + 1) // 2, "n": 1}, self.cu(0))
 
         def read_integer(cls, ty):
             im = view(cls)
@@ -14212,7 +14221,7 @@ class Gen:
             self.emit(f"{iv} = OpCompositeConstruct %v3int {xs[0]} {xs[1]} {xs[2]}")
             dm = next((m for m in mods if m.startswith("dmask:")), "dmask:0x1")
             self.image_load_typed(dim, self.sgpr_word(a[2], 1), iv, img, idx, int(dm.split(":")[1], 0),
-                                  vdata, xs[3], d16="d16" in mods)
+                                  vdata, xs[3], d16="d16" in mods, tfe="tfe" in mods or "lwe" in mods)
             return
         packed_mip = op == "image_load_mip" and "tfe" not in mods and "lwe" not in mods
         if ((dim != "dim:SQ_RSRC_IMG_2D" and not (is3d_atomic or array_query))
@@ -14317,7 +14326,8 @@ class Gen:
             xs = [self.as_int(self.load_reg("vgpr", r)) for r in addr[:3]]
         iv = self.tmp()
         self.emit(f"{iv} = OpCompositeConstruct %v2int {xs[0]} {xs[1]}")
-        self.image_load_typed(dim, self.sgpr_word(a[2], 1), iv, img, idx, dmask, vdata, xs[2], d16="d16" in mods)
+        self.image_load_typed(dim, self.sgpr_word(a[2], 1), iv, img, idx, dmask, vdata, xs[2],
+                              d16="d16" in mods, tfe="tfe" in mods or "lwe" in mods)
 
 
     def interp_pair_src(self, op, a, ins):

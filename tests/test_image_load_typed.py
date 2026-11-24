@@ -56,6 +56,21 @@ def load_shader(dim, dmask=0xF):
                       "s_waitcnt vmcnt(0)"])
 
 
+def vgpr_stores(m):
+    """VGPR index -> stored value id, from the OpStore lines (they carry no result id, so they are not in
+    m.order; the hoisted %reg_vN pointers are OpAccessChains into %vgpr, so they are)."""
+    reg_to_vgpr = {}
+    for rid, (op, args) in m.defs.items():
+        if op == "OpAccessChain" and len(args) >= 3 and args[1] == "%vgpr":
+            reg_to_vgpr[rid] = m.value(args[2], 0, 0)
+    stores = {}
+    for line in m.text.splitlines():
+        mm = re.match(r"\s*OpStore (%\w+) (%\w+)", line)
+        if mm and mm.group(1) in reg_to_vgpr:
+            stores[reg_to_vgpr[mm.group(1)]] = mm.group(2)
+    return stores
+
+
 class Module:
     """The instructions of a SPIR-V assembly text by result id, its decorations and capabilities."""
 
@@ -307,6 +322,30 @@ class LoadOnlyShaders(unittest.TestCase):
                     if ptr and ptr[0] == "OpAccessChain" and ptr[1][1] == "%vgpr" and m.value(ptr[1][2], 0, 0) == dest_reg:
                         hi_masks += 1
                 self.assertEqual(hi_masks, 3 if expect_preserve else 0)
+
+    def test_tfe_status_vgpr_is_written_zero(self):
+        # MIMG TFE/LWE: the fetch status follows the data at vdata[data_count]. A Vulkan image is always
+        # resident, so the translator stores 0 there (SHADER-1266, #31); without the modifier the trailing
+        # VGPR is left untouched.
+        for status in ("tfe", "lwe"):
+            with self.subTest(status=status):
+                m = Module(translate([
+                    "v_mov_b32 v4, 1", "v_mov_b32 v5, 2",
+                    f"image_load v[16:17], v[4:5], s[0:7] dmask:0x1 dim:SQ_RSRC_IMG_2D unorm {status}",
+                    "s_waitcnt vmcnt(0)",
+                ]))
+                stores = vgpr_stores(m)
+                self.assertIn(17, stores, f"{status}: the fetch status VGPR v17 is not written")
+                self.assertEqual(m.value(stores[17], 0, 0), 0, f"{status}: the fetch status must be 0 (resident)")
+        # Without tfe/lwe the trailing VGPR is left untouched.
+        m = Module(translate([
+            "v_mov_b32 v4, 1", "v_mov_b32 v5, 2",
+            "image_load v[16:17], v[4:5], s[0:7] dmask:0x1 dim:SQ_RSRC_IMG_2D unorm",
+            "s_waitcnt vmcnt(0)",
+        ]))
+        stores = vgpr_stores(m)
+        self.assertIn(16, stores, "the data VGPR v16 is written")
+        self.assertNotIn(17, stores, "without tfe/lwe the trailing VGPR v17 is left untouched")
 
 
 class LodQueryCoordinates(unittest.TestCase):
