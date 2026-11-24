@@ -4,6 +4,7 @@
 #include "vk_test_device.h"
 #include "shader_fixture_path.h"
 #include "d3d12_test_shaders.h"
+#include "test_temp_dir.h"
 #include "../shims/d3d12_com.h"
 #include "../src/shader_library.h"
 #include <dxgi1_4.h>
@@ -208,8 +209,8 @@ int main() {
     const auto fixture = std::filesystem::temp_directory_path() /
                          ("leonida_indirect_dispatch_count_" + std::to_string(GetCurrentProcessId()));
     std::filesystem::create_directories(fixture);
-    std::filesystem::copy_file(vktest::shader_fixture_path(LEONIDA_TEST_INDIRECT_COUNT_SPV),
-                               fixture / "count.spv", std::filesystem::copy_options::overwrite_existing);
+    if (!testfiles::copy_file(vktest::shader_fixture_path(LEONIDA_TEST_INDIRECT_COUNT_SPV), fixture / "count.spv"))
+        return 1;
     {
         std::ofstream index(fixture / "index.json", std::ios::binary);
         index << "{\"count\":{\"stage\":\"cs\",\"fssm_sha256\":\"" << leonida::sha256_hex(program)

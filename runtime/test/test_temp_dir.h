@@ -13,6 +13,15 @@
 #include <system_error>
 
 #ifdef _WIN32
+// Not every includer is built with these (shader_library_test and mods_test are not, and use std::min).
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+
 #include <process.h>
 #else
 #include <unistd.h>
@@ -58,7 +67,14 @@ private:
 // test without a message (abort; exit code 3 under Wine), which reads as a crash rather than a missing file.
 inline bool copy_file(const std::filesystem::path& from, const std::filesystem::path& to) {
     std::error_code ec;
+#ifdef _WIN32
+    // CopyFileW, not std::filesystem::copy_file: MSVC's copy_file calls CopyFile2, which Wine 9 doesn't implement.
+    // The call aborts the test there and starts Wine's debugger, which waits until the test's time limit.
+    if (!CopyFileW(from.c_str(), to.c_str(), FALSE))
+        ec.assign(static_cast<int>(GetLastError()), std::system_category());
+#else
     std::filesystem::copy_file(from, to, std::filesystem::copy_options::overwrite_existing, ec);
+#endif
     if (ec) std::fprintf(stderr, "cannot copy %s to %s: %s\n", from.string().c_str(), to.string().c_str(),
                          ec.message().c_str());
     return !ec;

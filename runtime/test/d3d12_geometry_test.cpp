@@ -11,6 +11,7 @@
 // Set LEONIDA_VK_VALIDATION=1 to run under VK_LAYER_KHRONOS_validation.
 #include "vk_test_device.h"
 #include "d3d12_test_shaders.h"
+#include "test_temp_dir.h"
 #include "../shims/d3d12_com.h"
 #include "../shims/d3d12_xs_device.h"
 #include "../src/shader_library.h"
@@ -55,10 +56,10 @@ int main() {
                ps_container = shader_container(ps_program);
     const auto library = std::filesystem::temp_directory_path() / "leonida_geometry_test";
     std::filesystem::create_directories(library);
-    std::filesystem::copy_file(LEONIDA_TEST_VS_SPV, library / "vs_draw.spv", std::filesystem::copy_options::overwrite_existing);
-    std::filesystem::copy_file(LEONIDA_TEST_GS_SPV, library / "gs_double.spv",
-                               std::filesystem::copy_options::overwrite_existing);
-    std::filesystem::copy_file(LEONIDA_TEST_PS_SPV, library / "ps_draw.spv", std::filesystem::copy_options::overwrite_existing);
+    if (!testfiles::copy_file(LEONIDA_TEST_VS_SPV, library / "vs_draw.spv") ||
+        !testfiles::copy_file(LEONIDA_TEST_GS_SPV, library / "gs_double.spv") ||
+        !testfiles::copy_file(LEONIDA_TEST_PS_SPV, library / "ps_draw.spv"))
+        return 1;
     {
         std::ofstream index(library / "index.json", std::ios::binary);
         index << "{\"vs_draw\": {\"stage\": \"vs\", \"fssm_sha256\": \"" << leonida::sha256_hex(vs_program)

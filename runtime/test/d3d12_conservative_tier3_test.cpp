@@ -110,8 +110,8 @@ int main(int argc, char** argv) {
     const auto vs_bytes=d3d12test::shader_container(vs_program), ps_bytes=d3d12test::shader_container(ps_program);
     const auto dir=std::filesystem::temp_directory_path()/("leonida_conservative_tier3_"+std::to_string(GetCurrentProcessId()));
     std::filesystem::create_directories(dir);
-    std::filesystem::copy_file(LEONIDA_CONSERVATIVE_VS,dir/"vs.spv",std::filesystem::copy_options::overwrite_existing);
-    std::filesystem::copy_file(LEONIDA_CONSERVATIVE_TIER3_PS,dir/"ps.spv",std::filesystem::copy_options::overwrite_existing);
+    if(!testfiles::copy_file(LEONIDA_CONSERVATIVE_VS,dir/"vs.spv")||
+       !testfiles::copy_file(LEONIDA_CONSERVATIVE_TIER3_PS,dir/"ps.spv")) return 1;
     {
         // Omit optional capability metadata deliberately: the actual SPIR-V must enforce the unsupported guard.
         std::ofstream out(dir/"index.json",std::ios::binary);

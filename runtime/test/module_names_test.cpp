@@ -66,6 +66,13 @@ struct NativeModule {
 
 using Add = int(__cdecl*)(int, int);
 
+// CopyFileW, not fs::copy_file: MSVC's copy_file calls CopyFile2, which Wine 9 doesn't implement (the call aborts
+// the test there). Like copy_file without options, it refuses an existing destination and throws when it fails.
+void copy_fixture(const fs::path& from, const fs::path& to) {
+    if (!CopyFileW(from.c_str(), to.c_str(), TRUE))
+        throw std::runtime_error("cannot copy the fixture DLL (error " + std::to_string(GetLastError()) + ")");
+}
+
 void names(const fs::path& source, const fs::path& root) {
     std::vector<std::wstring> names{L"Plain.dll", L"Uni-\u6f22.dll", L"Uni-\u5b57.dll"};
     std::wstring acp_name;
@@ -80,7 +87,7 @@ void names(const fs::path& source, const fs::path& root) {
     std::vector<rt::Module*> mapped;
     for (const auto& name : names) {
         const fs::path path = root / name;
-        fs::copy_file(source, path);
+        copy_fixture(source, path);
         NativeModule native(path);
         check(native.handle != nullptr, "native Windows loads the renamed DLL");
         if (!native.handle) continue;
@@ -110,7 +117,7 @@ void names(const fs::path& source, const fs::path& root) {
 
             const fs::path shadow = root / "shadow";
             fs::create_directory(shadow);
-            fs::copy_file(source, shadow / name);
+            copy_fixture(source, shadow / name);
             check(&loader.load(shadow / name) == &m, "the loader retains its existing basename cache rule");
 
             bool exact = false;
@@ -153,7 +160,7 @@ void names(const fs::path& source, const fs::path& root) {
 
     if (!acp_name.empty()) {
         const auto fresh_name = std::wstring(L"Fresh-") + acp_name;
-        fs::copy_file(source, root / fresh_name);
+        copy_fixture(source, root / fresh_name);
         bool exact = false, handled = false;
         const auto narrow = encoded(fresh_name, CP_ACP, exact);
         NativeModule native(root / fresh_name);

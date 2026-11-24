@@ -5,6 +5,7 @@
 #include "d3d12_copy_compare.h"
 #include "d3d12_test_shaders.h"
 #include "host_wine.h"
+#include "test_temp_dir.h"
 #include "../src/conservative_raster.h"
 #include "../src/shader_library.h"
 #include <d3dcompiler.h>

@@ -17,6 +17,7 @@
 // ps_depth_write.frag, gs_depth.geom). No game data.
 #include "vk_test_device.h"
 #include "d3d12_test_shaders.h"
+#include "test_temp_dir.h"
 #include "../shims/d3d12_com.h"
 #include "../shims/d3d12_xs_device.h"
 #include "../src/depth24.h"
@@ -230,11 +231,11 @@ int main() {
     const auto gs_program = fssm_program({0x47530309, 0xbf810000});
     const auto library = std::filesystem::temp_directory_path() / "leonida_depth24_draw_test";
     std::filesystem::create_directories(library);
-    const auto copy = std::filesystem::copy_options::overwrite_existing;
-    std::filesystem::copy_file(LEONIDA_TEST_VS_DEPTH_SPV, library / "vs_depth.spv", copy);
-    std::filesystem::copy_file(LEONIDA_TEST_PS_DEPTH_EMPTY_SPV, library / "ps_depth_empty.spv", copy);
-    std::filesystem::copy_file(LEONIDA_TEST_PS_DEPTH_WRITE_SPV, library / "ps_depth_write.spv", copy);
-    std::filesystem::copy_file(LEONIDA_TEST_GS_DEPTH_SPV, library / "gs_depth.spv", copy);
+    if (!testfiles::copy_file(LEONIDA_TEST_VS_DEPTH_SPV, library / "vs_depth.spv") ||
+        !testfiles::copy_file(LEONIDA_TEST_PS_DEPTH_EMPTY_SPV, library / "ps_depth_empty.spv") ||
+        !testfiles::copy_file(LEONIDA_TEST_PS_DEPTH_WRITE_SPV, library / "ps_depth_write.spv") ||
+        !testfiles::copy_file(LEONIDA_TEST_GS_DEPTH_SPV, library / "gs_depth.spv"))
+        return 1;
     {
         std::ofstream index(library / "index.json", std::ios::binary);
         index << "{\"vs_depth\": {\"stage\": \"vs\", \"fssm_sha256\": \"" << leonida::sha256_hex(vs_program)

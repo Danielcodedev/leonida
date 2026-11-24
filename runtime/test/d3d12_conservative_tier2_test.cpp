@@ -114,8 +114,8 @@ int main(int argc, char** argv) {
     const auto vs_bytes=d3d12test::shader_container(vs_program),ps_bytes=d3d12test::shader_container(ps_program);
     const auto directory=std::filesystem::temp_directory_path()/("leonida_conservative_tier2_"+std::to_string(GetCurrentProcessId()));
     std::filesystem::create_directories(directory);
-    std::filesystem::copy_file(LEONIDA_CONSERVATIVE_TIER2_VS,directory/"vs.spv",std::filesystem::copy_options::overwrite_existing);
-    std::filesystem::copy_file(LEONIDA_CONSERVATIVE_TIER2_PS,directory/"ps.spv",std::filesystem::copy_options::overwrite_existing);
+    if(!testfiles::copy_file(LEONIDA_CONSERVATIVE_TIER2_VS,directory/"vs.spv")||
+       !testfiles::copy_file(LEONIDA_CONSERVATIVE_TIER2_PS,directory/"ps.spv")) return 1;
     {
         std::ofstream index(directory/"index.json",std::ios::binary);
         index<<"{\"vs\":{\"stage\":\"vs\",\"fssm_sha256\":\""<<leonida::sha256_hex(vs_program)

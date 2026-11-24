@@ -42,6 +42,16 @@ SLOW_SECONDS = 30.0   # a test that takes this long gets a notice under GitHub A
 MAX_SLOW_NOTICES = 8  # GitHub shows 10 notices per step: the start and the end notice keep their place
 TAIL_LINES = 12       # of a timed-out test's output, in its warning
 TAIL_CHARS = 1200
+SLOWEST_LISTED = 8    # tests named in the end notice, slowest first
+SLOWEST_SECONDS = 1.0  # ... of those that took at least this long
+
+
+def slowest(timings: list[tuple[float, str]]) -> str:
+    """The tests that took longest, for the end notice ("; slowest: a 41 s, b 9 s"), or "" when none took long."""
+    listed = sorted((t for t in timings if t[0] >= SLOWEST_SECONDS), key=lambda t: -t[0])[:SLOWEST_LISTED]
+    if not listed:
+        return ""
+    return "; slowest: " + ", ".join(f"{name} {seconds:.0f} s" for seconds, name in listed)
 
 
 def timeout_tail(detail: str) -> str:
@@ -58,6 +68,19 @@ def annotate(level: str, message: str) -> None:
         return
     data = message.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
     print(f"::{level}::{data}", flush=True)
+
+
+def without_debugger(overrides: str) -> str:
+    """WINEDLLOVERRIDES with Wine's crash debugger turned off, unless the value already names winedbg.
+
+    Wine starts winedbg when a program crashes. In CI it then waited until the test's time limit (120 s for each
+    crashed test, under Wine 9.0 and 11.0), so a crash read as a timeout. With winedbg.exe=d the crashed program
+    ends at once with its exception code.
+    """
+    if "winedbg" in overrides.lower():
+        return overrides
+    kept = overrides.strip().rstrip(";")
+    return f"{kept};winedbg.exe=d" if kept else "winedbg.exe=d"
 
 
 def _make_parent(path: str) -> None:
@@ -219,6 +242,7 @@ def run_test(test: dict, args, wine: list[str], *, failed_setups: tuple[str, ...
         if not key or not equals or "\0" in assignment:
             return "fail", "invalid CTest ENVIRONMENT entry: expected NAME=value"
         env[key] = value
+    env["WINEDLLOVERRIDES"] = without_debugger(env.get("WINEDLLOVERRIDES", ""))
     timeout = args.timeout
     if "TIMEOUT" in props:
         try:
@@ -394,6 +418,7 @@ def main() -> int:
     prefix = os.environ.get("WINEPREFIX") or os.path.join(os.path.expanduser("~"), ".wine")
     label = args.label or "Wine"
     slow_notices = 0
+    timings: list[tuple[float, str]] = []
     run_start = time.monotonic()
     annotate("notice", f"run_wine_tests: {len(order)} tests to run under {label}")
     with DriveMap(args.windows_root, args.root, prefix) as drive:
@@ -404,6 +429,7 @@ def main() -> int:
             test_start = time.monotonic()
             status, detail = run_test(tests[index], args, wine, failed_setups=failed_setups)
             elapsed = time.monotonic() - test_start
+            timings.append((elapsed, name))
             results_by_index[index] = status
             results[name] = status
             print(f"[{status.upper()}] {name}", flush=True)
@@ -421,7 +447,7 @@ def main() -> int:
     failed_required = [n for n in args.require if results.get(n) != "pass"]
     counts = {s: sum(1 for v in results.values() if v == s) for s in ("pass", "fail", "skip")}
     annotate("notice", f"run_wine_tests: {counts['pass']} passed, {counts['fail']} failed, {counts['skip']} skipped "
-                       f"under {label} in {time.monotonic() - run_start:.0f} s")
+                       f"under {label} in {time.monotonic() - run_start:.0f} s{slowest(timings)}")
     print(f"\n{counts['pass']} passed, {counts['fail']} failed, {counts['skip']} skipped under Wine "
           f"({len(results)} tests)")
     for n in missing:

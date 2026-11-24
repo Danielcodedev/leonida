@@ -204,6 +204,33 @@ class RunTestTest(unittest.TestCase):
         self.assertEqual(status, "fail", detail)
         self.assertIn("invalid CTest ENVIRONMENT", detail)
 
+    def test_wines_crash_debugger_is_turned_off_for_the_child(self) -> None:
+        exe = self.program("show_overrides.py", "import os\nprint(os.environ.get('WINEDLLOVERRIDES'))\n")
+        command = self.command_for(exe)
+        cases = ((None, None, "winedbg.exe=d"),
+                 ("mscoree,mshtml=", None, "mscoree,mshtml=;winedbg.exe=d"),
+                 ("dxgi=n; ", None, "dxgi=n;winedbg.exe=d"),
+                 ("mscoree=", "d3d12=n", "d3d12=n;winedbg.exe=d"),
+                 ("winedbg.exe=b", None, "winedbg.exe=b"),
+                 ("mscoree=", "WineDbg.exe=n,b", "WineDbg.exe=n,b"))
+        for inherited, listed, expected in cases:
+            props = {"ENVIRONMENT": [f"WINEDLLOVERRIDES={listed}"]} if listed is not None else None
+            with self.subTest(inherited=inherited, listed=listed), mock.patch.dict(os.environ):
+                os.environ.pop("WINEDLLOVERRIDES", None)
+                if inherited is not None:
+                    os.environ["WINEDLLOVERRIDES"] = inherited
+                status, detail = self.run_entry(ctest_entry("overrides", command, props))
+                self.assertEqual(status, "pass", detail)
+                self.assertEqual(detail.splitlines()[1:], [expected])
+                # The runner's own environment stays as it was.
+                self.assertEqual(os.environ.get("WINEDLLOVERRIDES"), inherited)
+
+    def test_without_debugger_keeps_the_other_overrides(self) -> None:
+        self.assertEqual(rwt.without_debugger(""), "winedbg.exe=d")
+        self.assertEqual(rwt.without_debugger(" ; "), "winedbg.exe=d")
+        self.assertEqual(rwt.without_debugger("a=n;b="), "a=n;b=;winedbg.exe=d")
+        self.assertEqual(rwt.without_debugger("a=n;winedbg.exe=d"), "a=n;winedbg.exe=d")
+
     def test_ctest_output_expressions_determine_the_result(self):
         usage = {"PASS_REGULAR_EXPRESSION": ["alternative", "usage: gta6rt"]}
         forbidden = {"FAIL_REGULAR_EXPRESSION": ["running ", r"module\(s\) mapped"]}
@@ -751,8 +778,8 @@ class MainTest(unittest.TestCase):
         self.assertEqual(commands[0], "::notice::run_wine_tests: 2 tests to run under wine-9.0")
         self.assertRegex(commands[1], r"^::warning::slow timed out after 0\.2 s under wine-9\.0, \d+ s into the run; "
                                       r"it printed nothing$")
-        self.assertRegex(commands[2],
-                         r"^::notice::run_wine_tests: 1 passed, 1 failed, 0 skipped under wine-9\.0 in \d+ s$")
+        self.assertRegex(commands[2], r"^::notice::run_wine_tests: 1 passed, 1 failed, 0 skipped under wine-9\.0 "
+                                      r"in \d+ s(; slowest: [a-z]+ \d+ s(, [a-z]+ \d+ s)?)?$")
 
     def test_timeout_warning_carries_the_last_output(self):
         def hang(argv, *, cwd, env, timeout):
@@ -775,6 +802,25 @@ class MainTest(unittest.TestCase):
                          ["its last output:"] + [f"line {i}" for i in range(40 - rwt.TAIL_LINES, 40)])
         long = rwt.timeout_tail("timed out after 120.0 s\n" + "x" * 5000 + "\nend\n")
         self.assertEqual(long, "its last output:\n" + "x" * (rwt.TAIL_CHARS - 4) + "\nend")
+
+    def test_slowest_lists_the_longest_tests_first(self):
+        self.assertEqual(rwt.slowest([]), "")
+        self.assertEqual(rwt.slowest([(0.4, "quick")]), "")
+        timings = [(2.0, "b"), (0.5, "quick"), (41.2, "a"), (9.0, "c")]
+        self.assertEqual(rwt.slowest(timings), "; slowest: a 41 s, c 9 s, b 2 s")
+        many = rwt.slowest([(float(i + 1), f"t{i}") for i in range(rwt.SLOWEST_LISTED + 3)])
+        self.assertEqual(len(many.split(", ")), rwt.SLOWEST_LISTED)
+        self.assertTrue(many.startswith(f"; slowest: t{rwt.SLOWEST_LISTED + 2} {rwt.SLOWEST_LISTED + 3} s, "), many)
+
+    def test_end_notice_names_the_slowest_tests(self):
+        # The log of a job is unreadable without a login: the notice is where a slow test that passed shows up.
+        entries = [ctest_entry("ok", self.command("ok.py")), ctest_entry("bad", self.command("bad.py"))]
+        with mock.patch.dict(os.environ, {"GITHUB_ACTIONS": "true"}), mock.patch.object(rwt, "SLOWEST_SECONDS", 0.0):
+            code, out, _ = self.run_main(entries, "--label", "wine-9.0")
+        self.assertEqual(code, 0)
+        self.assertRegex(self.workflow_commands(out)[-1],
+                         r"^::notice::run_wine_tests: 1 passed, 1 failed, 0 skipped under wine-9\.0 in \d+ s; "
+                         r"slowest: (ok|bad) \d+ s, (ok|bad) \d+ s$")
 
     def test_slow_test_notices_are_capped(self):
         entries = [ctest_entry(f"ok{i}", self.command("ok.py")) for i in range(4)]

@@ -12,6 +12,7 @@
 // The shaders are GLSL written to the translator's runtime contract; nothing is drawn. No game data.
 #include "d3d12_test_shaders.h"
 #include "shader_fixture_path.h"
+#include "test_temp_dir.h"
 #include "vk_test_device.h"
 #include "../shims/d3d12_com.h"
 #include "../src/shader_library.h"
@@ -128,8 +129,7 @@ int main() {
         {LEONIDA_TEST_PS_SPV, "ps_draw.spv"},
         {LEONIDA_TEST_PS_ATOMIC_SPV, "ps_image_atomic.spv"}};
     for (const auto& file : files)
-        std::filesystem::copy_file(vktest::shader_fixture_path(file.compiled), library / file.name,
-                                   std::filesystem::copy_options::overwrite_existing);
+        EXPECT(testfiles::copy_file(vktest::shader_fixture_path(file.compiled), library / file.name));
     {
         std::ofstream index(library / "index.json", std::ios::binary);
         index << "{\"vs_fullscreen\": {\"stage\": \"vs\", \"fssm_sha256\": \"" << leonida::sha256_hex(vs_program)

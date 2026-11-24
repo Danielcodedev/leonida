@@ -14,6 +14,7 @@
 #include "vk_test_device.h"
 #include "host_wine.h"
 #include "d3d12_test_shaders.h"
+#include "test_temp_dir.h"
 #include "../shims/d3d12_com.h"
 #include "../src/shader_library.h"
 
@@ -446,9 +447,9 @@ int main() {
     const auto ps_program = d3d12test::fssm_program({0x50530501, 0xbf810000});
     const auto library = std::filesystem::temp_directory_path() / "leonida_state_sweep_test";
     std::filesystem::create_directories(library);
-    const auto overwrite = std::filesystem::copy_options::overwrite_existing;
-    std::filesystem::copy_file(LEONIDA_SWEEP_VS_SPV, library / "vs.spv", overwrite);
-    std::filesystem::copy_file(LEONIDA_SWEEP_PS_SPV, library / "ps.spv", overwrite);
+    if (!testfiles::copy_file(LEONIDA_SWEEP_VS_SPV, library / "vs.spv") ||
+        !testfiles::copy_file(LEONIDA_SWEEP_PS_SPV, library / "ps.spv"))
+        return 1;
     {
         std::ofstream index(library / "index.json", std::ios::binary);
         index << "{\"vs\": {\"stage\": \"vs\", \"fssm_sha256\": \"" << leonida::sha256_hex(vs_program)

@@ -16,6 +16,7 @@
 // No game data. Set LEONIDA_VK_VALIDATION=1 to run under VK_LAYER_KHRONOS_validation.
 #include "vk_test_device.h"
 #include "d3d12_test_shaders.h"
+#include "test_temp_dir.h"
 #include "../shims/d3d12_com.h"
 #include "../shims/d3d12_xs_device.h"
 #include "../src/shader_library.h"
@@ -112,10 +113,9 @@ int main() {
     const auto vs_container = shader_container(vs_program);
     const auto library = std::filesystem::temp_directory_path() / "leonida_mesh_test";
     std::filesystem::create_directories(library);
-    std::filesystem::copy_file(LEONIDA_TEST_MS_SPV, library / "ms_draw.spv", std::filesystem::copy_options::overwrite_existing);
-    std::filesystem::copy_file(LEONIDA_TEST_PS_SPV, library / "ps_draw.spv", std::filesystem::copy_options::overwrite_existing);
-    std::filesystem::copy_file(LEONIDA_TEST_VS_FULLSCREEN_SPV, library / "vs_fullscreen.spv",
-                               std::filesystem::copy_options::overwrite_existing);
+    EXPECT(testfiles::copy_file(LEONIDA_TEST_MS_SPV, library / "ms_draw.spv"));
+    EXPECT(testfiles::copy_file(LEONIDA_TEST_PS_SPV, library / "ps_draw.spv"));
+    EXPECT(testfiles::copy_file(LEONIDA_TEST_VS_FULLSCREEN_SPV, library / "vs_fullscreen.spv"));
     {
         std::ofstream index(library / "index.json", std::ios::binary);
         index << "{\"ms_draw\": {\"stage\": \"ms\", \"fssm_sha256\": \"" << leonida::sha256_hex(ms_program)
