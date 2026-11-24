@@ -10,6 +10,7 @@ post counts and pass/fail lines there, never game shaders, logs or private paths
 | AMD Radeon RX 9070 XT (RDNA4, GFX1201), subgroup 32..64 | AMD 26.11.2 (LLPC), Vulkan 1.4.359, Windows 11 26300.9550 | `5d74c27` | not run | not run | 224/241 passed, 16 skipped, 1 failed (native); 225/241 passed, 0 failed (`LEONIDA_W64_EMULATE=1`) | `ms_wave_info_s3`, every native run, flaky emulated (see below) | [local note](../gpu-test-results/RX9070XT.txt) |
 | AMD Radeon RX 7900 GRE (RDNA3, gfx1100), subgroup 32..64 | AMD proprietary 26.11.2 (LLPC), Vulkan 1.4.359, Windows 11 x64 | `5d74c27` | 247/247 translated and valid | run via run_gpu_tests.py | 225/241 passed, 16 skipped | none | [#166](https://github.com/ItsNotRexed/Leonida/issues/166#issuecomment-7115041436) |
 | Intel Graphics (Meteor Lake, Xe-LPG), subgroup 8..32 | ANV, Mesa 26.2.7, Vulkan 1.4.354, Fedora 45 | `84347bb` | 279/279 translated and valid | 177/219 pass, 40 skipped, 2 failed | 194/248 passed, 52 skipped (native); 226/248 passed, 20 skipped (`LEONIDA_W64_EMULATE=1`) | `cs_imgload_tfe`, `cs_imgload_d16_tfe` (#31; pass with #98) | [local note](../gpu-test-results/IntelMTL.txt) |
+| NVIDIA GeForce GTX 1080 (Pascal / GP104), subgroup 32..32 | NVIDIA 582.78, Vulkan 1.4.312, Windows 11 Pro 10.0.26300 | `0edd0b6` | not run | not run | 257 shaders: 256 translated, 256 pass spirv-val; 187/248 passed, 59 skipped, 2 failed | `cs_imgload_tfe`, `cs_imgload_d16_tfe` (#31; pass with #98) | [local note](../gpu-test-results/GTX1080.txt) |
 
 ## AMD Radeon RX 9070 GRE — 2026-11-23
 
@@ -123,3 +124,33 @@ distribution's build. The full record, with every skip by name, is in
 
 AI-assisted (Claude Code): built `main` at `84347bb`, ran `build.py`, `check.py` and `run_gpu_tests.py` native and
 emulated on this GPU, and reran the tfe pair with #98 applied.
+
+## NVIDIA GeForce GTX 1080 — 2026-11-24
+
+```
+GPU:        NVIDIA GeForce GTX 1080 (Pascal / GP104, PCI 10de:1b80), subgroup 32..32
+Driver:     NVIDIA 582.78, Vulkan 1.4.312
+Subgroup:   32..32 (minSubgroupSize 32, maxSubgroupSize 32; no 64-wide)
+OS:         Windows 11 Pro, 10.0.26300
+Commit:     0edd0b669eeaa31ea22fba40060c12432eb8054b (main, 2026-11-24)
+Tools:      llvm-mc 23.1.6 (conda-forge, AMDGPU target), SPIRV-Tools v2026.4, MinGW GCC 15.2.0,
+            CMake 4.5.0 + Ninja, Python 3.15.2, Vulkan SDK 1.4.363 headers
+run_gpu_tests.py: 257 shaders: 256 translated, 256 pass spirv-val
+            187/248 passed, 59 skipped, 2 failed
+Failed:     cs_imgload_tfe, cs_imgload_d16_tfe (#31): exit 1. vk_store_test reports
+            "r32 sint (sint view): 64 bad, texel(5,3) = 2071" where the expected value is
+            100 - (8y + x) = 71: every texel is off by exactly 2000, the value the fixture
+            seeds the tfe status VGPR with, so the fetch status VGPR is read but never
+            written. The float and uint views are exact (0 bad). Both pass with #98 on the
+            same main (see the Intel MTL record).
+Skipped:    59 skips: 31 no 64-wide compute subgroup, 5 no VK_EXT_mesh_shader, 4
+            d3d12_m3_frame_test, 4 d3d12_m2_textured_test, 2 d3d12_translated_draw_test,
+            2 d3d12_m4_compute_test, 2 d3d12_buffer_uav_test, 4 BaryCoordKHR, 1
+            d3d12_m2_formats_test, 1 mesh shading unavailable, 1 no 64-wide fragment
+            subgroup (ps_w64x_readlane), 1 w64_graphics.py, 1 computed I/J PerVertexKHR
+            (ps_ij_computed).
+```
+
+Setup: `cmake -S runtime -B build-gpu -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=<MinGW gcc> -DCMAKE_CXX_COMPILER=<MinGW g++> -DLEONIDA_BUILD_WINDOWS_RUNTIME=OFF`, with `VULKAN_SDK` pointed at Vulkan SDK 1.4.363. No MSVC or Windows SDK, so the D3D12-side runtime and its tests are not built; `build.py` and `check.py` were not run. This is the first Pascal entry: wave64 and mesh shader cases skip (no 64-wide subgroup, no mesh shaders, no barycentric).
+
+The two `cs_imgload_*_tfe` failures track #31 and are deterministic (identical signature on the 780M and Intel MTL records), so they are not a Pascal-specific effect. `cs_w32_exec_computed` passes here (259 1028 3088 7682 512 4100 0 3), so the SHADER-1264 exec fix (#24) is on this main; only the tfe pair remains.
