@@ -56,6 +56,21 @@ def load_shader(dim, dmask=0xF):
                       "s_waitcnt vmcnt(0)"])
 
 
+def vgpr_stores(m):
+    """VGPR index -> stored value id, from the OpStore lines (they carry no result id, so they are not in
+    m.order; the hoisted %reg_vN pointers are OpAccessChains into %vgpr, so they are)."""
+    reg_to_vgpr = {}
+    for rid, (op, args) in m.defs.items():
+        if op == "OpAccessChain" and len(args) >= 3 and args[1] == "%vgpr":
+            reg_to_vgpr[rid] = m.value(args[2], 0, 0)
+    stores = {}
+    for line in m.text.splitlines():
+        mm = re.match(r"\s*OpStore (%\w+) (%\w+)", line)
+        if mm and mm.group(1) in reg_to_vgpr:
+            stores[reg_to_vgpr[mm.group(1)]] = mm.group(2)
+    return stores
+
+
 class Module:
     """The instructions of a SPIR-V assembly text by result id, its decorations and capabilities."""
 
@@ -307,6 +322,41 @@ class LoadOnlyShaders(unittest.TestCase):
                     if ptr and ptr[0] == "OpAccessChain" and ptr[1][1] == "%vgpr" and m.value(ptr[1][2], 0, 0) == dest_reg:
                         hi_masks += 1
                 self.assertEqual(hi_masks, 3 if expect_preserve else 0)
+
+    def test_tfe_status_vgpr_is_written_zero(self):
+        # MIMG tfe: the fetch status follows the data at vdata[data_count], for every image read and query. A
+        # Vulkan image is always resident, so the translator stores 0 there (SHADER-1266). llvm-mc 18.1.8 sizes
+        # vdata from dmask, d16 and tfe (it rejects `image_load v[16:17] ... dmask:0x1 lwe`), so lwe alone adds no
+        # register: the VGPR after the data is left untouched, as it is without either modifier.
+        t, s = "s[0:7]", "s[8:11]"
+        cases = (   # instruction without its data operand, data VGPR count
+            (f"image_load {{}}, v[4:5], {t} dmask:0x1 dim:SQ_RSRC_IMG_2D unorm", 1),
+            (f"image_load {{}}, v[4:5], {t} dmask:0x5 dim:SQ_RSRC_IMG_2D unorm", 2),
+            (f"image_load {{}}, v[4:5], {t} dmask:0x7 dim:SQ_RSRC_IMG_2D unorm d16", 2),
+            (f"image_load {{}}, v[4:5], {t} dmask:0x1 dim:SQ_RSRC_IMG_2D unorm glc", 1),
+            (f"image_load_mip {{}}, v[4:6], {t} dmask:0x1 dim:SQ_RSRC_IMG_2D unorm", 1),
+            (f"image_sample {{}}, v[4:5], {t}, {s} dmask:0xf dim:SQ_RSRC_IMG_2D", 4),
+            (f"image_sample_lz {{}}, v[4:5], {t}, {s} dmask:0x3 dim:SQ_RSRC_IMG_2D d16", 1),
+            (f"image_sample_c_lz {{}}, v[4:6], {t}, {s} dmask:0x1 dim:SQ_RSRC_IMG_2D", 1),
+            (f"image_gather4_lz {{}}, v[4:5], {t}, {s} dmask:0x1 dim:SQ_RSRC_IMG_2D", 4),
+            (f"image_get_resinfo {{}}, v4, {t} dmask:0x3 dim:SQ_RSRC_IMG_2D", 2),
+            (f"image_get_lod {{}}, v[4:5], {t}, {s} dmask:0x3 dim:SQ_RSRC_IMG_2D", 2),
+        )
+        for asm, count in cases:
+            for mods, has_status in (("tfe", True), ("tfe lwe", True), ("lwe", False), ("", False)):
+                with self.subTest(asm=asm, mods=mods):
+                    last = 16 + count - 1 + has_status
+                    data = "v16" if last == 16 else f"v[16:{last}]"
+                    m = Module(translate(["v_mov_b32 v4, 1", "v_mov_b32 v5, 2", "v_mov_b32 v6, 0",
+                                          f"{asm.format(data)} {mods}".rstrip(), "s_waitcnt vmcnt(0)"]))
+                    stores = vgpr_stores(m)
+                    for r in range(16, 16 + count):
+                        self.assertIn(r, stores, f"the data VGPR v{r} is not written")
+                    if has_status:
+                        self.assertIn(16 + count, stores, "the fetch status VGPR is not written")
+                        self.assertEqual(m.value(stores[16 + count], 0, 0), 0, "the fetch status must be 0")
+                    else:
+                        self.assertNotIn(16 + count, stores, "the VGPR after the data must be left untouched")
 
 
 class LodQueryCoordinates(unittest.TestCase):

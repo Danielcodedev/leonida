@@ -7721,6 +7721,7 @@ class Gen:
                     "image_sample_d", "image_sample_d_cl", "image_load", "image_gather4_lz", "image_gather4_l",
                     "image_gather4_lz_o", "image_gather4_l_o") or op in self.GATHER4_LOD_OPS:
             self.image_op(op, a, mods)
+            self.mimg_status(op, a, mods)
         elif op in ("v_sin_f16", "v_cos_f16"):
             self._validate_unary_f16(op, ins["op"], a, mods)
             sel, dhi = self.opsel_bits(mods, 1)
@@ -8135,6 +8136,7 @@ class Gen:
         elif op in ("image_get_resinfo", "image_load_mip", "image_store", "image_atomic_cmpswap") \
                 or op in self.IMG_ATOMICS or op in self.IMG_ATOMICS_EXTRA:
             self.image_misc(op, a, mods)
+            self.mimg_status(op, a, mods)
         elif op in ("v_cubema_f32", "v_cubeid_f32", "v_cubesc_f32", "v_cubetc_f32"):
             # Cube face selection (standard table): major axis Z if |z|>=|x| and |z|>=|y|, else Y if |y|>=|x|,
             # else X.   face: +X0 -X1 +Y2 -Y3 +Z4 -Z5
@@ -9883,6 +9885,7 @@ class Gen:
             self.buffer_atomic(op, a, mods)
         elif op == "image_get_lod":
             self.image_get_lod(a, mods)
+            self.mimg_status(op, a, mods)
         elif op == "s_addk_i32":
             v = a[1]["v"] & 0xFFFF
             k = v - 0x10000 if v & 0x8000 else v
@@ -12724,6 +12727,22 @@ class Gen:
                     del open_[open_.index(name):]
         self._scan = (body, len(body), open_)
         return not open_
+
+    def mimg_status(self, op: str, a: list, mods: list[str]) -> None:
+        """MIMG tfe: the fetch status is one more dword after the data, at vdata[data_count] (SHADER-1266).
+        data_count is 4 for a gather and the dmask bit count otherwise, halved (rounded up) under d16; llvm-mc sizes
+        vdata from dmask, d16 and tfe, so lwe alone adds no register. A Vulkan image is always resident, so the
+        status is 0. Stores and atomics return no status."""
+        if "tfe" not in mods or not a or a[0].get("k") != "vgpr" or op.startswith(("image_store", "image_atomic")):
+            return
+        if op.startswith("image_gather4"):
+            count = 4
+        else:
+            dm = next((m for m in mods if m.startswith("dmask:")), "dmask:0x1")
+            count = bin(int(dm.split(":")[1], 0) & 0xF).count("1") or 1
+        if "d16" in mods:
+            count = (count + 1) // 2
+        self.dst({"k": "vgpr", "r": a[0]["r"] + count, "n": 1}, self.cu(0))
 
     def store_gather_taps(self, first_vgpr: int, taps: list[str], d16: bool) -> None:
         """Write four taps in gather order, two per destination VGPR for d16."""
