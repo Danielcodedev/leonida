@@ -1,0 +1,180 @@
+# Single entry point for ProjectLeonidaL: quick guard checks, then the full CI and Runtime reusable workflows.
+# GitHub sometimes shows only the small guard workflows until every workflow file is approved under Actions;
+# this workflow is the one to watch for Python tests, translator suite, and Windows/Wine/macOS runtime builds.
+name: Leonida Legacy CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: leonida-legacy-ci-${{ github.event_name }}-${{ github.event.pull_request.number || (github.event_name == 'push' && github.ref) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  scope:
+    name: Scope
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      docs-only: ${{ steps.docs.outputs.docs-only }}
+      run-runtime: ${{ steps.runtime.outputs.run-runtime }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: ${{ github.event_name == 'pull_request' && 2 || 1 }}
+          persist-credentials: false
+      - name: Docs-only scope (matches ci.yml change-scope)
+        id: docs
+        shell: pwsh
+        run: |
+          $docsOnly = $false
+          if ($env:GITHUB_EVENT_NAME -eq 'pull_request') {
+            git diff --quiet "$env:GITHUB_SHA^1" "$env:GITHUB_SHA" --
+            if ($LASTEXITCODE -eq 1) {
+              git diff --quiet --no-renames "$env:GITHUB_SHA^1" "$env:GITHUB_SHA" -- . `
+                ':(exclude,top)README.md' ':(exclude,top)CONTRIBUTING.md' `
+                ':(exclude,top)AGENTS.md' ':(exclude,top,glob)docs/**/*.md'
+              $docsOnly = $LASTEXITCODE -eq 0
+            }
+          }
+          "docs-only=$($docsOnly.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+          exit 0
+      - name: Runtime-related paths (pull requests)
+        if: github.event_name == 'pull_request'
+        uses: dorny/paths-filter@de90cc6fb38f21decaebbb9707a18a9a38f2b5b5 # v3.0.2
+        id: paths
+        with:
+          filters: |
+            runtime:
+              - runtime/**
+              - third_party/**
+              - scripts/**
+              - .github/workflows/runtime.yml
+              - .github/workflows/leonida-legacy-ci.yml
+              - .gitattributes
+              - tools/hw_oracle/**
+              - tools/bary_fallback_gs.py
+              - tools/cf_diff.py
+              - tools/cf_ref.py
+              - tools/cfg_structure.py
+              - tools/cpu_ref.py
+              - tools/f32_fuzz.py
+              - tools/first_light.py
+              - tools/fspx_unpack.py
+              - tools/fssm_header.py
+              - tools/fssm_unpack.py
+              - tools/gen_d3d12_stubs.py
+              - tools/gfx10_formats.json
+              - tools/lane_masks.py
+              - tools/mc_command.py
+              - tools/mesh_compute_vs.py
+              - tools/rdna2spirv.py
+              - tools/replace_retry.py
+              - tools/report_paths.py
+              - tools/shader_carve.py
+              - tools/shader_disasm.py
+              - tools/shader_ir.py
+              - tools/shader_meta.py
+              - tools/shader_stage_manifest.py
+              - tools/spirv_asm.py
+              - tools/spirv_asm_tables.py
+              - tools/spirv_opt.py
+              - tools/spirv_stubs.py
+              - tools/vk_subgroup_info.py
+              - tools/wave64_emulate_opt.py
+              - tools/wave64_halves.py
+              - tools/xdxr_bvh.py
+      - name: Whether to run Runtime
+        id: runtime
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = push ]; then
+            echo "run-runtime=true" >> "$GITHUB_OUTPUT"
+          elif [ "${{ steps.paths.outputs.runtime }}" = true ]; then
+            echo "run-runtime=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run-runtime=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  guard:
+    name: Quick guard
+    needs: scope
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+      - name: Python tools compile
+        run: python -m compileall -q make_game.py tools tests
+      - name: make_game.py help
+        run: python -I make_game.py --help
+      - name: Docs and i18n
+        run: |
+          for t in tests/test_docs_*.py tests/test_i18n_index.py; do
+            echo "== $t"
+            python -I "$t" || exit 1
+          done
+      - name: No game data tracked
+        shell: bash
+        run: |
+          bad=$(git ls-files -z | grep -ziE '\.(rpf|ttpf|xvd|msixvc|dxbc|fssm|spv|spvasm|dds|bk2|awc|r9modeldata|obj|glb|ogg|wav|exe|dll)$' | tr '\0' '\n' || true)
+          if [ -n "$bad" ]; then
+            echo "Game or binary files tracked:"
+            echo "$bad"
+            exit 1
+          fi
+      - name: No game data under another name
+        run: python -I scripts/check_no_game_data.py
+
+  docs-only-checks:
+    name: Docs-only CI
+    needs: scope
+    if: github.event_name == 'pull_request' && needs.scope.outputs.docs-only == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+      - name: Check documentation when only documentation changed
+        run: |
+          for t in tests/test_docs_*.py tests/test_i18n_index.py; do
+            echo "== $t"
+            python3 -I "$t" || exit 1
+          done
+
+  ci:
+    name: Python / translator CI
+    needs: [scope, guard]
+    if: >-
+      !cancelled() && needs.guard.result == 'success' &&
+      (github.event_name != 'pull_request' || needs.scope.outputs.docs-only != 'true')
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
+  # tests/test_runtime_paths.py reads the pull_request path list from the scope job's paths-filter (runtime: block).
+  runtime:
+    name: Runtime and GPU
+    needs: [scope, guard]
+    if: >-
+      !cancelled() && needs.guard.result == 'success' &&
+      needs.scope.outputs.run-runtime == 'true' &&
+      (github.event_name != 'pull_request' || needs.scope.outputs.docs-only != 'true')
+    uses: ./.github/workflows/runtime.yml
+    permissions:
+      contents: read

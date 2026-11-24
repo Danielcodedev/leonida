@@ -23,7 +23,8 @@ them says where a table or a test came from, not that the build runs it, and cou
 such note a required entry.
 
 It also checks that the ``push`` and ``pull_request`` lists match, except an unfiltered push to ``main`` (no
-``paths:``) which runs every commit; pull requests still need the same complete path list. No ``tools/`` entry names a
+``paths:``) which runs every commit via ``leonida-legacy-ci.yml``; pull requests still need the same complete path
+list in that workflow's paths-filter block. No ``tools/`` entry names a
 file that no longer exists. Listing more than the jobs need is allowed on purpose: an extra run costs one
 queue slot, a missing entry loses the build for a tool the workflow reads.
 
@@ -38,6 +39,7 @@ import unittest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WORKFLOW = ".github/workflows/runtime.yml"
+LEGACY_WORKFLOW = ".github/workflows/leonida-legacy-ci.yml"
 
 # Entries that are needed for reasons a source scan cannot see: the build's own trees, the workflow, and the
 # file that decides the line endings every checked-out source gets.
@@ -52,13 +54,35 @@ def read(root, rel):
         return f.read()
 
 
+def legacy_runtime_paths(root):
+    """Pull-request Runtime paths from leonida-legacy-ci.yml's paths-filter runtime: block."""
+    path = os.path.join(root, LEGACY_WORKFLOW)
+    if not os.path.isfile(path):
+        return None
+    text = read(root, LEGACY_WORKFLOW)
+    block = re.search(r"filters:\s*\|\s*\n\s*runtime:\s*\n((?:\s+- .*\n)+)", text, re.M)
+    if not block:
+        return None
+    return [line.strip()[1:].strip().strip("\"'") for line in block.group(1).splitlines()]
+
+
 def path_lists(root):
     """{event: [paths]} for the events that filter on paths, exactly as the workflow spells them."""
     text = read(root, WORKFLOW)
+    legacy = os.path.isfile(os.path.join(root, LEGACY_WORKFLOW))
     lists = {}
     for event in ("push", "pull_request"):
         match = re.search(r"^  %s:\n((?:    .*\n)+)" % event, text, re.M)
         if not match:
+            if legacy and event == "push":
+                lists[event] = []
+                continue
+            if legacy and event == "pull_request":
+                pr_paths = legacy_runtime_paths(root)
+                if pr_paths is None:
+                    raise AssertionError(f"{LEGACY_WORKFLOW} has no runtime paths-filter block")
+                lists[event] = pr_paths
+                continue
             raise AssertionError(f"{WORKFLOW} has no `{event}:` trigger the way this test expects it")
         body = match.group(1)
         paths = re.search(r"^    paths:\n((?:      - .*\n)+)", body, re.M)

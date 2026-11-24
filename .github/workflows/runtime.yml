@@ -10,49 +10,9 @@ on:
   # (BUILD-856); paths-ignore cannot say "everything under tools/ except these", so the event lists what triggers
   # it. tests/test_runtime_paths.py recomputes the tools/ part and fails when an entry is missing; keep the two
   # lists identical.
-  # Every push to main runs the full Runtime workflow (Windows, Wine, llvmpipe GPU tests, macOS MoltenVK). Pull requests
-  # keep the path filter so unrelated doc edits do not queue a 20-minute build.
-  push:
-    branches: [main]
-  pull_request:
-    paths:
-      - "runtime/**"
-      - "third_party/**"
-      - "scripts/**"
-      - ".github/workflows/runtime.yml"
-      - ".gitattributes"
-      - "tools/hw_oracle/**"
-      - "tools/bary_fallback_gs.py"
-      - "tools/cf_diff.py"
-      - "tools/cf_ref.py"
-      - "tools/cfg_structure.py"
-      - "tools/cpu_ref.py"
-      - "tools/f32_fuzz.py"
-      - "tools/first_light.py"
-      - "tools/fspx_unpack.py"
-      - "tools/fssm_header.py"
-      - "tools/fssm_unpack.py"
-      - "tools/gen_d3d12_stubs.py"
-      - "tools/gfx10_formats.json"
-      - "tools/lane_masks.py"
-      - "tools/mc_command.py"
-      - "tools/mesh_compute_vs.py"
-      - "tools/rdna2spirv.py"
-      - "tools/replace_retry.py"
-      - "tools/report_paths.py"
-      - "tools/shader_carve.py"
-      - "tools/shader_disasm.py"
-      - "tools/shader_ir.py"
-      - "tools/shader_meta.py"
-      - "tools/shader_stage_manifest.py"
-      - "tools/spirv_asm.py"
-      - "tools/spirv_asm_tables.py"
-      - "tools/spirv_opt.py"
-      - "tools/spirv_stubs.py"
-      - "tools/vk_subgroup_info.py"
-      - "tools/wave64_emulate_opt.py"
-      - "tools/wave64_halves.py"
-      - "tools/xdxr_bvh.py"
+  # Push to main and pull requests are routed through leonida-legacy-ci.yml (unfiltered main, path filter on PR).
+  # tests/test_runtime_paths.py reads the pull_request path list from that workflow's paths-filter block.
+  workflow_call:
   workflow_dispatch:
 
 permissions:
