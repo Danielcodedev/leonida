@@ -59,7 +59,9 @@ jobs:
 
   check:
     needs: change-scope
-    if: ${{ !cancelled() && needs.change-scope.outputs.docs-only != 'true' }}
+    if: >-
+      ${{ !cancelled() && (needs.change-scope.result == 'skipped'
+      || needs.change-scope.outputs.docs-only != 'true') }}
     runs-on: windows-latest
     timeout-minutes: 15
     steps:
@@ -119,7 +121,9 @@ jobs:
         run: dotnet run --project tests/Rpf9DumpDiagnostics/Rpf9DumpDiagnostics.csproj -c Release
   translator-tests:
     needs: change-scope
-    if: ${{ !cancelled() && needs.change-scope.outputs.docs-only != 'true' }}
+    if: >-
+      ${{ !cancelled() && (needs.change-scope.result == 'skipped'
+      || needs.change-scope.outputs.docs-only != 'true') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -161,7 +165,9 @@ jobs:
           python -m pytest "${pytest_files[@]}" -q
   semantic-tests:
     needs: change-scope
-    if: ${{ !cancelled() && needs.change-scope.outputs.docs-only != 'true' }}
+    if: >-
+      ${{ !cancelled() && (needs.change-scope.result == 'skipped'
+      || needs.change-scope.outputs.docs-only != 'true') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 10
     strategy:
@@ -198,7 +204,9 @@ jobs:
   # macos-15: the Homebrew bottles cover Sequoia and later, but the runtime needs Xcode 26's libc++ (runtime.yml).
   macos-python:
     needs: change-scope
-    if: ${{ !cancelled() && needs.change-scope.outputs.docs-only != 'true' }}
+    if: >-
+      ${{ !cancelled() && (needs.change-scope.result == 'skipped'
+      || needs.change-scope.outputs.docs-only != 'true') }}
     runs-on: macos-26
     timeout-minutes: 20
     env:
@@ -258,7 +266,9 @@ jobs:
 
   viewer-tests:
     needs: change-scope
-    if: ${{ !cancelled() && needs.change-scope.outputs.docs-only != 'true' }}
+    if: >-
+      ${{ !cancelled() && (needs.change-scope.result == 'skipped'
+      || needs.change-scope.outputs.docs-only != 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -274,7 +284,9 @@ jobs:
   # runs the same loop on Linux with them installed, so those tests run somewhere.
   stdlib-tests-linux:
     needs: change-scope
-    if: ${{ !cancelled() && needs.change-scope.outputs.docs-only != 'true' }}
+    if: >-
+      ${{ !cancelled() && (needs.change-scope.result == 'skipped'
+      || needs.change-scope.outputs.docs-only != 'true') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
