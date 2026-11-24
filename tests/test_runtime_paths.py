@@ -234,9 +234,9 @@ def problems(root):
     events = sorted(lists)
     for other in events[1:]:
         if lists[other] != lists[events[0]]:
-            push_all = lists.get("push") == [] and lists.get(other)
-            if not push_all:
-                issues.append(f"the `{events[0]}` and `{other}` path lists differ")
+            if lists.get("push") == [] and "push" in (events[0], other):
+                continue
+            issues.append(f"the `{events[0]}` and `{other}` path lists differ")
     # When push has no path filter, only the pull_request list is checked for missing entries.
     patterns = lists.get("pull_request") or lists.get("push") or lists[events[0]]
     for must in ALWAYS:

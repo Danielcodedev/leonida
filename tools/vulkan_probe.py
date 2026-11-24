@@ -1,7 +1,9 @@
 """Optional: print Vulkan SDK path and whether Lavapipe ICD is visible (no downloads)."""
+import os
 import sys
 
-from vulkan_env import lavapipe_icd_json, prepare_icd_env, sdk_root
+sys.path.insert(0, os.path.dirname(__file__))
+from vulkan_env import lavapipe_icd_json, prepare_icd_env, sdk_root  # noqa: E402
 
 
 def main() -> int:
@@ -16,4 +18,8 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    try:  # a redirected stdout is strict ANSI code page under -I; write '?' for what it cannot encode
+        sys.stdout.reconfigure(errors="replace")
+    except (AttributeError, ValueError, OSError):
+        pass
     sys.exit(main())

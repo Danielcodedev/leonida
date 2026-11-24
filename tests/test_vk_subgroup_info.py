@@ -821,6 +821,13 @@ class QueryTest(unittest.TestCase):
                     "driver_id": 1,
                     "rdna1_amd_windows": False,
                     "rdna2_amd_windows": False,
+                    "eligible_devices": [
+                        {
+                            "name": f"GPU-{label}",
+                            "rank": vk_info.device_rank(vk_info.VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU, 0),
+                            "device_type": vk_info.VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU,
+                        },
+                    ],
                 })
 
     def test_max_push_constants_size(self):

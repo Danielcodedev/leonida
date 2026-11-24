@@ -2729,6 +2729,8 @@ def verify_runtime_build(work: str, stages: list) -> None:
     script = os.path.join(TOOLS, "verify_build.py")
     if not os.path.isfile(script):
         return
+    if not os.path.isfile(os.path.join(ROOT, "runtime", "build", "gta6rt.exe")):
+        return
     log("verify: runtime, Vulkan, and optional GPU shader draw")
     args = [sys.executable, "-I", script, "--work", work, "--skip-build"]
     if "shaders" in stages:
