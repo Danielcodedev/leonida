@@ -22,7 +22,8 @@ Comments, docstrings and the C++, shader and header sources are not read as depe
 them says where a table or a test came from, not that the build runs it, and counting those would make every
 such note a required entry.
 
-It also checks that the ``push`` and ``pull_request`` lists are the same, and that no ``tools/`` entry names a
+It also checks that the ``push`` and ``pull_request`` lists match, except an unfiltered push to ``main`` (no
+``paths:``) which runs every commit; pull requests still need the same complete path list. No ``tools/`` entry names a
 file that no longer exists. Listing more than the jobs need is allowed on purpose: an extra run costs one
 queue slot, a missing entry loses the build for a tool the workflow reads.
 
@@ -62,7 +63,9 @@ def path_lists(root):
         body = match.group(1)
         paths = re.search(r"^    paths:\n((?:      - .*\n)+)", body, re.M)
         if not paths:
-            raise AssertionError(f"{WORKFLOW} `{event}:` has no `paths:` list; update this test with the workflow")
+            # An unfiltered push to main (no `paths:`) runs on every commit; pull requests still use a path list.
+            lists[event] = []
+            continue
         lists[event] = [line.strip()[1:].strip().strip("\"'") for line in paths.group(1).splitlines()]
     return lists
 
@@ -207,8 +210,11 @@ def problems(root):
     events = sorted(lists)
     for other in events[1:]:
         if lists[other] != lists[events[0]]:
-            issues.append(f"the `{events[0]}` and `{other}` path lists differ")
-    patterns = lists[events[0]]
+            push_all = lists.get("push") == [] and lists.get(other)
+            if not push_all:
+                issues.append(f"the `{events[0]}` and `{other}` path lists differ")
+    # When push has no path filter, only the pull_request list is checked for missing entries.
+    patterns = lists.get("pull_request") or lists.get("push") or lists[events[0]]
     for must in ALWAYS:
         if must not in patterns:
             issues.append(f"{must}: missing (always needed)")
