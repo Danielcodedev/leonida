@@ -1,0 +1,26 @@
+name: CI
+on: [push, pull_request]
+jobs:
+  check:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+      - name: Python tools compile
+        run: python -m compileall -q make_game.py tools
+      - name: make_game.py help
+        run: python -I make_game.py --help
+      - name: Build rpf9dump
+        run: dotnet build tools/rpf9dump/rpf9dump.csproj -c Release
+      - name: No game data tracked
+        shell: bash
+        run: |
+          bad=$(git ls-files | grep -iE '\.(rpf|ttpf|xvd|dxbc|fssm|spv|spvasm|dds|bk2|awc|exe|dll)$' || true)
+          if [ -n "$bad" ]; then echo "Game or binary files tracked:"; echo "$bad"; exit 1; fi
