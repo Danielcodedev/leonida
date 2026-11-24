@@ -26,7 +26,8 @@ class ArgparseDefaultsAndTypesTest(unittest.TestCase):
             with patch("make_game.below_normal"):
                 with patch("make_game.choose_game", return_value=os.path.abspath("C:/dummy_game")):
                     with patch("make_game.check", return_value={"expected_exe": "game.exe"}):
-                        with patch("make_game.preflight"), patch("make_game.cross_build_missing", return_value=[]):
+                        with patch("make_game.preflight"), patch("make_game.cross_build_missing", return_value=[]), \
+                                patch("make_game.verify_runtime_build"):
                             with patch("make_game.shaders"):
                                 with patch("make_game.assets"):
                                     with patch("make_game.runtime"):
@@ -186,7 +187,7 @@ class StageValidationAndSequencingTest(unittest.TestCase):
         with patch.object(sys, "argv", base_argv):
             with patch("make_game.below_normal"):
                 with patch("make_game.check", return_value={"expected_exe": "Leonida.exe"}):
-                    with patch("make_game.preflight"):
+                    with patch("make_game.preflight"), patch("make_game.verify_runtime_build"):
                         with patch("make_game.log"):
                             with patch("make_game.shaders") as mock_shaders:
                                 with patch("make_game.assets") as mock_assets:
@@ -269,7 +270,8 @@ class StageValidationAndSequencingTest(unittest.TestCase):
                 with patch("make_game.check", return_value={"expected_exe": "Leonida.exe"}):
                     with patch("make_game.preflight"):
                         with patch("make_game.log"):
-                            with patch("make_game.pipeline_check_exe", return_value="vk_pipeline_check"):
+                            with patch("make_game.pipeline_check_exe", return_value="vk_pipeline_check"), \
+                                    patch("make_game.verify_runtime_build"):
                                 with patch("make_game.shaders", manager.shaders):
                                     with patch("make_game.assets", manager.assets):
                                         with patch("make_game.runtime", manager.runtime):

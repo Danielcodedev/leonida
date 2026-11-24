@@ -179,6 +179,7 @@ class SkipAssetsAndStageIsolationTest(unittest.TestCase):
                 mock.patch("make_game.below_normal"), \
                 mock.patch("make_game.check", return_value={"expected_exe": "game.exe"}), \
                 mock.patch("make_game.preflight"), \
+                mock.patch("make_game.verify_runtime_build"), \
                 mock.patch("make_game.shaders") as mock_shaders, \
                 mock.patch("make_game.assets") as mock_assets, \
                 mock.patch("make_game.runtime") as mock_runtime, \

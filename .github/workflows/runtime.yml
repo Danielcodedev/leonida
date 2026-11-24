@@ -407,9 +407,21 @@ jobs:
       - name: GPU tests on llvmpipe, compute with wave64 emulation
         # llvmpipe has 8-wide subgroups, so the wave64 compute tests only run emulated. The emulated mesh tests are
         # left out: llvmpipe's LLVM backend aborts compiling them ("Cannot emit physreg copy instruction").
+        shell: bash
         env:
           LEONIDA_W64_EMULATE: "1"
-        run: python3 -I scripts/run_gpu_tests.py --build runtime/build --llvm-mc /usr/lib/llvm-19/bin/llvm-mc --work "$RUNNER_TEMP/gpu-w64" --filter cs_
+          # cs_imgload_*_tfe: the tfe status VGPR fails emulated as it does native (the llvmpipe step above).
+          EXPECTED_FAILURES: >-
+            cs_imgload_tfe
+            cs_imgload_d16_tfe
+        run: |
+          set +e
+          python3 -I scripts/run_gpu_tests.py --build runtime/build --llvm-mc /usr/lib/llvm-19/bin/llvm-mc --work "$RUNNER_TEMP/gpu-w64" --filter cs_ 2>&1 |
+            tee "$RUNNER_TEMP/gpu-w64.log"
+          status=${PIPESTATUS[0]}
+          set -e
+          sed -n '/=== GPU TEST RESULTS ===/,$p' "$RUNNER_TEMP/gpu-w64.log" | awk '$1 == "FAIL" { print $2 }' > "$RUNNER_TEMP/failed-w64.txt"
+          python3 -I scripts/ci_expected_failures.py "$RUNNER_TEMP/failed-w64.txt" "$status" "$EXPECTED_FAILURES"
       - name: GPU tests on llvmpipe with the barycentric fallback
         # llvmpipe has no VK_KHR_fragment_shader_barycentric, so the native run skips the pixel shaders that read raw
         # barycentrics. Under --bary-fallback they read them from an input a pass-through geometry shader feeds
@@ -418,9 +430,19 @@ jobs:
         shell: bash
         env:
           LEONIDA_BARY_FALLBACK: "1"
+          # cs_imgload_*_tfe: the full suite runs here too, and they fail as in the native llvmpipe step above.
+          EXPECTED_FAILURES: >-
+            cs_imgload_tfe
+            cs_imgload_d16_tfe
         run: |
           log="$RUNNER_TEMP/gpu-bary.log"
-          python3 -I scripts/run_gpu_tests.py --build runtime/build --llvm-mc /usr/lib/llvm-19/bin/llvm-mc --work "$RUNNER_TEMP/gpu-bary" | tee "$log"
+          set +e
+          python3 -I scripts/run_gpu_tests.py --build runtime/build --llvm-mc /usr/lib/llvm-19/bin/llvm-mc --work "$RUNNER_TEMP/gpu-bary" 2>&1 |
+            tee "$log"
+          status=${PIPESTATUS[0]}
+          set -e
+          sed -n '/=== GPU TEST RESULTS ===/,$p' "$log" | awk '$1 == "FAIL" { print $2 }' > "$RUNNER_TEMP/failed-bary.txt"
+          python3 -I scripts/ci_expected_failures.py "$RUNNER_TEMP/failed-bary.txt" "$status" "$EXPECTED_FAILURES"
           names=$(sed -n 's/^bary fallback GS: \(.*\)\.bary_gs\.spv$/\1/p' "$log")
           if [ -z "$names" ]; then
             echo "::error::no barycentric fallback geometry shader was built"

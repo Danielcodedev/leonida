@@ -1,4 +1,5 @@
 """Optional: print Vulkan SDK path and whether Lavapipe ICD is visible (no downloads)."""
+import argparse
 import os
 import sys
 
@@ -6,7 +7,8 @@ sys.path.insert(0, os.path.dirname(__file__))
 from vulkan_env import lavapipe_icd_json, prepare_icd_env, sdk_root  # noqa: E402
 
 
-def main() -> int:
+def main(argv=None) -> int:
+    argparse.ArgumentParser(description=__doc__).parse_args(argv)
     sdk = sdk_root()
     print(f"VULKAN_SDK (resolved): {sdk or '(not set)'}")
     if sdk:

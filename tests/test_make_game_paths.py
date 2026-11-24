@@ -54,6 +54,7 @@ class BuildDestinationTest(unittest.TestCase):
             stack.enter_context(patch("make_game.below_normal"))
             stack.enter_context(patch("make_game.check", return_value=version or {}))
             stack.enter_context(patch("make_game.log"))
+            stack.enter_context(patch("make_game.verify_runtime_build"))
             preflight = stack.enter_context(patch("make_game.preflight"))
             build_runtime = stack.enter_context(patch("make_game.runtime"))
             stderr = stack.enter_context(patch("sys.stderr", new_callable=io.StringIO))

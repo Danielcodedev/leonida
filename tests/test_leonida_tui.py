@@ -303,6 +303,7 @@ class SerialOverlapTest(unittest.TestCase):
                     mock.patch.object(make_game, "runtime", side_effect=record("runtime")), \
                     mock.patch.object(make_game, "pipelines", side_effect=record("pipelines")), \
                     mock.patch.object(make_game, "log"), \
+                    mock.patch.object(make_game, "verify_runtime_build"), \
                     mock.patch.object(make_game, "pipeline_check_exe", return_value="x"):
                 make_game.run_build_stages(
                     ["shaders", "assets", "runtime", "pipelines"],
@@ -339,6 +340,7 @@ class SerialOverlapTest(unittest.TestCase):
                     mock.patch.object(make_game, "runtime", side_effect=record("runtime", hold=0.15)), \
                     mock.patch.object(make_game, "pipelines", side_effect=record("pipelines")), \
                     mock.patch.object(make_game, "log"), \
+                    mock.patch.object(make_game, "verify_runtime_build"), \
                     mock.patch.object(make_game, "pipeline_check_exe", return_value="stale_checker"):
                 make_game.run_build_stages(
                     ["shaders", "assets", "runtime", "pipelines"],

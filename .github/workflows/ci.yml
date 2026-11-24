@@ -61,7 +61,8 @@ jobs:
       ${{ !cancelled() && (needs.change-scope.result == 'skipped'
       || needs.change-scope.outputs.docs-only != 'true') }}
     runs-on: windows-latest
-    timeout-minutes: 15
+    # The standard-library loop alone took 840 to 868 s in four runs on 24 November 2026, before the builds below.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -167,7 +168,9 @@ jobs:
       ${{ !cancelled() && (needs.change-scope.result == 'skipped'
       || needs.change-scope.outputs.docs-only != 'true') }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 10
+    # The Windows leg ran 513 s to its failure and was cancelled at 597 s and 599 s on 24 November 2026; the Linux
+    # leg takes 169 to 299 s.
+    timeout-minutes: 20
     strategy:
       matrix:
         # Pull requests run the Linux leg only: in 914 sampled pull request runs the Windows leg never failed while the
@@ -230,17 +233,23 @@ jobs:
         run: |
           python -m unittest discover -s tests/semantic > "$RUNNER_TEMP/semantic.log" 2>&1 &
           semantic=$!
+          # Run every file, then fail, as the check job does: the annotations then name each failed file.
+          failed=()
           while IFS= read -r t; do
             if grep -Eq "$PYTEST_FILE_MARKERS" "$t" || ! grep -q '__main__' "$t"; then
               continue
             fi
             echo "== $t"
-            python -I "$t" || exit 1
+            python -I "$t" || failed+=("$t")
           done < <(find tests -path 'tests/semantic' -prune -o -type f -name 'test_*.py' -print | LC_ALL=C sort)
           status=0
           wait "$semantic" || status=$?
           echo "== tests/semantic"
           cat "$RUNNER_TEMP/semantic.log"
+          if (( ${#failed[@]} )); then
+            for t in "${failed[@]}"; do echo "::error file=$t::$t failed"; done
+            exit 1
+          fi
           exit "$status"
       - name: Install llvm-mc and SPIRV-Tools
         run: |
@@ -303,10 +312,16 @@ jobs:
       - name: Tests (standard library only, Linux)
         shell: bash
         run: |
+          # Run every file, then fail, as the check job does: the annotations then name each failed file.
+          failed=()
           while IFS= read -r t; do
             if grep -Eq "$PYTEST_FILE_MARKERS" "$t" || ! grep -q '__main__' "$t"; then
               continue
             fi
             echo "== $t"
-            python -I "$t" || exit 1
+            python -I "$t" || failed+=("$t")
           done < <(find tests -path 'tests/semantic' -prune -o -type f -name 'test_*.py' -print | LC_ALL=C sort)
+          if (( ${#failed[@]} )); then
+            for t in "${failed[@]}"; do echo "::error file=$t::$t failed"; done
+            exit 1
+          fi

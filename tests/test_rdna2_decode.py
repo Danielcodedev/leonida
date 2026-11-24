@@ -426,6 +426,26 @@ class Rdna2DecodeUnitTests(unittest.TestCase):
                 checked += 1
         self.assertGreater(checked, 5000)
 
+    def test_permlane_op_sel_is_fi_and_bound_ctrl(self):
+        # VOP3 0x377 / 0x378, `v11, v2, s4, s5`: op_sel has two bits here, [FI, BOUND_CTRL] (docs/design.md, SHADER-74).
+        for opcode, name in ((0x377, "v_permlane16_b32"), (0x378, "v_permlanex16_b32")):
+            for bits, mods in ((0, []), (1, ["op_sel:[1,0]"]), (2, ["op_sel:[0,1]"]), (3, ["op_sel:[1,1]"])):
+                with self.subTest(name=name, bits=bits):
+                    code = words(0xD400000B | opcode << 16 | bits << 11, 0x00140902)
+                    ins, = rdna2_decode.decode_bytes(code)["insns"]
+                    expected = shader_ir.parse_line(f"{name} v11, v2, s4, s5")
+                    self.assertEqual((ins["op"], ins["args"], ins["mods"]), (name, expected["args"], mods))
+
+    def test_exp_targets_match_the_parsed_listing(self):
+        # shader_ir.operand reads the null target as the special register of that name, the others as targets.
+        for code, asm in ((words(0xF8000090, 0), "exp null off, off, off, off"),
+                          (words(0xF800180F, 0x03020100), "exp mrt0 v0, v1, v2, v3 done vm")):
+            with self.subTest(asm=asm):
+                ins, = rdna2_decode.decode_bytes(code)["insns"]
+                expected = shader_ir.parse_line(asm)
+                for field in ("op", "args", "mods"):
+                    self.assertEqual(ins[field], expected[field])
+
     def test_sdwa_inline_constants_and_sgpr(self):
         # Exact encodings from runtime/test/shaders/ps_sdwa_f16_const.asm:
         # 1) v_add_f16_sdwa v2, 1.0, v1 dst_sel:WORD_0 dst_unused:UNUSED_PRESERVE src0_sel:WORD_1 src1_sel:WORD_0

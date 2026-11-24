@@ -979,7 +979,11 @@ def _decode_one(code: bytes, pc: int, wave32: bool, mcpu: str) -> tuple[dict | N
                     args.append(_src(src1, w, lit, neg=bool(neg & 2), absm=bool(abs_bits & 2)))
             elif fn == "SRC2":
                 args.append(_src(src2, w, lit, neg=bool(neg & 4), absm=bool(abs_bits & 4)))
-        if op_sel:
+        if name in ("v_permlane16_b32", "v_permlanex16_b32"):
+            # Only [FI, BOUND_CTRL] exist here (docs/design.md, SHADER-74); llvm-mc 18.1.8 prints these two bits.
+            if op_sel & 3:
+                mods.append(f"op_sel:[{op_sel & 1},{(op_sel >> 1) & 1}]")
+        elif op_sel:
             # op_sel prints [s0,s1,...,dst] (nsrc + 1 bits, or nsrc for VOPC).
             nbits = nsrc if opc < 0x100 else (nsrc + 1)
             bits = [(op_sel >> i) & 1 for i in range(nsrc)]
@@ -1326,7 +1330,10 @@ def _decode_one(code: bytes, pc: int, wave32: bool, mcpu: str) -> tuple[dict | N
             tname = f"param{tgt - 32}"
         else:
             tname = f"tgt{tgt}"
-        args = [{"k": "target", "t": tname}]
+        if tname == "null":  # shader_ir.operand reads the null target as the special register of that name
+            args = [{"k": "special", "t": "null", "neg": False, "abs": False}]
+        else:
+            args = [{"k": "target", "t": tname}]
         if compr:
             # Compressed export: en bit 0/1 enables vsrc0 (printed twice), bit 2/3 enables vsrc1 (printed twice).
             for pair in (0, 1):
