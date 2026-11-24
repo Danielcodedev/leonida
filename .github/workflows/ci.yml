@@ -209,7 +209,9 @@ jobs:
       ${{ !cancelled() && (needs.change-scope.result == 'skipped'
       || needs.change-scope.outputs.docs-only != 'true') }}
     runs-on: macos-26
-    timeout-minutes: 20
+    # The semantic suite and the standard-library loop took 1064 s on 24 November 2026, and the job was cancelled at
+    # 20 minutes, 87 s into the pytest step.
+    timeout-minutes: 40
     env:
       HOMEBREW_NO_AUTO_UPDATE: "1"
       HOMEBREW_NO_INSTALL_CLEANUP: "1"

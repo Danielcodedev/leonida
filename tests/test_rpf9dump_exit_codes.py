@@ -85,12 +85,13 @@ class Rpf9dumpExitCodeTest(unittest.TestCase):
             src = root / "audio.rpf"
             awc_rpf(src)
             wav = root / "out" / "audio" / "xma" / "audio_0001_at_0000000000001000" / "00001234.xma.wav"
-            blocker = Path(str(wav) + ".partial")
-            blocker.mkdir(parents=True)          # the write of this one stream fails
+            # A folder under the final name: Util.WriteAtomic writes to a unique <path>.*.partial, so a folder named
+            # <path>.partial blocks nothing, but the rename into place cannot replace a folder.
+            wav.mkdir(parents=True)              # the write of this one stream fails
             failed = run("xma", src, root / "out")
             self.assertNotEqual(failed.returncode, 0, failed.stdout + failed.stderr)
-            self.assertFalse(wav.exists())
-            blocker.rmdir()
+            self.assertFalse(wav.is_file())
+            wav.rmdir()
             retry = run("xma", src, root / "out")
             self.assertEqual(retry.returncode, 0, retry.stdout + retry.stderr)
             self.assertEqual(wav.read_bytes()[:4], b"RIFF")
@@ -106,14 +107,13 @@ class Rpf9dumpExitCodeTest(unittest.TestCase):
             texture_dictionary_rpf(src)
             sub = root / "out" / "textures" / "textures"
             dds = sub / "dictionary_at_0000000000001010" / "000_probe.dds"
-            blocker = Path(str(dds) + ".partial")
-            blocker.mkdir(parents=True)          # the write of this one DDS fails
+            dds.mkdir(parents=True)              # a folder under the final name: the write of this one DDS fails
             failed = run("textures", src, root / "out")
             self.assertNotEqual(failed.returncode, 0, failed.stdout + failed.stderr)
-            self.assertFalse(dds.exists(), failed.stdout)          # the blocked write must not have succeeded
+            self.assertFalse(dds.is_file(), failed.stdout)         # the blocked write must not have succeeded
             self.assertFalse((sub / "manifest.json").exists(), failed.stdout)
             self.assertFalse((sub / "manifest.json.partial").exists())
-            blocker.rmdir()
+            dds.rmdir()
             retry = run("textures", src, root / "out")
             self.assertEqual(retry.returncode, 0, retry.stdout + retry.stderr)
             self.assertTrue((sub / "manifest.json").exists())
