@@ -18,8 +18,9 @@ others show what does and doesn't work under Wine yet without failing the job.
 Relative executable paths in --wine or WINE are read from the directory where you start this runner.
 
 Under GitHub Actions (GITHUB_ACTIONS=true) the runner also prints workflow commands, which show as annotations on
-the job: a notice when it starts and when it ends, a warning for each test that timed out and a notice for each other
-test that took SLOW_SECONDS or more. They name where the time went even when the job is cancelled at its time limit.
+the job: a notice when it starts and when it ends, a warning for each test that timed out (with the last lines it
+printed) and a notice for each other test that took SLOW_SECONDS or more. They name where the time went even when the
+job is cancelled at its time limit.
 """
 import argparse
 from graphlib import CycleError, TopologicalSorter
@@ -39,6 +40,16 @@ import time
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SLOW_SECONDS = 30.0   # a test that takes this long gets a notice under GitHub Actions
 MAX_SLOW_NOTICES = 8  # GitHub shows 10 notices per step: the start and the end notice keep their place
+TAIL_LINES = 12       # of a timed-out test's output, in its warning
+TAIL_CHARS = 1200
+
+
+def timeout_tail(detail: str) -> str:
+    """What a timed-out test printed last, for its warning: it shows how far the test got before it stopped."""
+    printed = [line.rstrip() for line in detail.splitlines()[1:] if line.strip()]
+    if not printed:
+        return "it printed nothing"
+    return "its last output:\n" + "\n".join(printed[-TAIL_LINES:])[-TAIL_CHARS:]
 
 
 def annotate(level: str, message: str) -> None:
@@ -401,7 +412,7 @@ def main() -> int:
                     print(f"    {line}")
             if status == "fail" and detail.startswith("timed out after"):
                 annotate("warning", f"{name} {detail.splitlines()[0]} under {label}, "
-                                    f"{time.monotonic() - run_start:.0f} s into the run")
+                                    f"{time.monotonic() - run_start:.0f} s into the run; {timeout_tail(detail)}")
             elif elapsed >= SLOW_SECONDS and slow_notices < MAX_SLOW_NOTICES:
                 slow_notices += 1
                 annotate("notice", f"{name}: {status} after {elapsed:.0f} s under {label}")

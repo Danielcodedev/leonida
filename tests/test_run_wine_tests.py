@@ -749,9 +749,32 @@ class MainTest(unittest.TestCase):
         commands = self.workflow_commands(out)
         self.assertEqual(len(commands), 3, out)
         self.assertEqual(commands[0], "::notice::run_wine_tests: 2 tests to run under wine-9.0")
-        self.assertRegex(commands[1], r"^::warning::slow timed out after 0\.2 s under wine-9\.0, \d+ s into the run$")
+        self.assertRegex(commands[1], r"^::warning::slow timed out after 0\.2 s under wine-9\.0, \d+ s into the run; "
+                                      r"it printed nothing$")
         self.assertRegex(commands[2],
                          r"^::notice::run_wine_tests: 1 passed, 1 failed, 0 skipped under wine-9\.0 in \d+ s$")
+
+    def test_timeout_warning_carries_the_last_output(self):
+        def hang(argv, *, cwd, env, timeout):
+            raise subprocess.TimeoutExpired(argv, timeout, output=b"step 1\r\n\r\nstep 2\n")
+
+        with mock.patch.dict(os.environ, {"GITHUB_ACTIONS": "true"}), \
+                mock.patch.object(rwt, "run_test_process", hang):
+            code, out, _ = self.run_main([ctest_entry("stuck", self.command("ok.py"))], "--timeout", "7")
+        self.assertEqual(code, 0)
+        warnings = [line for line in self.workflow_commands(out) if line.startswith("::warning::")]
+        self.assertEqual(len(warnings), 1, out)
+        self.assertRegex(warnings[0], r"^::warning::stuck timed out after 7\.0 s under Wine, \d+ s into the run; "
+                                      r"its last output:%0Astep 1%0Astep 2$")
+
+    def test_timeout_tail_is_bounded(self):
+        self.assertEqual(rwt.timeout_tail("timed out after 120.0 s\n"), "it printed nothing")
+        self.assertEqual(rwt.timeout_tail("timed out after 120.0 s\n \n\n"), "it printed nothing")
+        many = "timed out after 120.0 s\n" + "".join(f"line {i}\n" for i in range(40))
+        self.assertEqual(rwt.timeout_tail(many).splitlines(),
+                         ["its last output:"] + [f"line {i}" for i in range(40 - rwt.TAIL_LINES, 40)])
+        long = rwt.timeout_tail("timed out after 120.0 s\n" + "x" * 5000 + "\nend\n")
+        self.assertEqual(long, "its last output:\n" + "x" * (rwt.TAIL_CHARS - 4) + "\nend")
 
     def test_slow_test_notices_are_capped(self):
         entries = [ctest_entry(f"ok{i}", self.command("ok.py")) for i in range(4)]
