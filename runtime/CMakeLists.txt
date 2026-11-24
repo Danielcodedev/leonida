@@ -1737,9 +1737,10 @@ if(TARGET Vulkan::Headers)
     set_tests_properties(d3d12_noop_copy PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 45)
     set_tests_properties(d3d12_queue_wait PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 60)
     add_test(NAME d3d12_queue_wait_timeout COMMAND d3d12_queue_wait_test --timeout-control)
-    # The limit covers creating the device as well as the 20 ms wait: 10 s ran out under Wine 9.0 before the test
-    # printed anything, where the other device tests take about 21 s each. A hang past the wait still fails.
-    set_tests_properties(d3d12_queue_wait_timeout PROPERTIES SKIP_RETURN_CODE 77 WILL_FAIL TRUE TIMEOUT 60)
+    # Under Ubuntu's Wine 9.0 this test runs into the 10 s without printing anything. With 60 s (9002b42) it no longer
+    # did, but the tests after it stayed slow and the wine (ubuntu) job was cancelled at 30 minutes (run 45428701383);
+    # with 10 s the same job passed in 694 s (run 45410688081). Why is not known yet, so the limit stays.
+    set_tests_properties(d3d12_queue_wait_timeout PROPERTIES SKIP_RETURN_CODE 77 WILL_FAIL TRUE TIMEOUT 10)
     # ExecuteCommandLists refuses a list whose type isn't the queue's (debug-layer message 836).
     add_executable(d3d12_queue_list_type_test test/d3d12_queue_list_type_test.cpp)
     target_link_libraries(d3d12_queue_list_type_test PRIVATE gta6rt_d3d12_com)
