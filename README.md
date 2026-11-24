@@ -69,7 +69,10 @@ The port isn't downloaded ready-made. It's built on your PC from your own copy.
 2. Download this project **with its submodule**: `git clone --recursive https://github.com/ProjectLeonidaL/leonida`. A
    "Download ZIP" from GitHub leaves out `third_party/rpf9-explorer`. The build fetches it if `git` is installed,
    and otherwise tells you what to do.
-3. Double-click **`Build.bat`**.
+3. Optional: double-click **`Check-PC.bat`** (or `python -I scripts/pc_readiness.py`; `--lang de` or `ru` from
+   `scripts/i18n/pc_readiness/`) to see whether this PC has the tools, disk space, game package and GPU for the build
+   — without starting a build.
+4. Double-click **`Build.bat`**.
 
 It finds your copy of the game by itself: it looks in Downloads, Desktop, Documents, Games, your home folder and
 the top of every drive, two folders deep. It recognises the version from a few file sizes, without reading

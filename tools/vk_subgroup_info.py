@@ -265,6 +265,7 @@ def query(*, stage_caps=False) -> dict:
         wanted = device_filter.lower()
         chosen = None
         chosen_rank = -1
+        eligible_devices: list[dict] = []
         for d in devs:
             d = ctypes.c_void_p(d)
             sg = SubgroupSizeControl(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_SIZE_CONTROL_PROPERTIES)
@@ -325,6 +326,7 @@ def query(*, stage_caps=False) -> dict:
             vendor_id = int.from_bytes(raw[PROPS_VENDOR_ID:PROPS_VENDOR_ID + 4], "little")
             # the runtime's and the harnesses' rule: the first usable device of the highest rank
             rank = device_rank(dtype, vendor_id)
+            eligible_devices.append({"name": dev_name, "rank": rank, "device_type": dtype})
             if rank > chosen_rank:
                 chosen_rank = rank
                 chosen = (dev_name,
@@ -373,6 +375,7 @@ def query(*, stage_caps=False) -> dict:
             "rdna1_amd_windows": (vendor == AMD_VENDOR_ID and driver == VK_DRIVER_ID_AMD_PROPRIETARY
                                   and device in RDNA1_DEVICE_IDS),
             "rdna2_amd_windows": rdna2_amd_windows(vendor, device, driver),
+            "eligible_devices": eligible_devices,
         }
         if stage_caps:
             result.update(supported_subgroup_stages=supported_stages,

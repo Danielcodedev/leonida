@@ -86,7 +86,9 @@ gesammelt.
    ```
    Ein „Download ZIP“ von GitHub lässt `third_party/rpf9-explorer` weg. Der Build holt es nach, wenn `git`
    installiert ist, und sagt dir sonst, was zu tun ist.
-3. Doppelklicke auf **`Build.bat`**.
+3. Optional: Doppelklicke auf **`Check-PC.bat`** oder `python -I scripts/pc_readiness.py --lang de`, um Werkzeuge,
+   Speicherplatz, Spielpaket und GPU zu prüfen — ohne einen Build zu starten (UI-Texte in `scripts/i18n/pc_readiness/`).
+4. Doppelklicke auf **`Build.bat`**.
 
 Der Build findet deine Kopie selbst: Er sucht in Downloads, Desktop, Dokumente (auch dort, wo Windows sie ablegt,
 etwa in OneDrive), Games, deinem Benutzerordner und oben auf jedem Laufwerk, jeweils zwei Ordner tief. Die Version
