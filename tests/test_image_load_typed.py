@@ -324,28 +324,39 @@ class LoadOnlyShaders(unittest.TestCase):
                 self.assertEqual(hi_masks, 3 if expect_preserve else 0)
 
     def test_tfe_status_vgpr_is_written_zero(self):
-        # MIMG TFE/LWE: the fetch status follows the data at vdata[data_count]. A Vulkan image is always
-        # resident, so the translator stores 0 there (SHADER-1266, #31); without the modifier the trailing
-        # VGPR is left untouched.
-        for status in ("tfe", "lwe"):
-            with self.subTest(status=status):
-                m = Module(translate([
-                    "v_mov_b32 v4, 1", "v_mov_b32 v5, 2",
-                    f"image_load v[16:17], v[4:5], s[0:7] dmask:0x1 dim:SQ_RSRC_IMG_2D unorm {status}",
-                    "s_waitcnt vmcnt(0)",
-                ]))
-                stores = vgpr_stores(m)
-                self.assertIn(17, stores, f"{status}: the fetch status VGPR v17 is not written")
-                self.assertEqual(m.value(stores[17], 0, 0), 0, f"{status}: the fetch status must be 0 (resident)")
-        # Without tfe/lwe the trailing VGPR is left untouched.
-        m = Module(translate([
-            "v_mov_b32 v4, 1", "v_mov_b32 v5, 2",
-            "image_load v[16:17], v[4:5], s[0:7] dmask:0x1 dim:SQ_RSRC_IMG_2D unorm",
-            "s_waitcnt vmcnt(0)",
-        ]))
-        stores = vgpr_stores(m)
-        self.assertIn(16, stores, "the data VGPR v16 is written")
-        self.assertNotIn(17, stores, "without tfe/lwe the trailing VGPR v17 is left untouched")
+        # MIMG tfe: the fetch status follows the data at vdata[data_count], for every image read and query. A
+        # Vulkan image is always resident, so the translator stores 0 there (SHADER-1266). llvm-mc 18.1.8 sizes
+        # vdata from dmask, d16 and tfe (it rejects `image_load v[16:17] ... dmask:0x1 lwe`), so lwe alone adds no
+        # register: the VGPR after the data is left untouched, as it is without either modifier.
+        t, s = "s[0:7]", "s[8:11]"
+        cases = (   # instruction without its data operand, data VGPR count
+            (f"image_load {{}}, v[4:5], {t} dmask:0x1 dim:SQ_RSRC_IMG_2D unorm", 1),
+            (f"image_load {{}}, v[4:5], {t} dmask:0x5 dim:SQ_RSRC_IMG_2D unorm", 2),
+            (f"image_load {{}}, v[4:5], {t} dmask:0x7 dim:SQ_RSRC_IMG_2D unorm d16", 2),
+            (f"image_load {{}}, v[4:5], {t} dmask:0x1 dim:SQ_RSRC_IMG_2D unorm glc", 1),
+            (f"image_load_mip {{}}, v[4:6], {t} dmask:0x1 dim:SQ_RSRC_IMG_2D unorm", 1),
+            (f"image_sample {{}}, v[4:5], {t}, {s} dmask:0xf dim:SQ_RSRC_IMG_2D", 4),
+            (f"image_sample_lz {{}}, v[4:5], {t}, {s} dmask:0x3 dim:SQ_RSRC_IMG_2D d16", 1),
+            (f"image_sample_c_lz {{}}, v[4:6], {t}, {s} dmask:0x1 dim:SQ_RSRC_IMG_2D", 1),
+            (f"image_gather4_lz {{}}, v[4:5], {t}, {s} dmask:0x1 dim:SQ_RSRC_IMG_2D", 4),
+            (f"image_get_resinfo {{}}, v4, {t} dmask:0x3 dim:SQ_RSRC_IMG_2D", 2),
+            (f"image_get_lod {{}}, v[4:5], {t}, {s} dmask:0x3 dim:SQ_RSRC_IMG_2D", 2),
+        )
+        for asm, count in cases:
+            for mods, has_status in (("tfe", True), ("tfe lwe", True), ("lwe", False), ("", False)):
+                with self.subTest(asm=asm, mods=mods):
+                    last = 16 + count - 1 + has_status
+                    data = "v16" if last == 16 else f"v[16:{last}]"
+                    m = Module(translate(["v_mov_b32 v4, 1", "v_mov_b32 v5, 2", "v_mov_b32 v6, 0",
+                                          f"{asm.format(data)} {mods}".rstrip(), "s_waitcnt vmcnt(0)"]))
+                    stores = vgpr_stores(m)
+                    for r in range(16, 16 + count):
+                        self.assertIn(r, stores, f"the data VGPR v{r} is not written")
+                    if has_status:
+                        self.assertIn(16 + count, stores, "the fetch status VGPR is not written")
+                        self.assertEqual(m.value(stores[16 + count], 0, 0), 0, "the fetch status must be 0")
+                    else:
+                        self.assertNotIn(16 + count, stores, "the VGPR after the data must be left untouched")
 
 
 class LodQueryCoordinates(unittest.TestCase):
