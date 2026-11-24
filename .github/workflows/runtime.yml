@@ -228,7 +228,11 @@ jobs:
     # The uploaded build can still be tested under Wine if the later native tests fail.
     if: ${{ github.event_name != 'pull_request' && !cancelled() && needs.windows.outputs.wine-artifact == 'success' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    # Ubuntu's Wine 9.0 does not finish in 20 minutes: in run 45383529812 (24 November 2026) five of the 295 tests ran
+    # into their time limit (module_names, d3d12_queue_wait_timeout, queue_proxy, d3d12_depth_resolve and
+    # dxgi_host_parity, 490 s together), dxgi_host_parity ended 1062 s into the runner and the job was cancelled
+    # 1168 s into the test step. WineHQ stable (11.0) ran the same list in 308 s, 127 s of it after dxgi_host_parity.
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
