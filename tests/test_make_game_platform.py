@@ -41,6 +41,7 @@ class DefaultStagesTest(unittest.TestCase):
                 mock.patch.object(make_game, "below_normal"), \
                 mock.patch.object(make_game, "check", return_value={"expected_exe": "game.exe"}), \
                 mock.patch.object(make_game, "preflight") as preflight, \
+                mock.patch.object(make_game, "verify_runtime_build"), \
                 mock.patch.object(make_game, "log"), \
                 mock.patch.multiple(make_game, **mocks):
             self.assertEqual(make_game.main(), 0)
