@@ -19,6 +19,9 @@ jobs:
         run: python -I make_game.py --help
       - name: Build rpf9dump
         run: dotnet build tools/rpf9dump/rpf9dump.csproj -c Release
+      - name: Runtime verify (needs VS + Vulkan SDK on runner)
+        continue-on-error: true
+        run: python -I tools/verify_build.py --work "%TEMP%\leonida-ci-work"
       - name: No game data tracked
         shell: bash
         run: |

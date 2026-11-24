@@ -9,7 +9,9 @@
 #include <map>
 #include <string>
 
+#include "d3d12_vk.h"
 #include "pe_loader.h"
+#include "vk_bootstrap.h"
 
 namespace {
 
@@ -23,7 +25,8 @@ const char* binding_name(rt::Binding b) {
 }
 
 int usage() {
-    std::fprintf(stderr, "usage: gta6rt --dry-run <image> [--game-dir DIR]\n");
+    std::fprintf(stderr, "usage: gta6rt --dry-run <image> [--game-dir DIR]\n"
+                          "       gta6rt --self-test [--game-dir DIR]\n");
     return 2;
 }
 
@@ -32,19 +35,36 @@ int usage() {
 int wmain(int argc, wchar_t** argv) {
     std::filesystem::path image, game_dir;
     bool dry_run = false;
+    bool self_test = false;
     for (int i = 1; i < argc; ++i) {
         std::wstring a = argv[i];
         if (a == L"--dry-run") dry_run = true;
+        else if (a == L"--self-test") self_test = true;
         else if (a == L"--game-dir" && i + 1 < argc) game_dir = argv[++i];
         else if (image.empty()) image = a;
         else return usage();
     }
+    if (self_test) {
+        wchar_t self[MAX_PATH];
+        DWORD n = GetModuleFileNameW(nullptr, self, MAX_PATH);
+        if (!n) return 1;
+        image = self;
+        dry_run = true;
+    }
     if (image.empty()) return usage();
     if (!dry_run) {
-        std::fprintf(stderr, "Only --dry-run exists so far: running game code needs the shims listed by it first.\n");
+        std::fprintf(stderr,
+                     "Only --dry-run and --self-test exist so far: running game code needs the shims listed by it "
+                     "first.\n");
         return 2;
     }
     if (game_dir.empty()) game_dir = image.parent_path();
+
+    if (self_test) {
+        const bool vk = rt::d3d12_vk::ensure_graphics_backend();
+        std::printf("self-test: Vulkan graphics backend %s\n",
+                    vk ? "ready" : "unavailable (see vk_bootstrap_test or install GPU Vulkan drivers)");
+    }
 
     try {
         rt::Loader loader(game_dir);

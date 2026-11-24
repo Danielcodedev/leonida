@@ -18,6 +18,9 @@ carve/
 *.awc
 *.r9modeldata
 
+# ---- optional local Vulkan headers (not committed; vendor yourself if needed) ----
+deps/Vulkan-Headers/
+
 # ---- build output and caches ----
 build/
 bin/

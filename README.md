@@ -21,6 +21,7 @@
   <a href="#how-to-build">How to build</a> |
   <a href="#how-it-works">How it works</a> |
   <a href="#want-to-help">Want to help?</a> |
+  <a href="#contact">Contact</a> |
   <a href="#credits">Credits</a> |
   <a href="#license">License</a>
 </p>
@@ -46,13 +47,13 @@ work on booting can start as soon as one is available to a developer.
 | Finding and checking your copy (Xbox Series 1.0.2.1) | ✅ Works |
 | Shaders: carve, unpack native RDNA2 code, disassemble | ✅ All 26,503 |
 | Shaders: RDNA2 → SPIR-V translation | ⚠️ 97.4% of vertex/pixel shaders (13,971) translate and pass `spirv-val`. Compute, mesh and geometry shaders not yet translated |
-| Shader translator checked on a real GPU | ⚠️ Vertex fetch, texture sampling, exports and ALU ops checked on one GPU |
+| Shader translator checked on a real GPU | ⚠️ Manual GPU checks (fetch, textures, exports, ALU). Full build runs `tools/verify_build.py` (`vk_harness`) after the shaders stage |
 | Models (OBJ with real names, UVs, material references) | ✅ Exported. Not all layouts are decoded yet |
 | Texture dictionaries and world texture pools (DDS) | ✅ Exported. Some pool entries (BCPack) are skipped |
 | Audio banks (AWC: Opus, XMA2) | ✅ Exported whole. Decoding to WAV is not done yet |
-| PE loader and import shims | ⚠️ Skeleton. Untested against the real executable |
-| Xbox D3D12 → Vulkan | ❌ Not started |
-| Booting, story mode, anything playable | ❌ No |
+| PE loader and import shims | ⚠️ Maps/relocates/binds imports; `gta6rt --self-test` via `tools/verify_build.py`. Real game exe still needed for full coverage |
+| Xbox D3D12 → Vulkan | ⚠️ Root-signature helpers forward to PC D3D12; Vulkan instance/device bootstrap (`vk_bootstrap`). Command lists and descriptors not started |
+| Booting, story mode, anything playable | ❌ No (needs the game executable and the D3D12→Vulkan layer) |
 
 ## How to build
 
@@ -97,6 +98,15 @@ python -I make_game.py --stages shaders,assets         # only some stages
 Stages run in order: `check`, `shaders`, `assets`, `runtime`. The shader translation is the longest step: several
 hours on one core for now.
 
+**Runtime / GPU checks:** a full build (`Build.bat` or all default stages) ends with `tools/verify_build.py`:
+PE self-map, Vulkan device (GPU driver or Lavapipe from your installed Vulkan SDK), and—after the shaders stage—a `vk_harness` draw using SPIR-V in `<work>\shaders\spirv`. Nothing is downloaded during verify.
+
+```powershell
+python -I tools/verify_build.py --work "<out>\work"            # after runtime build
+python -I tools/verify_build.py --work "<out>\work" --require-gpu   # after shaders + runtime
+python -I tools/vulkan_probe.py   # optional SDK / ICD check
+```
+
 ## How it works
 
 | Piece | What it does | Where |
@@ -106,6 +116,7 @@ hours on one core for now.
 | Asset export | Finds validated resources inside RPF9 archives and the loose `.ttpf` texture pools | `tools/rpf9dump` (on rpf9-explorer's Core) |
 | Runtime | Maps the PE image, resolves imports to shims (GDK, XMem, `d3d12_xs`) | `runtime/` |
 | Research tools | PE/RTTI inspection, raw carving, texture tiling probes, GPU test harnesses | `tools/`, `runtime/test/` |
+| Post-build verify | PE self-map, Vulkan device, optional GPU draw | `tools/verify_build.py`, `tools/vulkan_env.py` |
 
 The translator's runtime contract (user SGPRs, push constants, memory model, bindless images, vertex fetch,
 system values) and all the format notes are in [docs/design.md](docs/design.md).
@@ -121,6 +132,12 @@ The biggest open pieces:
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). Never attach game files, extracted assets or generated shaders to issues or
 pull requests.
+
+## Contact
+
+- **Discord:** `or.1k`
+- **Telegram:** [@wouldscams](https://t.me/wouldscams)
+- **News & updates:** [Leonida Legacy on Telegram](https://t.me/projectleonidal)
 
 ## Credits
 

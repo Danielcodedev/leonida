@@ -203,12 +203,14 @@ def preflight(stages: list, work: str) -> None:
     if "assets" in stages:
         if not shutil.which("dotnet"):
             missing.append(".NET 8 SDK: https://dotnet.microsoft.com/download/dotnet/8.0")
-        ensure_submodule()
+        ensure_submodule()  # git submodule only when you clone with git; no other downloads
     if "runtime" in stages and os.name == "nt":
         vswhere = os.path.join(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"),
                                "Microsoft Visual Studio", "Installer", "vswhere.exe")
         if not os.path.isfile(vswhere):
             missing.append("Visual Studio 2022 with 'Desktop development with C++'")
+        if "shaders" in stages and not (shutil.which("spirv-as") and shutil.which("spirv-val")):
+            missing.append("spirv-as / spirv-val: install the Vulkan SDK from https://vulkan.lunarg.com/")
     if missing:
         fail("Install these first, then run the build again:\n  - " + "\n  - ".join(dict.fromkeys(missing)))
     need_gb = sum(MIN_FREE_GB.get(s, 0) for s in stages)
@@ -322,6 +324,17 @@ def assets(game: str, work: str) -> None:
 
 
 # ---------------------------------------------------------------- runtime
+def verify(work: str, stages: list) -> None:
+    """PE loader self-test, Vulkan device, and (if shaders were built) a real GPU draw."""
+    if os.name != "nt" or "runtime" not in stages:
+        return
+    log("verify: runtime, Vulkan, and GPU shader draw")
+    args = [sys.executable, "-I", os.path.join(TOOLS, "verify_build.py"), "--work", work, "--skip-build"]
+    if "shaders" in stages:
+        args.append("--require-gpu")
+    run(args)
+
+
 def runtime(game: str, out: str, v: dict) -> None:
     if os.name != "nt":
         fail("The runtime builds on Windows only for now.")
@@ -383,6 +396,7 @@ def main() -> int:
         assets(game, work)
     if "runtime" in stages:
         runtime(game, out, v)
+        verify(work, stages)
     log(f"finished in {(time.time() - t0) / 60:.0f} min")
     return 0
 

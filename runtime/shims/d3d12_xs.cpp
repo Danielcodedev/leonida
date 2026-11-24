@@ -7,6 +7,7 @@
 
 #include <cstdio>
 
+#include "../src/d3d12_vk.h"
 #include "shims.h"
 
 namespace {
@@ -22,6 +23,7 @@ using SerializeFn = HRESULT(WINAPI*)(const void*, void**, void**);
 using DeserializerFn = HRESULT(WINAPI*)(const void*, SIZE_T, const GUID*, void**);
 
 HRESULT WINAPI D3D12SerializeVersionedRootSignature(const void* desc, void** blob, void** error) {
+    rt::d3d12_vk::ensure_graphics_backend();
     static auto fn = reinterpret_cast<SerializeFn>(host("D3D12SerializeVersionedRootSignature"));
     return fn ? fn(desc, blob, error) : E_NOTIMPL;
 }

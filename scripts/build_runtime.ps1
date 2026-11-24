@@ -26,11 +26,19 @@ if ((Test-Path $cmake) -and (Test-Path $ninja)) {
 "@
 } else {
     # Keep this list in step with runtime\CMakeLists.txt.
-    $files = "src\main.cpp", "src\pe_loader.cpp", "shims\registry.cpp", "shims\xmem.cpp", "shims\d3d12_xs.cpp" | ForEach-Object { "`"$src\$_`"" }
+    $files = "src\main.cpp", "src\pe_loader.cpp", "src\vk_bootstrap.cpp", "src\d3d12_vk.cpp", "shims\registry.cpp", "shims\xmem.cpp", "shims\d3d12_xs.cpp" | ForEach-Object { "`"$src\$_`"" }
+    $bundledVk = Join-Path $root "deps\Vulkan-Headers\include"
+    if ($env:VULKAN_SDK -and (Test-Path (Join-Path $env:VULKAN_SDK "Include\vulkan\vulkan.h"))) {
+        $vkInc = "/I`"$env:VULKAN_SDK\Include`""
+    } elseif (Test-Path (Join-Path $bundledVk "vulkan\vulkan.h")) {
+        $vkInc = "/I`"$bundledVk`""
+    } else {
+        throw "Vulkan headers missing. Install the Vulkan SDK (VULKAN_SDK) or vendor deps/Vulkan-Headers/include yourself."
+    }
     $opt = if ($Debug) { "/Od /MDd" } else { "/O2 /MD" }
     $body = @"
 cd /d "$out" || exit /b 1
-cl /nologo /std:c++20 /EHsc /W4 /permissive- /utf-8 /Zi $opt /MP$jobs /DWIN32_LEAN_AND_MEAN /DNOMINMAX /DUNICODE /D_UNICODE $($files -join ' ') /Fe:gta6rt.exe /link /OPT:NOREF psapi.lib || exit /b 1
+cl /nologo /std:c++20 /EHsc /W4 /permissive- /utf-8 /Zi $vkInc $opt /MP$jobs /DWIN32_LEAN_AND_MEAN /DNOMINMAX /DUNICODE /D_UNICODE $($files -join ' ') /Fe:gta6rt.exe /link /OPT:NOREF psapi.lib || exit /b 1
 "@
 }
 
