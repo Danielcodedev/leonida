@@ -69,7 +69,7 @@ python -I make_game.py --game "D:\path\to\package" --out "D:\Games\Leonida" --wo
 
 يعمل `make_game.py` على Linux، ويجد `llvm-mc` تلقائيًا إذا كان ضمن `PATH`. تأكد من أن نسخته تدعم AMDGPU.
 يعمل محمّل اللعبة، وهو برنامج Windows، عبر Wine أو Proton. إذا كان لديك بناء Windows جاهز للمحمّل،
-فمرّر مجلده باستخدام `--runtime-build`. راجع [تعليمات البناء والتشغيل على Linux](../../../README.md#running-the-loader-on-linux).
+فمرّر مجلده باستخدام `--runtime-build`. راجع [تعليمات البناء والتشغيل على Linux](../../linux.md).
 
 ## حل المشاكل الشائعة
 
