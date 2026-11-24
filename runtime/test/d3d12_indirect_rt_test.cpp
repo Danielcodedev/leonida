@@ -907,10 +907,13 @@ int main() {
         size_emit0 = pb_vals[1];
         size_emit1 = pb_vals[2];
         post_rb->Unmap(0, nullptr);
-        if (size_inline == 0 || size_inline > compact_blas_bytes) {
+        // The structure covers its whole resource (the layer creates it with the resource's width), and a driver may
+        // report that as the compacted size: the wine (ubuntu) job's device answered 256 for a build sized 152.
+        const UINT64 compact_blas_room = align256(compact_blas_bytes);
+        if (size_inline == 0 || size_inline > compact_blas_room) {
             std::fprintf(stderr, "FAIL: inline COMPACTED_SIZE=%llu outside (0, %llu]\n",
                          static_cast<unsigned long long>(size_inline),
-                         static_cast<unsigned long long>(compact_blas_bytes));
+                         static_cast<unsigned long long>(compact_blas_room));
             return 1;
         }
         if (size_emit0 != size_inline || size_emit1 != size_inline) {

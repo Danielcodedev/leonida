@@ -26,6 +26,23 @@ struct Case {
     UINT samples;                // 4: TEXTURE2DMSARRAY views of a texture with one mip
 };
 
+// The depth resolve the 4x depth readback uses. Every sample of a slice holds one value there, so MIN, MAX and
+// AVERAGE read the same one. The layer refuses a mode the Vulkan device lacks (llvmpipe has no MIN), and AVERAGE
+// takes the depth plane's own format, R32_FLOAT for the D32_FLOAT case here (docs/d3d12_vulkan.md).
+struct DepthResolve {
+    D3D12_RESOLVE_MODE mode;
+    bool plane_format;  // name the depth plane and not the depth format
+};
+DepthResolve g_depth_resolve{D3D12_RESOLVE_MODE_MIN, false};
+
+bool pick_depth_resolve(VkResolveModeFlags modes, DepthResolve& out) {
+    if (modes & VK_RESOLVE_MODE_MIN_BIT) out = {D3D12_RESOLVE_MODE_MIN, false};
+    else if (modes & VK_RESOLVE_MODE_MAX_BIT) out = {D3D12_RESOLVE_MODE_MAX, false};
+    else if (modes & VK_RESOLVE_MODE_AVERAGE_BIT) out = {D3D12_RESOLVE_MODE_AVERAGE, true};
+    else return false;
+    return true;
+}
+
 // Seeds, clears through {mip, first, count} and reads back. `reached` gets one bit per subresource (mip + slice *
 // mips) the clear wrote. Returns an error text when the list was refused or the readback is not all zeros or ones.
 std::string clear_through(copycmp::Run& run, const Case& c, UINT mip, UINT first, UINT count, std::uint32_t& reached) {
@@ -93,8 +110,9 @@ std::string clear_through(copycmp::Run& run, const Case& c, UINT mip, UINT first
         run.barrier(texture.p, written, D3D12_RESOURCE_STATE_RESOLVE_SOURCE);
         for (UINT slice = 0; slice < kSlices; ++slice) {
             if (c.depth)
-                list1->ResolveSubresourceRegion(resolved.p, slice, 0, 0, texture.p, slice, nullptr, c.view,
-                                                D3D12_RESOLVE_MODE_MIN);
+                list1->ResolveSubresourceRegion(resolved.p, slice, 0, 0, texture.p, slice, nullptr,
+                                                g_depth_resolve.plane_format ? DXGI_FORMAT_R32_FLOAT : c.view,
+                                                g_depth_resolve.mode);
             else
                 run.list->ResolveSubresource(resolved.p, slice, texture.p, slice, c.view);
         }
@@ -153,6 +171,14 @@ int main() {
     info.queue = vk.queue;
     info.queue_family = vk.family;
     if (FAILED(rt::d3d12::create_vulkan_device(info, IID_PPV_ARGS(&ours.p)))) return 1;
+    VkPhysicalDeviceDepthStencilResolveProperties resolve{
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DEPTH_STENCIL_RESOLVE_PROPERTIES};
+    VkPhysicalDeviceProperties2 resolve_caps{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, &resolve};
+    vk.instance_fn<PFN_vkGetPhysicalDeviceProperties2>("vkGetPhysicalDeviceProperties2")(vk.physical, &resolve_caps);
+    const bool depth_readback = pick_depth_resolve(resolve.supportedDepthResolveModes, g_depth_resolve);
+    if (!depth_readback)
+        std::printf("SKIP DSV D32_FLOAT 4x: the Vulkan device has no MIN, MAX or AVERAGE depth resolve (modes 0x%x)\n",
+                    unsigned(resolve.supportedDepthResolveModes));
 
     // The references: the host's D3D12 on the layer's adapter (by LUID), and WARP.
     struct Host {
@@ -194,6 +220,7 @@ int main() {
     unsigned failures = 0, cleared = 0, compared = 0, refused = 0;
     struct Range { UINT first, count; };
     for (const Case& c : cases) {
+        if (c.depth && c.samples > 1 && !depth_readback) continue;  // its readback is a depth resolve
         const UINT mips = c.samples > 1 ? 1 : 3;
         // Every slice from the first on, in the view's mip; for the 4x depth array, counted slices as well.
         std::vector<Range> ranges{{0, UINT_MAX}, {1, UINT_MAX}, {3, UINT_MAX}};

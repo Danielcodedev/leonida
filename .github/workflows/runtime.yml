@@ -26,7 +26,10 @@ concurrency:
 jobs:
   windows:
     runs-on: windows-latest
-    timeout-minutes: 20
+    # With a warm sccache the whole job took 291 s (run 45442389069). With a cold one (0 hits, 385 misses) the build
+    # alone was still running after 19 minutes in run 45452312472 (24 November 2026): the 20-minute limit cancelled
+    # the job, and both wine jobs were skipped with it.
+    timeout-minutes: 45
     outputs:
       wine-artifact: ${{ steps.upload-wine-artifact.outcome }}
     env:

@@ -29,6 +29,7 @@ namespace {
 
 constexpr NTSTATUS kStatusSuccess = 0x00000000L;
 constexpr NTSTATUS kStatusUnsuccessful = static_cast<NTSTATUS>(0xC0000001L);
+constexpr NTSTATUS kStatusNotImplemented = static_cast<NTSTATUS>(0xC0000002L);
 constexpr NTSTATUS kStatusInvalidHandle = static_cast<NTSTATUS>(0xC0000008L);
 constexpr NTSTATUS kStatusInvalidParameter = static_cast<NTSTATUS>(0xC000000DL);
 constexpr NTSTATUS kStatusNoMemory = static_cast<NTSTATUS>(0xC0000017L);
@@ -140,6 +141,9 @@ NTSTATUS WINAPI open_algorithm_provider(BCRYPT_ALG_HANDLE* phAlgorithm, LPCWSTR 
             if (!is_rng) return kStatusNotFound;
         } else {
             const NTSTATUS st = g_host_open(&host_alg, pszAlgId, pszImplementation, dwFlags);
+            // Windows answers STATUS_NOT_FOUND for an algorithm name it does not know, Wine's bcrypt.dll
+            // STATUS_NOT_IMPLEMENTED; the caller gets the Windows answer on both.
+            if (st == kStatusNotImplemented) return kStatusNotFound;
             if (st < 0) return st;
         }
     }
