@@ -10,6 +10,7 @@
 // Exits 77 without an interactive window station, a Vulkan device or a host D3D12 device.
 #include "vk_test_device.h"
 #include "host_adapter.h"
+#include "host_wine.h"
 #include "window_station.h"
 #include "../shims/d3d12_com.h"
 
@@ -234,9 +235,12 @@ int main() {
     char probe_warp[8] = {};
     const bool warp = GetEnvironmentVariableA("PROBE_WARP", probe_warp, sizeof(probe_warp)) > 0 &&
                       std::strcmp(probe_warp, "0") != 0;
+    // Microsoft's DXGI is the reference (host_wine.h). Under Wine only the layer's side runs, so a crash there still
+    // fails the test, and Wine's DXGI is not handed the null out-pointers.
+    const bool wine = hostwine::host_is_wine();
     Side host;
     std::string host_name;
-    if (!make_host(warp, vk, host, host_name)) {
+    if (!wine && !make_host(warp, vk, host, host_name)) {
         std::printf("SKIP: no host D3D12 device (%s)\n", warp ? "WARP" : "hardware");
         host.release();
         return 77;
@@ -260,7 +264,7 @@ int main() {
 
     Results layer, reference;
     run(ours, layer);
-    run(host, reference);
+    if (!wine) run(host, reference);
     int mismatches = 0;
     for (const auto& [key, value] : reference) {
         const std::string& got = layer[key];
@@ -274,6 +278,10 @@ int main() {
     if (vk.validation_errors()) {
         std::fprintf(stderr, "FAIL: %u validation errors\n", vk.validation_errors());
         return 1;
+    }
+    if (wine) {
+        std::printf("SKIP: the layer answered %zu rows; none is compared with Wine's DXGI\n", layer.size());
+        return 77;
     }
     std::printf("dxgi_host_parity against %s: %d of %zu rows differ\n", host_name.c_str(), mismatches,
                 reference.size());

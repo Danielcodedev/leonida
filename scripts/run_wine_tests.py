@@ -39,11 +39,34 @@ import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SLOW_SECONDS = 30.0   # a test that takes this long gets a notice under GitHub Actions
-MAX_SLOW_NOTICES = 8  # GitHub shows 10 notices per step: the start and the end notice keep their place
+MAX_SLOW_NOTICES = 6  # GitHub shows 10 notices per step: the start, failed, skipped and end notices keep their place
 TAIL_LINES = 12       # of a timed-out test's output, in its warning
 TAIL_CHARS = 1200
 SLOWEST_LISTED = 8    # tests named in the end notice, slowest first
 SLOWEST_SECONDS = 1.0  # ... of those that took at least this long
+VERDICT_CHARS = 220   # of one test's line in the failed or skipped notice
+VERDICTS_CHARS = 12000  # of such a notice as a whole
+
+
+def verdict_line(name: str, detail: str) -> str:
+    """One test's line for the failed or skipped notice: its verdict, then the last line it printed."""
+    lines = [" ".join(line.split()) for line in detail.splitlines() if line.strip()]
+    text = f"{name}: {lines[0]}" if lines else name
+    if len(lines) > 1:
+        text += f"; last line: {lines[-1]}"
+    return text if len(text) <= VERDICT_CHARS else text[:VERDICT_CHARS - 3] + "..."
+
+
+def verdict_list(lines: list[str]) -> str:
+    """The lines of a failed or skipped notice, cut at a whole line when there are too many to show."""
+    shown, used = [], 0
+    for line in lines:
+        if used + len(line) + 1 > VERDICTS_CHARS:
+            shown.append(f"... and {len(lines) - len(shown)} more")
+            break
+        shown.append(line)
+        used += len(line) + 1
+    return "\n".join(shown)
 
 
 def slowest(timings: list[tuple[float, str]]) -> str:
@@ -419,6 +442,7 @@ def main() -> int:
     label = args.label or "Wine"
     slow_notices = 0
     timings: list[tuple[float, str]] = []
+    verdicts: dict[str, list[str]] = {"fail": [], "skip": []}
     run_start = time.monotonic()
     annotate("notice", f"run_wine_tests: {len(order)} tests to run under {label}")
     with DriveMap(args.windows_root, args.root, prefix) as drive:
@@ -434,6 +458,7 @@ def main() -> int:
             results[name] = status
             print(f"[{status.upper()}] {name}", flush=True)
             if status != "pass":
+                verdicts[status].append(verdict_line(name, detail))
                 for line in detail.rstrip().splitlines()[-40:]:
                     print(f"    {line}")
             if status == "fail" and detail.startswith("timed out after"):
@@ -446,6 +471,11 @@ def main() -> int:
     missing = list(dict.fromkeys(n for n in args.require if n not in results))
     failed_required = [n for n in args.require if results.get(n) != "pass"]
     counts = {s: sum(1 for v in results.values() if v == s) for s in ("pass", "fail", "skip")}
+    # The job log and the step summary need a login to read; these two notices name every test that did not pass.
+    for status, word in (("fail", "failed"), ("skip", "skipped")):
+        if verdicts[status]:
+            annotate("notice", f"run_wine_tests: {len(verdicts[status])} {word} under {label}:\n"
+                               + verdict_list(verdicts[status]))
     annotate("notice", f"run_wine_tests: {counts['pass']} passed, {counts['fail']} failed, {counts['skip']} skipped "
                        f"under {label} in {time.monotonic() - run_start:.0f} s{slowest(timings)}")
     print(f"\n{counts['pass']} passed, {counts['fail']} failed, {counts['skip']} skipped under Wine "

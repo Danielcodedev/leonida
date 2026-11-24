@@ -11,6 +11,7 @@
 #include "../shims/d3d12_com.h"
 #include "../shims/dxgi_com.h"
 #include "../src/vulkan_device_filter.h"
+#include "host_wine.h"
 #include "vulkan_loader.h"
 #include "window_station.h"
 
@@ -795,7 +796,9 @@ int main() {
                                                  reinterpret_cast<void*>(GetProcAddress(host_dxgi, "CreateDXGIFactory2")))
                                            : nullptr;
     bool compared_host = false;
-    if (create_host_dev && create_host_fac) {
+    // Microsoft's DXGI is the reference (host_wine.h). Under Wine the layer's suite above still counts, and Wine's
+    // DXGI is not handed the suite's null out-pointers.
+    if (create_host_dev && create_host_fac && !hostwine::host_is_wine()) {
         IDXGIFactory4* hfac = nullptr;
         ID3D12Device* hdev = nullptr;
         ID3D12CommandQueue* hq = nullptr;

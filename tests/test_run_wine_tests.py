@@ -774,12 +774,56 @@ class MainTest(unittest.TestCase):
             code, out, _ = self.run_main(entries, "--timeout", "0.2", "--label", "wine-9.0")
         self.assertEqual(code, 0)
         commands = self.workflow_commands(out)
-        self.assertEqual(len(commands), 3, out)
+        self.assertEqual(len(commands), 4, out)
         self.assertEqual(commands[0], "::notice::run_wine_tests: 2 tests to run under wine-9.0")
         self.assertRegex(commands[1], r"^::warning::slow timed out after 0\.2 s under wine-9\.0, \d+ s into the run; "
                                       r"it printed nothing$")
-        self.assertRegex(commands[2], r"^::notice::run_wine_tests: 1 passed, 1 failed, 0 skipped under wine-9\.0 "
+        self.assertEqual(commands[2], "::notice::run_wine_tests: 1 failed under wine-9.0:%0A"
+                                      "slow: timed out after 0.2 s")
+        self.assertRegex(commands[3], r"^::notice::run_wine_tests: 1 passed, 1 failed, 0 skipped under wine-9\.0 "
                                       r"in \d+ s(; slowest: [a-z]+ \d+ s(, [a-z]+ \d+ s)?)?$")
+
+    def test_notices_name_every_failed_and_skipped_test(self):
+        # The job log and the step summary need a login: these notices are the verdicts anyone can read.
+        (self.artifact / "says.py").write_text("import sys\nprint('step 1')\nprint('line 9:  x == y')\nsys.exit(3)\n",
+                                               encoding="utf-8", newline="\n")
+        (self.artifact / "skips.py").write_text("import sys\nprint('SKIP: no device')\nsys.exit(77)\n",
+                                                encoding="utf-8", newline="\n")
+        entries = [ctest_entry("ok", self.command("ok.py")), ctest_entry("says", self.command("says.py")),
+                   ctest_entry("bad", self.command("bad.py")),
+                   ctest_entry("skips", self.command("skips.py"), {"SKIP_RETURN_CODE": "77"}),
+                   ctest_entry("tool", ["/usr/bin/cmake", "-P", "x.cmake"])]
+        with mock.patch.dict(os.environ, {"GITHUB_ACTIONS": "true"}):
+            code, out, _ = self.run_main(entries, "--label", "wine-9.0")
+        self.assertEqual(code, 0)
+        commands = self.workflow_commands(out)
+        self.assertEqual(len(commands), 4, out)
+        self.assertRegex(commands[1], r"^::notice::run_wine_tests: 2 failed under wine-9\.0:%0A"
+                                      r"says: exit 3 in \d+\.\d s; last line: line 9: x == y%0A"
+                                      r"bad: exit 1 in \d+\.\d s$")
+        self.assertRegex(commands[2], r"^::notice::run_wine_tests: 2 skipped under wine-9\.0:%0A"
+                                      r"skips: exit 77 \(skip\) in \d+\.\d s; last line: SKIP: no device%0A"
+                                      r"tool: runs /usr/bin/cmake, not a program from the build$")
+        self.assertRegex(commands[3], r"^::notice::run_wine_tests: 1 passed, 2 failed, 2 skipped under wine-9\.0 ")
+
+    def test_no_failed_or_skipped_notice_when_every_test_passes(self):
+        with mock.patch.dict(os.environ, {"GITHUB_ACTIONS": "true"}):
+            code, out, _ = self.run_main([ctest_entry("ok", self.command("ok.py"))])
+        self.assertEqual(code, 0)
+        self.assertEqual(len(self.workflow_commands(out)), 2, out)
+
+    def test_verdict_lines_are_bounded(self):
+        self.assertEqual(rwt.verdict_line("t", ""), "t")
+        self.assertEqual(rwt.verdict_line("t", "exit 1 in 0.1 s\n\n"), "t: exit 1 in 0.1 s")
+        self.assertEqual(rwt.verdict_line("t", "exit 1 in 0.1 s\nfirst\n  last\tone \r\n\n"),
+                         "t: exit 1 in 0.1 s; last line: last one")
+        long = rwt.verdict_line("t", "exit 1 in 0.1 s\n" + "x" * 1000)
+        self.assertEqual(len(long), rwt.VERDICT_CHARS)
+        self.assertTrue(long.endswith("x..."), long)
+        lines = [f"test{i}: exit 1" for i in range(5)]
+        self.assertEqual(rwt.verdict_list(lines), "\n".join(lines))
+        with mock.patch.object(rwt, "VERDICTS_CHARS", 2 * len(lines[0]) + 2):
+            self.assertEqual(rwt.verdict_list(lines), "\n".join(lines[:2] + ["... and 3 more"]))
 
     def test_timeout_warning_carries_the_last_output(self):
         def hang(argv, *, cwd, env, timeout):

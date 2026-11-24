@@ -303,6 +303,11 @@ maps the recorded Windows drive to the Linux checkout for shaders referenced by 
 every verdict and returns a failure status if any required test fails, skips or is missing. Check the printed
 verdicts for failures outside the required set.
 
+Under GitHub Actions the runner also writes its verdicts as annotations, which anyone can read on the run's page
+without a login (the job log and the step summary need one): a notice that names every failed test and one that
+names every skipped test, each with the test's exit code or time-out and the last line it printed, a warning with
+the last output of each test that ran into its time limit, and an end notice with the counts and the slowest tests.
+
 ## GPUs with 32-wide subgroups (NVIDIA, Intel, Apple)
 
 The game's shaders are mostly wave64. A GPU that can't run 64-wide compute subgroups skips the wave64 tests
