@@ -6,6 +6,7 @@
 // usage. A format the layer cannot create yet is listed as "not exposed" and does not fail the test; any other
 // difference does.
 #include "vk_test_device.h"
+#include "host_wine.h"
 #include "../shims/d3d12_com.h"
 #include <dxgi1_4.h>
 #include <array>
@@ -337,6 +338,7 @@ int main() {
         info.queue = vk.queue;
         info.queue_family = vk.family;
         if (FAILED(rt::d3d12::create_vulkan_device(info, IID_PPV_ARGS(&ours.p)))) return 1;
+        if (hostwine::host_is_wine()) return 77;  // every clear is compared with WARP, and Wine keeps no separate WARP
         Ref<IDXGIFactory4> factory;
         Ref<IDXGIAdapter> warp;
         if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory.p))) ||

@@ -8,6 +8,7 @@
 
 #include "../shims/d3d12_com.h"
 #include "../shims/dxgi_com.h"
+#include "host_wine.h"
 #include "vulkan_loader.h"
 #include "window_station.h"
 #include "../src/vulkan_device_filter.h"
@@ -156,8 +157,9 @@ HRESULT create_guarded(IDXGIFactory4* factory, IUnknown* queue, HWND hwnd, const
 
 // CreateSwapChainForHwnd with descriptions D3D12 refuses (and the valid ones next to them), against the host runtime's
 // DXGI: each case gets its own window on each side, and the HRESULTs must match. Returns the number of mismatches,
-// or -1 without a host D3D12 device.
+// or -1 without a host D3D12 device, and under Wine, whose DXGI is not the reference (host_wine.h).
 int compare_swap_chain_arguments(IDXGIFactory4* ours, ID3D12Device* our_device, ID3D12CommandQueue* our_queue) {
+    if (hostwine::host_is_wine()) return -1;
     using CreateDevice = HRESULT(WINAPI*)(IUnknown*, D3D_FEATURE_LEVEL, REFIID, void**);
     using CreateFactory2 = HRESULT(WINAPI*)(UINT, REFIID, void**);
     const HMODULE d3d12 = LoadLibraryExA("d3d12.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);

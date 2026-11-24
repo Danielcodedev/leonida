@@ -304,9 +304,13 @@ every verdict and returns a failure status if any required test fails, skips or 
 verdicts for failures outside the required set.
 
 Under GitHub Actions the runner also writes its verdicts as annotations, which anyone can read on the run's page
-without a login (the job log and the step summary need one): a notice that names every failed test and one that
-names every skipped test, each with the test's exit code or time-out and the last line it printed, a warning with
-the last output of each test that ran into its time limit, and an end notice with the counts and the slowest tests.
+without a login (the job log and the step summary need one): notices that name every failed test and every skipped
+test, a warning with the last output of each test that ran into its time limit, and an end notice with the counts
+and the slowest tests. A failed test's entry gives its exit code or time-out, the first lines it printed that name a
+failed check (`FAIL ...`, `line N: ...`, `... MISMATCH`) and the last line it printed that is not the runtime's
+`[rt]` log; a skipped test's entry gives its exit code and last line. GitHub cuts a notice at 4096 characters and
+shows ten per step, so a long list is split over numbered notices (`1 of 3`): up to four for the failed tests and
+two for the skipped ones.
 
 ## GPUs with 32-wide subgroups (NVIDIA, Intel, Apple)
 

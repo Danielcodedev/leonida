@@ -5,9 +5,10 @@
 // few others, residency flags, a null fence, and the fence values EnqueueMakeResident signals (the value the fence
 // reaches is recorded too). Every HRESULT is recorded and the two records must be the same, step by step. A step the
 // host runtime faults on is reported and not compared. No shaders or game data. Skips (77) without a Vulkan GPU;
-// without a host D3D12 device only the layer's own record is printed. Set LEONIDA_D3D49_VERBOSE=1 to print every
-// step.
+// without a host D3D12 device, and under Wine (host_wine.h), only the layer's own record is printed. Set
+// LEONIDA_D3D49_VERBOSE=1 to print every step.
 #include "vk_test_device.h"
+#include "host_wine.h"
 #include "../shims/d3d12_com.h"
 
 #include <cstdint>
@@ -280,6 +281,7 @@ bool make(ID3D12Device* device, Holder& h) {
 }
 
 ID3D12Device* create_host() {
+    if (hostwine::host_is_wine()) return nullptr;  // Microsoft's runtime is the reference, not vkd3d
     const HMODULE d3d12 = LoadLibraryExA("d3d12.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
     const auto create = d3d12 ? reinterpret_cast<PFN_D3D12_CREATE_DEVICE>(
                                     reinterpret_cast<void*>(GetProcAddress(d3d12, "D3D12CreateDevice")))

@@ -4,6 +4,7 @@
 // through castable-format lists in the other channel order.
 // No game data or shaders. Run explicitly (needs Vulkan hardware); LEONIDA_VK_VALIDATION=1 checks Vulkan usage.
 #include "vk_test_device.h"
+#include "host_wine.h"
 #include "../shims/d3d12_com.h"
 #include <dxgi1_4.h>
 #include <array>
@@ -461,6 +462,12 @@ int main(int argc, char** argv) {
                 return 77;
             }
             return check_shared_exponent_target(ours.p) ? 0 : 1;
+        }
+        // Every readback below is compared with WARP, and Wine keeps no separate WARP (host_wine.h). The one check
+        // of the layer alone still runs there.
+        if (hostwine::host_is_wine()) {
+            if (!volume_only && !check_unlisted_rtvs(ours.p)) return 1;
+            return 77;
         }
         Ref<IDXGIFactory4> factory;
         Ref<IDXGIAdapter> warp;

@@ -799,7 +799,7 @@ class MainTest(unittest.TestCase):
         commands = self.workflow_commands(out)
         self.assertEqual(len(commands), 4, out)
         self.assertRegex(commands[1], r"^::notice::run_wine_tests: 2 failed under wine-9\.0:%0A"
-                                      r"says: exit 3 in \d+\.\d s; last line: line 9: x == y%0A"
+                                      r"says: exit 3 in \d+\.\d s; failing lines: line 9: x == y%0A"
                                       r"bad: exit 1 in \d+\.\d s$")
         self.assertRegex(commands[2], r"^::notice::run_wine_tests: 2 skipped under wine-9\.0:%0A"
                                       r"skips: exit 77 \(skip\) in \d+\.\d s; last line: SKIP: no device%0A"
@@ -820,10 +820,50 @@ class MainTest(unittest.TestCase):
         long = rwt.verdict_line("t", "exit 1 in 0.1 s\n" + "x" * 1000)
         self.assertEqual(len(long), rwt.VERDICT_CHARS)
         self.assertTrue(long.endswith("x..."), long)
+        skipped = rwt.verdict_line("t", "exit 77 (skip) in 0.1 s\nSKIP: device unavailable " + "x" * 1000,
+                                   failed=False)
+        self.assertEqual(len(skipped), rwt.SKIP_CHARS)
+        self.assertTrue(skipped.startswith("t: exit 77 (skip) in 0.1 s; last line: SKIP: device unavailable x"),
+                        skipped)
+
+    def test_a_failed_tests_entry_quotes_its_failed_checks(self):
+        # In CI the last line of most failed tests was the runtime's log, which did not say what failed.
+        detail = ("exit 1 in 0.1 s\nPASS opens\nFAIL  reports STATUS_NOT_FOUND\n[rt] bcrypt: host call failed\n"
+                  "[PASS] a failed open clears ppv\nline 12: a == b\nrow 3: ours 1 host 2  MISMATCH\nDIFF rgba8\n"
+                  "21 check(s), 4 failure(s)\n[rt] d3d12: arena peak\n")
+        self.assertEqual(rwt.verdict_line("t", detail),
+                         "t: exit 1 in 0.1 s; failing lines: FAIL reports STATUS_NOT_FOUND | line 12: a == b | "
+                         "row 3: ours 1 host 2 MISMATCH (and 1 more); last line: 21 check(s), 4 failure(s)")
+        self.assertEqual(rwt.verdict_line("t", "exit 1 in 0.1 s\nstep\nFAIL: the last one\n"),
+                         "t: exit 1 in 0.1 s; failing lines: FAIL: the last one")
+        self.assertEqual(rwt.verdict_line("t", "exit 1 in 0.1 s\n[rt] only the log\n"),
+                         "t: exit 1 in 0.1 s; last line: [rt] only the log")
+        self.assertEqual(rwt.verdict_line("t", "exit 77 (skip) in 0.1 s\nSKIP: device unavailable\n", failed=False),
+                         "t: exit 77 (skip) in 0.1 s; last line: SKIP: device unavailable")
+        long = rwt.verdict_line("t", "exit 1 in 0.1 s\nFAIL " + "y" * 500 + "\nend\n")
+        self.assertEqual(long, "t: exit 1 in 0.1 s; failing lines: FAIL " + "y" * (rwt.LINE_CHARS - 8)
+                         + "...; last line: end")
+
+    def test_verdict_notices_split_at_whole_entries(self):
         lines = [f"test{i}: exit 1" for i in range(5)]
-        self.assertEqual(rwt.verdict_list(lines), "\n".join(lines))
-        with mock.patch.object(rwt, "VERDICTS_CHARS", 2 * len(lines[0]) + 2):
-            self.assertEqual(rwt.verdict_list(lines), "\n".join(lines[:2] + ["... and 3 more"]))
+        self.assertEqual(rwt.verdict_notices([], 4), [])
+        self.assertEqual(rwt.verdict_notices(lines, 4), ["\n".join(lines)])
+        with mock.patch.object(rwt, "NOTICE_CHARS", 2 * len(lines[0]) + 2):
+            self.assertEqual(rwt.verdict_notices(lines, 4), ["\n".join(lines[:2]), "\n".join(lines[2:4]), lines[4]])
+            self.assertEqual(rwt.verdict_notices(lines, 2),
+                             ["\n".join(lines[:2]), "\n".join(lines[2:4] + ["... and 1 more"])])
+
+    def test_a_long_failed_list_is_split_over_numbered_notices(self):
+        # GitHub cuts a notice at 4096 characters, which lost the end of both skipped lists in CI.
+        entries = [ctest_entry(f"bad{i}", self.command("bad.py")) for i in range(2)]
+        with mock.patch.dict(os.environ, {"GITHUB_ACTIONS": "true"}), mock.patch.object(rwt, "NOTICE_CHARS", 30):
+            code, out, _ = self.run_main(entries, "--label", "wine-9.0")
+        self.assertEqual(code, 0)
+        commands = self.workflow_commands(out)
+        self.assertEqual(len(commands), 4, out)
+        for part in (1, 2):
+            self.assertRegex(commands[part], rf"^::notice::run_wine_tests: 2 failed under wine-9\.0 \({part} of 2\):%0A"
+                                             rf"bad{part - 1}: exit 1 in \d+\.\d s$")
 
     def test_timeout_warning_carries_the_last_output(self):
         def hang(argv, *, cwd, env, timeout):
