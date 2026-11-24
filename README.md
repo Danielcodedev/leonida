@@ -1,3 +1,7 @@
+<p align="center">
+  <strong><a href="https://discord.com/invite/projectleonida">Discord — Leonida Legacy Community</a></strong>
+</p>
+
 <h1 align="center">
   <br>
   <a>
@@ -46,13 +50,13 @@ work on booting can start as soon as one is available to a developer.
 |---|---|
 | Finding and checking your copy (Xbox Series 1.0.2.1) | ✅ Works |
 | Shaders: carve, unpack native RDNA2 code, disassemble | ✅ All 26,503 |
-| Shaders: RDNA2 → SPIR-V translation | ⚠️ 97.4% of vertex/pixel shaders (13,971) translate and pass `spirv-val`. Compute, mesh and geometry shaders not yet translated |
+| Shaders: RDNA2 → SPIR-V translation | ✅ All **26,503** programs translate and pass `spirv-val` (2,236 VS, 12,101 PS, 2,689 CS, 9,282 mesh, 195 geometry); see [docs/design.md](docs/design.md) |
 | Shader translator checked on a real GPU | ⚠️ Manual GPU checks (fetch, textures, exports, ALU). Full build runs `tools/verify_build.py` (`vk_harness`) after the shaders stage |
 | Models (OBJ with real names, UVs, material references) | ✅ Exported. Not all layouts are decoded yet |
 | Texture dictionaries and world texture pools (DDS) | ✅ Exported. Some pool entries (BCPack) are skipped |
 | Audio banks (AWC: Opus, XMA2) | ✅ Exported whole. Decoding to WAV is not done yet |
 | PE loader and import shims | ⚠️ Maps/relocates/binds imports; `gta6rt --self-test` via `tools/verify_build.py`. Real game exe still needed for full coverage |
-| Xbox D3D12 → Vulkan | ⚠️ Root-signature helpers forward to PC D3D12; Vulkan instance/device bootstrap (`vk_bootstrap`). Command lists and descriptors not started |
+| Xbox D3D12 → Vulkan | ⚠️ **In progress:** Vulkan-backed `ID3D12Device` (queues, allocators, command lists, fences, descriptor heaps, draws, dispatches, present) behind the Xbox-ABI proxy — GPU milestones M0–M2 (`d3d12_present_test`, `d3d12_draw_test`, `d3d12_m2_textured_test`). Default is PC D3D12; use `LEONIDA_D3D12=vulkan` for Vulkan. Still open for the full title: traced COM coverage, tessellation/stream-output PSOs, mesh PSOs, present path. See [docs/d3d12_vulkan.md](docs/d3d12_vulkan.md) |
 | Booting, story mode, anything playable | ❌ No (needs the game executable and the D3D12→Vulkan layer) |
 
 ## How to build
@@ -61,7 +65,7 @@ The port isn't downloaded ready-made. It's built on your PC from your own copy.
 
 **The easy way:**
 
-1. Install the prerequisites below.
+1. Install the prerequisites below (or double-click **`Install-Prerequisites.bat`** / let **`Build.bat`** install missing tools automatically).
 2. Download this project **with its submodule**: `git clone --recursive https://github.com/orkan1k/Leonida-Legacy`. A
    "Download ZIP" from GitHub leaves out `third_party/rpf9-explorer`. The build fetches it if `git` is installed,
    and otherwise tells you what to do.
@@ -85,6 +89,8 @@ Your game folder is the one that holds `MicrosoftGame.Config` and the `.rpf` arc
 - [Vulkan SDK](https://vulkan.lunarg.com/), for `spirv-as` / `spirv-val`.
 - [LLVM 21+](https://github.com/llvm/llvm-project/releases) with `llvm-mc` on PATH, or set `LLVM_MC` to its path.
 - Visual Studio 2022 with **Desktop development with C++**, for the runtime stage.
+
+On Windows, **`Install-Prerequisites.bat`** (or **`Build.bat`**, which runs the same installer quietly) uses **winget** where possible and can build **llvm-mc** with `scripts\build_llvm_mc.ps1`. It never downloads the game. Set **`LEONIDA_SKIP_PREREQ_INSTALL=1`** to skip auto-install. After installs, open a **new terminal** so `PATH` and `VULKAN_SDK` refresh.
 
 **From a terminal**, with the same behaviour and more control:
 
@@ -125,8 +131,7 @@ system values) and all the format notes are in [docs/design.md](docs/design.md).
 
 The biggest open pieces:
 
-- **Compute, mesh and geometry shaders**: their per-stage system-value register layout.
-- **Xbox D3D12 → Vulkan**: the `d3d12_xs` command list and descriptor heap model.
+- **Xbox D3D12 → Vulkan**: trace the game's real `d3d12_xs` calls, root-signature→user-SGPR mapping, remaining PSO/present paths (see [docs/d3d12_vulkan.md](docs/d3d12_vulkan.md)).
 - **Audio decoding**: Opus/XMA2 streams in AWC banks to PCM.
 - **Model layouts** the decoder rejects today.
 
@@ -135,7 +140,7 @@ pull requests.
 
 ## Contact
 
-- **Discord:** `or.1k`
+- **Discord:** [discord.com/invite/projectleonida](https://discord.com/invite/projectleonida)
 - **Telegram:** [@wouldscams](https://t.me/wouldscams)
 - **News & updates:** [Leonida Legacy on Telegram](https://t.me/projectleonidal)
 

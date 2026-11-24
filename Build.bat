@@ -29,6 +29,9 @@ if not defined PY (
   pause
   exit /b 1
 )
+if not defined LEONIDA_SKIP_PREREQ_INSTALL (
+  powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\install_prerequisites.ps1" -Auto -Quiet
+)
 %PY% -I "%~dp0make_game.py" %*
 set "RC=%ERRORLEVEL%"
 echo.
