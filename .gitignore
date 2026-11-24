@@ -4,6 +4,7 @@ reports/
 work/
 /assets/*
 !/assets/logo.png
+!/assets/logo.svg
 carve/
 *.rpf
 *.ttpf
@@ -17,15 +18,21 @@ carve/
 *.bk2
 *.awc
 *.r9modeldata
+*.obj
+*.glb
+*.ogg
+*.wav
 
-# ---- optional local Vulkan headers (not committed; vendor yourself if needed) ----
+# ---- optional local Vulkan headers (manual only) ----
 deps/Vulkan-Headers/
 
 # ---- build output and caches ----
 build/
+build-*/
 bin/
 obj/
 __pycache__/
+.pytest_cache/
 *.pyc
 *.exe
 *.dll

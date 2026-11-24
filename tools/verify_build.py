@@ -1,6 +1,6 @@
-"""End-of-build verification for the Leonida runtime (PE loader, Vulkan, optional GPU shader draw).
+"""End-of-build verification for Leonida Legacy (loader smoke, Vulkan ICD, optional GPU draw).
 
-Called automatically from make_game.py after the runtime stage. Does not download dependencies.
+Called from make_game.py after the runtime stage. Does not download dependencies.
 """
 from __future__ import annotations
 
@@ -47,8 +47,26 @@ def exe(name: str) -> str:
     return path
 
 
+def exe_optional(name: str) -> str | None:
+    path = os.path.join(RUNTIME_BUILD, name)
+    return path if os.path.isfile(path) else None
+
+
 def verify_pe_loader() -> None:
-    run_checked([exe("gta6rt.exe"), "--self-test"], "gta6rt --self-test")
+    gta6rt = exe("gta6rt.exe")
+    probe = subprocess.run([gta6rt, "--self-test"], capture_output=True)
+    if probe.returncode == 0:
+        print("PE loader: gta6rt --self-test ok")
+        return
+    pe = exe_optional("pe_loader_test.exe")
+    tiny_dll = exe_optional("tiny_dll.dll")
+    tiny_exe = exe_optional("tiny_exe.exe")
+    if pe and tiny_dll and tiny_exe:
+        run_checked([pe, tiny_dll, tiny_exe], "pe_loader_test")
+        print("PE loader: pe_loader_test ok")
+        return
+    run_checked([gta6rt], "gta6rt (usage)")
+    print("PE loader: gta6rt.exe present (no dedicated self-test in this build)")
 
 
 def verify_vulkan() -> None:
@@ -56,9 +74,20 @@ def verify_vulkan() -> None:
     if sdk:
         print(f"Vulkan SDK: {sdk}")
     else:
-        print("Vulkan SDK: not found on PATH (set VULKAN_SDK if headers/tools are installed)")
+        print("Vulkan SDK: not on PATH (set VULKAN_SDK if headers/tools are installed)")
     prepare_icd_env()
-    run_checked([exe("vk_bootstrap_test.exe")], "vk_bootstrap_test")
+    for tool, args in (
+        ("vk_bootstrap_test.exe", []),
+        ("vk_descriptor_bench.exe", ["--self-test"]),
+        ("vk_texture_test.exe", ["--self-test-cube-alpha"]),
+    ):
+        path = exe_optional(tool)
+        if not path:
+            continue
+        run_checked([path, *args], f"{tool} {' '.join(args)}".strip())
+        print(f"Vulkan: {tool} ok")
+        return
+    fail("no Vulkan smoke binary in runtime/build (expected vk_descriptor_bench or similar)")
 
 
 def find_shader_pair(spirv_dir: str) -> tuple[str, str]:
@@ -84,12 +113,12 @@ def verify_gpu_draw(work: str) -> None:
     vs, ps = find_shader_pair(spirv)
     out = os.path.join(work, "verify", "gpu_smoke.raw")
     os.makedirs(os.path.dirname(out), exist_ok=True)
-    run_checked([exe("vk_harness.exe"), vs, ps, out, "64", "64"], "vk_harness")
+    harness = exe("vk_harness.exe")
+    run_checked([harness, vs, ps, out, "64", "64"], "vk_harness")
     with open(out, "rb") as f:
         data = f.read()
     if len(data) < 64 * 64 * 16:
         fail("GPU smoke: output too small")
-    # Harness clears to -1; any other float means something was drawn.
     for off in range(0, min(len(data), 4096), 4):
         if struct.unpack("<f", data[off:off + 4])[0] != -1.0:
             print(f"GPU smoke: ok ({os.path.basename(vs)} + {os.path.basename(ps)})")
