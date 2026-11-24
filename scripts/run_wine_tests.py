@@ -16,6 +16,10 @@ Every test is reported. The exit code is 1 if a test named by --require fails or
 others show what does and doesn't work under Wine yet without failing the job.
 --timeout caps each process; a shorter positive CTest TIMEOUT takes precedence for that test.
 Relative executable paths in --wine or WINE are read from the directory where you start this runner.
+
+Under GitHub Actions (GITHUB_ACTIONS=true) the runner also prints workflow commands, which show as annotations on
+the job: a notice when it starts and when it ends, a warning for each test that timed out and a notice for each other
+test that took SLOW_SECONDS or more. They name where the time went even when the job is cancelled at its time limit.
 """
 import argparse
 from graphlib import CycleError, TopologicalSorter
@@ -33,6 +37,16 @@ import tempfile
 import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+SLOW_SECONDS = 30.0   # a test that takes this long gets a notice under GitHub Actions
+MAX_SLOW_NOTICES = 8  # GitHub shows 10 notices per step: the start and the end notice keep their place
+
+
+def annotate(level: str, message: str) -> None:
+    """Print a GitHub Actions workflow command, which shows as an annotation on the job; nothing elsewhere."""
+    if os.environ.get("GITHUB_ACTIONS") != "true":
+        return
+    data = message.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+    print(f"::{level}::{data}", flush=True)
 
 
 def _make_parent(path: str) -> None:
@@ -367,22 +381,36 @@ def main() -> int:
     results = {}
     results_by_index: dict[int, str] = {}
     prefix = os.environ.get("WINEPREFIX") or os.path.join(os.path.expanduser("~"), ".wine")
+    label = args.label or "Wine"
+    slow_notices = 0
+    run_start = time.monotonic()
+    annotate("notice", f"run_wine_tests: {len(order)} tests to run under {label}")
     with DriveMap(args.windows_root, args.root, prefix) as drive:
         print(drive.note, flush=True)
         for index in order:
             name = names[index]
             failed_setups = tuple(names[setup] for setup in setups[index] if results_by_index[setup] == "fail")
+            test_start = time.monotonic()
             status, detail = run_test(tests[index], args, wine, failed_setups=failed_setups)
+            elapsed = time.monotonic() - test_start
             results_by_index[index] = status
             results[name] = status
             print(f"[{status.upper()}] {name}", flush=True)
             if status != "pass":
                 for line in detail.rstrip().splitlines()[-40:]:
                     print(f"    {line}")
+            if status == "fail" and detail.startswith("timed out after"):
+                annotate("warning", f"{name} {detail.splitlines()[0]} under {label}, "
+                                    f"{time.monotonic() - run_start:.0f} s into the run")
+            elif elapsed >= SLOW_SECONDS and slow_notices < MAX_SLOW_NOTICES:
+                slow_notices += 1
+                annotate("notice", f"{name}: {status} after {elapsed:.0f} s under {label}")
 
     missing = list(dict.fromkeys(n for n in args.require if n not in results))
     failed_required = [n for n in args.require if results.get(n) != "pass"]
     counts = {s: sum(1 for v in results.values() if v == s) for s in ("pass", "fail", "skip")}
+    annotate("notice", f"run_wine_tests: {counts['pass']} passed, {counts['fail']} failed, {counts['skip']} skipped "
+                       f"under {label} in {time.monotonic() - run_start:.0f} s")
     print(f"\n{counts['pass']} passed, {counts['fail']} failed, {counts['skip']} skipped under Wine "
           f"({len(results)} tests)")
     for n in missing:

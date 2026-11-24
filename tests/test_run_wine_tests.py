@@ -728,6 +728,47 @@ class MainTest(unittest.TestCase):
         with self.assertRaises(argparse.ArgumentTypeError):
             rwt.wine_command("   ")
 
+    @staticmethod
+    def workflow_commands(out):
+        return [line for line in out.splitlines() if line.startswith("::")]
+
+    def test_no_workflow_commands_outside_github_actions(self):
+        with mock.patch.dict(os.environ):
+            os.environ.pop("GITHUB_ACTIONS", None)
+            code, out, _ = self.run_main([ctest_entry("ok", self.command("ok.py"))])
+        self.assertEqual(code, 0)
+        self.assertEqual(self.workflow_commands(out), [])
+
+    def test_github_actions_gets_a_start_notice_a_timeout_warning_and_an_end_notice(self):
+        # A job cancelled at its time limit shows no log to a reader without a login, but its annotations stay.
+        (self.artifact / "slow.py").write_text("import time\ntime.sleep(5)\n", encoding="utf-8", newline="\n")
+        entries = [ctest_entry("ok", self.command("ok.py")), ctest_entry("slow", self.command("slow.py"))]
+        with mock.patch.dict(os.environ, {"GITHUB_ACTIONS": "true"}):
+            code, out, _ = self.run_main(entries, "--timeout", "0.2", "--label", "wine-9.0")
+        self.assertEqual(code, 0)
+        commands = self.workflow_commands(out)
+        self.assertEqual(len(commands), 3, out)
+        self.assertEqual(commands[0], "::notice::run_wine_tests: 2 tests to run under wine-9.0")
+        self.assertRegex(commands[1], r"^::warning::slow timed out after 0\.2 s under wine-9\.0, \d+ s into the run$")
+        self.assertRegex(commands[2],
+                         r"^::notice::run_wine_tests: 1 passed, 1 failed, 0 skipped under wine-9\.0 in \d+ s$")
+
+    def test_slow_test_notices_are_capped(self):
+        entries = [ctest_entry(f"ok{i}", self.command("ok.py")) for i in range(4)]
+        with mock.patch.dict(os.environ, {"GITHUB_ACTIONS": "true"}), \
+                mock.patch.object(rwt, "SLOW_SECONDS", 0.0), mock.patch.object(rwt, "MAX_SLOW_NOTICES", 2):
+            code, out, _ = self.run_main(entries)
+        self.assertEqual(code, 0)
+        slow = [line for line in self.workflow_commands(out) if line.startswith("::notice::ok")]
+        self.assertEqual(len(slow), 2, out)
+        self.assertRegex(slow[0], r"^::notice::ok0: pass after \d+ s under Wine$")
+
+    def test_workflow_command_data_is_escaped(self):
+        out = io.StringIO()
+        with mock.patch.dict(os.environ, {"GITHUB_ACTIONS": "true"}), contextlib.redirect_stdout(out):
+            rwt.annotate("warning", "50% done\r\nnext")
+        self.assertEqual(out.getvalue(), "::warning::50%25 done%0D%0Anext\n")
+
 
 if __name__ == "__main__":
     unittest.main()
