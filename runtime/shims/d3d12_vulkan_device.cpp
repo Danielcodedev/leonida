@@ -9204,6 +9204,13 @@ std::unique_ptr<WindowPresenter> create_window_presenter(ID3D12Device* device, H
     // Any non-empty value other than "0" turns it off.
     const std::string no_tear = rt::config::get("present.no_tear").text;
     const bool tear_allowed = no_tear.empty() || no_tear == "0";
+    // present.capture_dir, present.capture_every and present.capture_limit (LEONIDA_CAPTURE, LEONIDA_CAPTURE_EVERY,
+    // LEONIDA_CAPTURE_LIMIT): the presenter writes presented frames to that folder (src/vulkan_present.h). The two
+    // numbers are read with atoi and raised to 1 by the presenter, as before the settings moved to the table.
+    leonida::PresentCapture capture;
+    capture.dir = rt::config::path("present.capture_dir");
+    capture.every = std::atoi(rt::config::get("present.capture_every").text.c_str());
+    capture.limit = std::atoi(rt::config::get("present.capture_limit").text.c_str());
     auto presenter = std::make_unique<leonida::VulkanPresenter>(*d->state().context, info.get_instance_proc,
                                                                 info.instance, info.physical, info.queue,
                                                                 info.queue_family, surface,  // owns the surface
@@ -9230,7 +9237,8 @@ std::unique_ptr<WindowPresenter> create_window_presenter(ID3D12Device* device, H
                                                                                        &made) != VK_SUCCESS)
                                                                         return VK_NULL_HANDLE;
                                                                     return made;
-                                                                });
+                                                                },
+                                                                std::move(capture));
     if (!presenter->ok()) {
         std::fprintf(stderr, "[rt] d3d12: cannot present to this window from the device's queue family\n");
         return nullptr;
