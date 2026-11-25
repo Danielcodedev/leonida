@@ -46,6 +46,8 @@ inline constexpr Setting kSettings[] = {
     {"loader.skip_int3", "LEONIDA_SKIP_INT3", "0"},
     {"loader.rng_seed", "LEONIDA_RNG_SEED", ""},
 
+    {"log.level", "LEONIDA_LOG", "debug"},  // core/log.h
+
     {"system.device_type", "LEONIDA_DEVICE_TYPE", "7"},
     {"system.analytics_form", "LEONIDA_ANALYTICS_FORM", ""},
     {"system.package_id", "LEONIDA_PACKAGE_ID", "LeonidaPackageIdentifier00000000"},

@@ -43,6 +43,12 @@
 # every run. Not set: random bytes from the host.
 # rng_seed = ''
 
+[log]
+# LEONIDA_LOG: which of the runtime's "[rt]" lines are printed on stderr: 'off', 'error', 'warn', 'info', 'debug'
+# or 'trace'. A level prints its own lines and those of the levels before it. 'debug' prints every line the
+# runtime printed before it had levels.
+# level = 'debug'
+
 [system]
 # What xgameruntime.dll reports to the title (runtime/README.md, "environment overrides").
 

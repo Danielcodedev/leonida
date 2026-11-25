@@ -194,6 +194,28 @@ vulkan.arena_mb               default      LEONIDA_ARENA_MB                  256
 Only `gta6rt` loads a settings file. The test programs and tools load none, so for them a setting comes from its
 environment variable or is the default.
 
+## Log levels: `LEONIDA_LOG`
+
+The runtime's diagnostics are the `[rt] <module>: ...` lines on stderr. Each has a level: `error`, `warn`, `info`
+or `debug`. `LEONIDA_LOG` (`log.level` in `leonida.toml`) names the highest level that is printed: `off`, `error`,
+`warn`, `info`, `debug` or `trace`, in any case. A level prints its own lines and those of the levels before it;
+`off` prints none. The default is `debug`, which prints what the runtime printed before it had levels; no line has
+the level `trace` yet. There is one level for all modules.
+
+A value that is not a level prints one warning that lists the levels, and `debug` is used:
+
+```text
+[rt] log: LEONIDA_LOG=loud unknown (off, error, warn, info, debug or trace), using debug
+```
+
+Not filtered, because they are answers of the program and not log lines: the usage text and the `error: ...` lines
+of the command line, the binding report, the `gta6rt config` table and the `[d3d12-trace]` lines of
+`--trace-d3d12`. `gta6rt` reads the setting once, at startup. The test programs do not read it and log at the
+default.
+
+In the code a log line is one of the macros of `runtime/core/log.h`, such as `RT_LOG_WARN("module: text\n", ...)`;
+the macro adds the `[rt] ` prefix. The header needs no library, so a header-only part of the runtime can log.
+
 ## PE loader
 
 `src/pe_loader.cpp` maps x86-64 images at their preferred base, or elsewhere (with relocations) when

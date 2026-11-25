@@ -35,6 +35,7 @@
 #include "mods.h"
 #include "pe_loader.h"
 #include "../core/config.h"
+#include "../core/log.h"
 #include "../shims/d3d12_trace.h"
 #include "../shims/d3d12_xs_device.h"
 #include "../shims/file_system.h"
@@ -96,6 +97,10 @@ int wmain(int argc, wchar_t** argv) {
         std::fprintf(stderr, "error: %s\n", error.c_str());
         return 2;
     }
+    // The log level (core/log.h), before the first "[rt]" line. A gta6rt that was started again to reserve the image
+    // range (base_reservation.h) reads the same setting; the first one already printed the warning for a value that
+    // is not a level.
+    rt::log::apply_settings(!rt::base_reservation::inherited().has_value());
     // `gta6rt config`, alone on the command line: every setting, its value and where the value comes from.
     if (argc == 2 && std::wstring_view(argv[1]) == L"config") {
         print_utf8(rt::config::report());
