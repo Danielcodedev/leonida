@@ -36,6 +36,7 @@
 #include <string>
 #include <utility>
 
+#include "../core/log.h"
 #include "shims.h"
 
 namespace rt::winhttp {
@@ -166,7 +167,9 @@ void log_refused(const Handle* request) {
     static auto* mutex = new std::mutex;
     const std::wstring server = server_of(request);
     std::lock_guard lock(*mutex);
-    if (logged->insert(server).second) std::fwprintf(stderr, L"[rt] winhttp: offline, refused %ls\n", server.c_str());
+    if (logged->insert(server).second && rt::log::enabled(rt::log::Level::Warn)) {
+        std::fwprintf(stderr, L"[rt] winhttp: offline, refused %ls\n", server.c_str());
+    }
 }
 
 void CALLBACK send_failed(PTP_CALLBACK_INSTANCE, void* context) {
@@ -190,7 +193,7 @@ BOOL fail(DWORD error) {
 HINTERNET WINAPI open_session(LPCWSTR, DWORD, LPCWSTR, LPCWSTR, DWORD flags) {
     static std::once_flag once;
     std::call_once(once, [] {
-        std::fprintf(stderr, "[rt] winhttp: offline; requests fail with ERROR_WINHTTP_CANNOT_CONNECT\n");
+        RT_LOG_INFO("winhttp: offline; requests fail with ERROR_WINHTTP_CANNOT_CONNECT\n");
     });
     return make_handle(Kind::Session, nullptr, (flags & WINHTTP_FLAG_ASYNC) != 0);
 }
