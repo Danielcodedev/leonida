@@ -44,8 +44,9 @@ It is a fork of [victory-gta6](https://github.com/fxceless/victory-gta6), itself
 
 ## Status
 
-**Not playable yet: 2 to 4 frames per second by default, and shadowed areas are black.** Tested on Windows 11,
-Intel i7-14700KF, NVIDIA RTX 4070 12 GB, 32 GB RAM, Series X profile.
+**Not playable yet: 2 to 4 frames per second by default, and shadowed areas are black.** Tested on Windows 11 Pro,
+AMD Ryzen 7 7800X3D, NVIDIA RTX 3080 12 GB, 32 GB RAM, Series X profile. The world frame rates below were measured
+by victory-gta6 on an RTX 4070 and have not been measured again on this machine yet.
 
 | Stage | State |
 |-------|-------|
@@ -73,13 +74,15 @@ Windows error 1455, close other applications or make the paging file bigger).
 
 ```powershell
 cargo xtask install-hooks                # asset-policy check on every commit
-copy leonida.example.toml leonida.toml   # then set your paths (outside the repo)
 cargo test --workspace                   # needs no game data
-cargo run -p leonida -- config           # check your paths
 
 cargo build --release -p leonida
-target\release\leonida.exe run <game dir>\<the game's exe> --execute
+target\release\leonida.exe run --execute # asks for your game folder the first time
 ```
+
+The first run asks for the folder of your copy of the game (the one with `MicrosoftGame.config` in it) and saves it to
+`leonida.toml`, which git ignores. `leonida config` shows what is set, and `leonida.example.toml` lists the other
+settings.
 
 Saves, settings and `crashes.log` are kept in `%LOCALAPPDATA%\leonida\data`, derived data in
 `%LOCALAPPDATA%\leonida\cache`.
