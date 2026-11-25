@@ -200,4 +200,23 @@ bool copy_rts0_blob_clear_xbox_flags(const void* data, size_t size, std::vector<
     return true;
 }
 
+bool copy_dxbc_blob_fill_zero_checksum(const void* data, size_t size, std::vector<uint8_t>& out) {
+    out.clear();
+    if (!data || size < 32 || size - 20 > 0x1FFFFFFFu) return false;
+
+    const uint8_t* bytes = static_cast<const uint8_t*>(data);
+    if (std::memcmp(bytes, "DXBC", 4) != 0) return false;
+    constexpr uint8_t kZeroHash[16] = {};
+    if (std::memcmp(bytes + 4, kZeroHash, sizeof(kZeroHash)) != 0) return false;
+    uint32_t total_size = 0;
+    std::memcpy(&total_size, bytes + 24, sizeof(total_size));
+    if (total_size != size) return false;
+
+    out.assign(bytes, bytes + size);
+    uint32_t hash[4];
+    dxbc_checksum(out.data(), out.size(), hash);
+    std::memcpy(out.data() + 4, hash, sizeof(hash));
+    return true;
+}
+
 }  // namespace rt::d3d12_xs

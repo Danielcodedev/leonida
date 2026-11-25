@@ -504,6 +504,19 @@ Target open_target(const std::wstring& path, DWORD access, DWORD disposition) {
     return write_target(path, keeps_contents);
 }
 
+// MAXIMUM_ALLOWED grants read and write where the file allows them, but names neither. A host that picks how to open
+// the file from the rights named hands out a handle that cannot write: under Wine 9.0 and 11.0 a WriteFile through a
+// MAXIMUM_ALLOWED | GENERIC_READ handle failed (file_system, run 45457013232). Naming both next to it asks every host
+// for the handle Windows gives. Where the file refuses one of them, the title's own access word is tried as it came.
+template <typename Open>
+HANDLE open_naming_maximum_allowed(DWORD access, Open open) {
+    if (access & MAXIMUM_ALLOWED) {
+        const HANDLE h = open(access | GENERIC_READ | GENERIC_WRITE);
+        if (h != INVALID_HANDLE_VALUE || GetLastError() != ERROR_ACCESS_DENIED) return h;
+    }
+    return open(access);
+}
+
 // ---- FindFirstFile: the overlay and the package merged into one listing
 //
 // The host enumerates each folder; the results are merged here, overlay first, so a name that exists in both appears
@@ -713,7 +726,9 @@ HANDLE WINAPI create_file_w(LPCWSTR name, DWORD access, DWORD share, LPSECURITY_
         SetLastError(t.error);
         return INVALID_HANDLE_VALUE;
     }
-    const HANDLE h = ::CreateFileW(t.path.c_str(), access, share, attributes, disposition, flags, template_file);
+    const HANDLE h = open_naming_maximum_allowed(access, [&](DWORD named) {
+        return ::CreateFileW(t.path.c_str(), named, share, attributes, disposition, flags, template_file);
+    });
     if (h == INVALID_HANDLE_VALUE) {
         const DWORD error = GetLastError();
         note_open_failure("CreateFileW", name, error, _ReturnAddress());
@@ -744,7 +759,9 @@ HANDLE WINAPI create_file2(LPCWSTR name, DWORD access, DWORD share, DWORD dispos
         SetLastError(t.error);
         return INVALID_HANDLE_VALUE;
     }
-    const HANDLE h = ::CreateFile2(t.path.c_str(), access, share, disposition, params);
+    const HANDLE h = open_naming_maximum_allowed(access, [&](DWORD named) {
+        return ::CreateFile2(t.path.c_str(), named, share, disposition, params);
+    });
     if (h == INVALID_HANDLE_VALUE) {
         const DWORD error = GetLastError();
         note_open_failure("CreateFile2", name, error, _ReturnAddress());

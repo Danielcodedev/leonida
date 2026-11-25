@@ -75,6 +75,13 @@ int main(int argc, char** argv) {
     }
     const std::string dir = argv[1];
     std::error_code ec;
+    // CMake makes the folder when it configures, but a build that is copied to another machine can arrive without
+    // it, and every dump then fails as "BLAS readback" (both Wine jobs, run 45457013232).
+    std::filesystem::create_directories(dir, ec);
+    if (ec) {
+        std::fprintf(stderr, "cannot create output directory %s: %s\n", dir.c_str(), ec.message().c_str());
+        return 1;
+    }
     for (const auto& entry : std::filesystem::directory_iterator(dir, ec)) {
         const auto ext = entry.path().extension();
         if (ext == ".bin" || ext == ".json") std::filesystem::remove(entry.path(), ec);

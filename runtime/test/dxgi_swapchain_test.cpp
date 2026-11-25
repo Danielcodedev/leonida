@@ -1123,8 +1123,9 @@ int main() {
                 return fail("Adapter CheckInterfaceSupport(IDXGIDevice) failed");
             IDXGIFactory4* host_factory = nullptr;
             IDXGIAdapter1* host_adapter = nullptr;
-            // The host dxgi.dll, loaded at run time: this test doesn't link it, and a Wine run without it skips.
-            HMODULE host_dxgi = LoadLibraryW(L"dxgi.dll");
+            // The host dxgi.dll, loaded at run time: this test doesn't link it. Not under Wine, whose DXGI is not the
+            // reference (host_wine.h): Wine 11.0 answered 0x00090015000d23af for the llvmpipe adapter.
+            HMODULE host_dxgi = hostwine::host_is_wine() ? nullptr : LoadLibraryW(L"dxgi.dll");
             const auto create_factory = host_dxgi ? reinterpret_cast<decltype(&CreateDXGIFactory1)>(
                 GetProcAddress(host_dxgi, "CreateDXGIFactory1")) : nullptr;
             if (create_factory && SUCCEEDED(create_factory(IID_PPV_ARGS(&host_factory))) && host_factory &&

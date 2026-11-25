@@ -2568,6 +2568,14 @@ int main() {
                     max_matches += std::memcmp(got_max, want_max.data(), 4) == 0;
                     blend_diff_min += std::memcmp(got_blend, want_min.data(), 4) != 0;
                     blend_diff_max += std::memcmp(got_blend, want_max.data(), 4) != 0;
+                } else if (d.sampler_filter_minmax) {
+                    // The device has samplerFilterMinmax but not for RGBA8, and the layer cannot know which format a
+                    // sampler meets (docs/d3d12_vulkan.md, bindless set 0). A driver then reduces anyway or blends:
+                    // on the Wine jobs' device no texel of the two equalled the blend.
+                    min_matches += std::memcmp(got_min, got_blend, 4) == 0 ||
+                                   std::memcmp(got_min, want_min.data(), 4) == 0;
+                    max_matches += std::memcmp(got_max, got_blend, 4) == 0 ||
+                                   std::memcmp(got_max, want_max.data(), 4) == 0;
                 } else {
                     min_matches += std::memcmp(got_min, got_blend, 4) == 0;
                     max_matches += std::memcmp(got_max, got_blend, 4) == 0;

@@ -42,6 +42,12 @@ void copy_root_signature_desc_clear_xbox_flags(const D3D12_ROOT_SIGNATURE_DESC& 
 // non-zero incoming DXBC hash that does not match the input bytes.
 bool copy_rts0_blob_clear_xbox_flags(const void* data, size_t size, std::vector<uint8_t>& out);
 
+// Microsoft's deserializer does not check an all-zero DXBC hash; Wine's refuses the blob (root_sig under Wine 9.0 and
+// 11.0, run 45457013232). So for a DXBC container whose hash is all zero and whose total_size is `size`, copy it to
+// `out` with the hash computed and return true: both hosts accept a matching hash. False, with `out` empty, for
+// anything else.
+bool copy_dxbc_blob_fill_zero_checksum(const void* data, size_t size, std::vector<uint8_t>& out);
+
 // The DXBC container hash of `blob` (bytes 20..size), as stored at bytes 4..19. Zeroes `out` when `blob` is null,
 // `size < 20`, or the hashed payload exceeds the 32-bit bit-count limit.
 void dxbc_checksum(const uint8_t* blob, size_t size, uint32_t out[4]);

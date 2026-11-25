@@ -472,11 +472,15 @@ int main() {
             EXPECT(vertex_only.IAVertices == 6 && vertex_only.IAPrimitives == 2);
             EXPECT(mixed.GSInvocations == 0 && mixed.GSPrimitives == 0 && mixed.HSInvocations == 0 &&
                    mixed.DSInvocations == 0 && mixed.CSInvocations == 0);
-            EXPECT(mixed.CInvocations > vertex_only.CInvocations && mixed.PSInvocations > vertex_only.PSInvocations);
+            // A driver may count no clipping for a mesh draw: the Wine jobs' device answered C 0/0 for the mesh-only
+            // query next to 1024 pixel shader invocations. The pixel shader count is the mesh segment's share on
+            // every driver; the clipping count is too wherever the mesh-only query has one.
+            EXPECT(mixed.PSInvocations > vertex_only.PSInvocations && mixed.CInvocations >= vertex_only.CInvocations);
+            EXPECT(mesh_only.CInvocations == 0 || mixed.CInvocations > vertex_only.CInvocations);
             EXPECT(mesh_only.IAVertices == 0 && mesh_only.IAPrimitives == 0 && mesh_only.VSInvocations == 0 &&
                    mesh_only.GSInvocations == 0 && mesh_only.GSPrimitives == 0 && mesh_only.HSInvocations == 0 &&
                    mesh_only.DSInvocations == 0 && mesh_only.CSInvocations == 0);
-            EXPECT(mesh_only.CInvocations > 0 && mesh_only.PSInvocations > 0);
+            EXPECT(mesh_only.PSInvocations > 0);
         } else {
             std::printf("pipelineStatisticsQuery not available: the D3D-291 statistics check is skipped\n");
         }

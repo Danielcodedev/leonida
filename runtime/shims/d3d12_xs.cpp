@@ -112,7 +112,15 @@ HRESULT WINAPI create_root_signature_deserializer(const void* data, SIZE_T size,
     // the serializer applies to descriptors).
     std::vector<uint8_t> cleared;
     if (rt::d3d12_xs::copy_rts0_blob_clear_xbox_flags(data, static_cast<size_t>(size), cleared)) {
-        return fn(cleared.data(), cleared.size(), iid, out);
+        data = cleared.data();
+        size = cleared.size();
+    }
+    // Wine's deserializer refuses an all-zero container hash, which Microsoft's does not check; a matching hash
+    // suits both (d3d12_xs_rootsig.h). This also covers the copy above, which keeps a zero hash zero.
+    std::vector<uint8_t> hashed;
+    if (rt::d3d12_xs::copy_dxbc_blob_fill_zero_checksum(data, static_cast<size_t>(size), hashed)) {
+        data = hashed.data();
+        size = hashed.size();
     }
     return fn(data, size, iid, out);
 }

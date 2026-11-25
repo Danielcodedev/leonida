@@ -3297,8 +3297,10 @@ Implemented (`QueryHeap` in `runtime/shims/d3d12_vulkan_device.cpp`, the query c
   belongs to sums both kinds. `replay_query_predication_test` (cases 15 and 16) checks the split points, the segment
   kinds and the resolve plan on the CPU. `d3d12_mesh_test` resolves a query around a vertex, two mesh and a vertex
   draw, one around a mesh draw and one around the two vertex draws: the vertex fields count only the two triangles,
-  and the mixed query has more clipping and pixel-shader invocations than the vertex-only one. On the RX 9060 XT
-  (RADV), the clipping counts add up exactly (2 + 10 = 12).
+  and the mixed query has more pixel-shader invocations than the vertex-only one, and more clipping invocations
+  wherever the mesh-only query counts any. On the RX 9060 XT (RADV), the clipping counts add up exactly
+  (2 + 10 = 12); the device of the Wine CI jobs counted no clipping for the mesh-only query, next to 1024
+  pixel-shader invocations (run 45442389069, Wine 11.0).
 - **Timestamps.** `GetTimestampFrequency` is `1e9 / timestampPeriod` (1 GHz on the test GPU). Every D3D12 queue
   shares one `VkQueue` for now (question 12), so they share one frequency.
 - **Timestamp resolves on MoltenVK.** On Apple GPUs, MoltenVK delays every `vkCmdWriteTimestamp` to the end of
