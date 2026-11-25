@@ -21,6 +21,9 @@ from pathlib import Path
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "tests"))
+import runtime_cmake  # noqa: E402
+
 SPEC = importlib.util.spec_from_file_location("check_sparse_queue_family",
                                               ROOT / "runtime" / "test" / "check_sparse_queue_family.py")
 checker = importlib.util.module_from_spec(SPEC)
@@ -201,7 +204,7 @@ class MainTest(unittest.TestCase):
         self.assertEqual(self.run_main(fake_run), 0)
 
     def test_both_runs_fit_the_ctest_timeout(self) -> None:
-        cmake = (ROOT / "runtime" / "CMakeLists.txt").read_text(encoding="utf-8")
+        cmake = runtime_cmake.read()
         limit = re.search(r"d3d12_sparse_queue_family_contract PROPERTIES[^)]*TIMEOUT (\d+)", cmake)
         self.assertIsNotNone(limit)
         self.assertLess(2 * checker.RUN_TIMEOUT, int(limit.group(1)))

@@ -1,6 +1,6 @@
-# Runs tiny_guest_draw.exe under `gta6rt --run` (test d3d12_translated_draw_guest in CMakeLists.txt). It passes only if
-# gta6rt exits 0 AND the guest printed its marker line, which it does after every pixel check: a loader that returns 0
-# without running the guest to the end, or a guest that prints and then fails, both fail here. CTest's
+# Runs tiny_guest_draw.exe under `gta6rt --run` (test d3d12_translated_draw_guest in cmake/d3d12_vulkan.cmake). It
+# passes only if gta6rt exits 0 AND the guest printed its marker line, which it does after every pixel check: a loader
+# that returns 0 without running the guest to the end, or a guest that prints and then fails, both fail here. CTest's
 # PASS_REGULAR_EXPRESSION would ignore the exit code, which is why the checks are not test properties.
 #   cmake -DGTA6RT=<gta6rt.exe> -DGUEST=<tiny_guest_draw.exe> -DFIXTURE=<build.py's m15 folder> [-DTIMEOUT=<s>]
 #         -P run_guest_draw.cmake

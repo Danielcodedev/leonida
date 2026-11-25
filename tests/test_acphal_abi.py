@@ -8,6 +8,8 @@ import tempfile
 import unittest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(ROOT, "tests"))
+import runtime_cmake  # noqa: E402
 
 
 class TestAcpHalAbi(unittest.TestCase):
@@ -92,8 +94,7 @@ class TestAcpHalAbi(unittest.TestCase):
 
     def test_cmakelists_and_fallback_register_acphal(self):
         """CMakeLists.txt and build_runtime.ps1 must both register acphal.cpp in gta6rt."""
-        with open(self.cmakelists, "r", encoding="utf-8") as f:
-            cmake = f.read()
+        cmake = runtime_cmake.read(self.cmakelists)
         self.assertIn("shims/acphal.cpp", cmake)
         self.assertIn("add_executable(acphal_test", cmake)
         self.assertIn("add_test(NAME acphal COMMAND acphal_test)", cmake)

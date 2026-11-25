@@ -41,6 +41,19 @@ ctest --preset diag
 fault belongs behind it. `release` shares `runtime/build` with the commands above: a folder configured with another
 generator has to be removed before the preset can use it.
 
+`runtime/CMakeLists.txt` holds the options and the order of the build; the targets are in the files it includes:
+
+| File | What it defines |
+|---|---|
+| `runtime/cmake/windows_runtime.cmake` | `gta6rt.exe`, the libraries its shims link, the shim test programs |
+| `runtime/cmake/runtime_tests.cmake` | the tests that need no Vulkan headers, the stand-in titles (`tiny_*`) |
+| `runtime/cmake/vulkan_tools.cmake` | the standalone Vulkan tools and their tests |
+| `runtime/cmake/d3d12_vulkan.cmake` | the D3D12 COM objects over the Vulkan backend and their tests |
+| `runtime/cmake/vulkan_cpu_tests.cmake` | the tests of the Vulkan layer that need its headers but no GPU |
+
+A test that checks the build by reading it uses `tests/runtime_cmake.py`, which reads these files along with
+`runtime/CMakeLists.txt`.
+
 Requirements: Windows x64, Visual Studio 2022 with the C++ desktop workload. The GPU tools need the
 Vulkan SDK; the runtime and CPU tests do not. The loader is x64-only and the PE mapper rejects any
 other machine.

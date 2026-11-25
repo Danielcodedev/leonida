@@ -1758,7 +1758,8 @@ int compare_feature_support(ID3D12Device* ours) {
                static_cast<UINT>(ours_data.HighestShaderModel), host_hr, want);
     }
 
-    // 0x3 is 1.2 by number: SDKs without the 1.2 headers do not name it (runtime/CMakeLists.txt probes for that).
+    // 0x3 is 1.2 by number: SDKs without the 1.2 headers do not name it (runtime/cmake/windows_runtime.cmake probes
+    // for that).
     const D3D_ROOT_SIGNATURE_VERSION versions[] = {D3D_ROOT_SIGNATURE_VERSION_1_0, D3D_ROOT_SIGNATURE_VERSION_1_1,
                                                    static_cast<D3D_ROOT_SIGNATURE_VERSION>(0x3)};
     UINT host_version = 0;

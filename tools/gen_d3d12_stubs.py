@@ -4,7 +4,7 @@ For each requested interface, writes a class `<Interface>Stubs` deriving from it
 its chain (except IUnknown's) with a body that reports the call once through rt::d3d12::stub() and returns
 E_NOTIMPL, nothing or a value-initialised result. The runtime's COM objects derive from these and override the
 methods they implement, so their vtables have exactly the SDK's method order and the compiler rejects a missing
-method. Run at build time (runtime/CMakeLists.txt); the output is not checked in.
+method. Run at build time (runtime/cmake/d3d12_vulkan.cmake); the output is not checked in.
 
     python -I tools/gen_d3d12_stubs.py --out <file> [--header <d3d12.h>] Interface [Interface ...]
     python -I tools/gen_d3d12_stubs.py --report <json> --source <cpp>... [--header <d3d12.h>] Interface ...

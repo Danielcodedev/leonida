@@ -16,8 +16,9 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT))
+sys.path[:0] = [str(ROOT), str(ROOT / "tests")]
 import make_game  # noqa: E402
+import runtime_cmake  # noqa: E402
 
 TOOLS = ROOT / "tools"
 SHADERS = ROOT / "runtime" / "test" / "shaders"
@@ -73,7 +74,7 @@ class TranslatorDepsTest(unittest.TestCase):
             self.assertIn(name, listed())
 
     def test_every_build_py_rule_depends_on_the_list(self):
-        text = CMAKE_LISTS.read_text(encoding="utf-8")
+        text = runtime_cmake.read(CMAKE_LISTS)
         rules = [m.group(0) for m in re.finditer(r"add_custom_command\((?:[^()]|\$<[^>]*>|\([^()]*\))*\)", text)
                  if "test/shaders/build.py" in m.group(0)]
         self.assertGreaterEqual(len(rules), 8)
