@@ -24,6 +24,7 @@
 // behind the device before a presenter exists, so WaitFrameEventX returns at once with a fresh non-zero token.
 #include "d3d12_xs_device.h"
 #include "d3d12_trace.h"
+#include "../core/config.h"
 #include "../src/shader_library.h"  // leonida::fspx_payload_from_parts for slot 67
 
 #include <windows.h>
@@ -39,6 +40,7 @@
 #include <iterator>
 #include <new>
 #include <memory>
+#include <string>
 #include <utility>
 
 namespace rt::d3d12_xs {
@@ -114,10 +116,11 @@ bool first_call(std::atomic<bool>& seen) {
 }
 
 bool trace_enabled() {
+    // d3d12.xs_trace (XS_TRACE): on for a value that does not start with 0. A value of 8 characters or more is
+    // ignored, as before the setting moved to the table.
     static const bool enabled = [] {
-        char value[8] = {};
-        const DWORD length = GetEnvironmentVariableA("XS_TRACE", value, sizeof(value));
-        return length > 0 && value[0] != '\0' && value[0] != '0';
+        const std::string value = rt::config::get("d3d12.xs_trace").text;
+        return !value.empty() && value.size() < 8 && value[0] != '0';
     }();
     return enabled;
 }
@@ -181,20 +184,23 @@ struct XboxDeviceSlotRoutes {
     unsigned list_x = 73;          // CreateCommandListX(desc, allocator, initial_state, riid, out)
 };
 
-unsigned env_device_slot(const char* name, unsigned fallback) {
-    char value[32] = {};
-    const DWORD length = GetEnvironmentVariableA(name, value, sizeof(value));
-    if (length == 0) return fallback;
-    if (length >= sizeof(value)) {
+// The slot a setting of the table names (its variable, else leonida.toml); `fallback` when nothing sets it. The
+// messages name the variable also when the value came from the file.
+unsigned env_device_slot(rt::config::Name setting, unsigned fallback) {
+    const char* name = setting.setting().variable;
+    const rt::config::Value configured = rt::config::get(setting);
+    if (!configured.is_set()) return fallback;
+    const std::string& value = configured.text;
+    if (value.size() >= 32) {  // the size of the buffer the variable was read into before it moved to the table
         std::fprintf(stderr, "[rt] d3d12_xs: %s is too long for a device slot; the default is kept\n", name);
         return fallback;
     }
     errno = 0;
     char* end = nullptr;
-    const unsigned long slot = std::strtoul(value, &end, 0);
-    if (errno != 0 || end == value || *end != '\0' || slot < 3 || slot > 127) {
+    const unsigned long slot = std::strtoul(value.c_str(), &end, 0);
+    if (errno != 0 || end == value.c_str() || *end != '\0' || slot < 3 || slot > 127) {
         std::fprintf(stderr, "[rt] d3d12_xs: %s=%s is not a device slot in 3..127; the default is kept\n", name,
-                     value);
+                     value.c_str());
         return fallback;
     }
     return static_cast<unsigned>(slot);
@@ -203,11 +209,11 @@ unsigned env_device_slot(const char* name, unsigned fallback) {
 const XboxDeviceSlotRoutes& xbox_device_slot_routes() {
     static const XboxDeviceSlotRoutes routes = [] {
         XboxDeviceSlotRoutes r;
-        const unsigned frame_interval = env_device_slot("LEONIDA_XS_FRAME_INTERVAL_SLOT", r.frame_interval);
-        const unsigned schedule_event = env_device_slot("LEONIDA_XS_SCHEDULE_EVENT_SLOT", r.schedule_event);
-        const unsigned wait_event = env_device_slot("LEONIDA_XS_WAIT_EVENT_SLOT", r.wait_event);
-        const unsigned queue_x = env_device_slot("LEONIDA_XS_QUEUE_X_SLOT", r.queue_x);
-        const unsigned list_x = env_device_slot("LEONIDA_XS_LIST_X_SLOT", r.list_x);
+        const unsigned frame_interval = env_device_slot("d3d12.frame_interval_slot", r.frame_interval);
+        const unsigned schedule_event = env_device_slot("d3d12.schedule_event_slot", r.schedule_event);
+        const unsigned wait_event = env_device_slot("d3d12.wait_event_slot", r.wait_event);
+        const unsigned queue_x = env_device_slot("d3d12.queue_x_slot", r.queue_x);
+        const unsigned list_x = env_device_slot("d3d12.list_x_slot", r.list_x);
         const bool moved = frame_interval != r.frame_interval || schedule_event != r.schedule_event ||
                            wait_event != r.wait_event || queue_x != r.queue_x || list_x != r.list_x;
         r.frame_interval = frame_interval;

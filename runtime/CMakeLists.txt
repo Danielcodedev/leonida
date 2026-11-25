@@ -157,6 +157,8 @@ set(LEONIDA_SETTING_READERS
   shims/xgameruntime_user.cpp
   shims/xgameruntime_offline.cpp
   shims/xgameruntime_gamesave.cpp
+  shims/d3d12_xs.cpp
+  shims/d3d12_xs_device.cpp
 )
 list(TRANSFORM LEONIDA_SETTING_READERS PREPEND "${CMAKE_CURRENT_SOURCE_DIR}/")
 get_property(_gta6rt_targets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
