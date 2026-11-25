@@ -16,6 +16,7 @@
 #include "d3d12_xs_device.h"
 #include "dxgi_com.h"
 #include "../core/config.h"
+#include "../core/log.h"
 #include "../src/arena_size.h"
 #include "../src/gfx10_descriptors.h"
 #include "../src/depth24_fragment.h"
@@ -83,7 +84,7 @@ void log_once(const char* what, int value) {
     static std::mutex mutex;
     static std::set<std::pair<std::string, int>> seen;
     std::lock_guard lock(mutex);
-    if (seen.insert({what, value}).second) std::fprintf(stderr, "[rt] d3d12: %s %d\n", what, value);
+    if (seen.insert({what, value}).second) RT_LOG_WARN("d3d12: %s %d\n", what, value);
 }
 
 // Two test settings that make the standalone device look like a GPU with fewer Vulkan queues, so the path where D3D12
@@ -103,15 +104,15 @@ bool queue_test_setting(rt::config::Name setting, std::string* text, size_t size
         *text = value.text;
         return true;
     }
-    std::fprintf(stderr, "[rt] d3d12: %s is a test setting; the game's device ignores it (all its Vulkan queues)\n",
-                 setting.setting().variable);
+    RT_LOG_WARN("d3d12: %s is a test setting; the game's device ignores it (all its Vulkan queues)\n",
+                setting.setting().variable);
     return false;
 }
 
 bool graphics_family_only(rt::d3d12::QueueTestSettings settings) {
     std::string text;
     const bool on = queue_test_setting("vulkan.graphics_family_only", &text, 8, settings) && text[0] != '0';
-    if (on) std::fprintf(stderr, "[rt] d3d12: LEONIDA_VK_GRAPHICS_FAMILY_ONLY: every D3D12 queue in the graphics family\n");
+    if (on) RT_LOG_INFO("d3d12: LEONIDA_VK_GRAPHICS_FAMILY_ONLY: every D3D12 queue in the graphics family\n");
     return on;
 }
 
@@ -122,12 +123,12 @@ std::uint32_t max_queues_per_family(rt::d3d12::QueueTestSettings settings) {
     char* end = nullptr;
     const unsigned long value = std::strtoul(text.c_str(), &end, 10);
     if (end == text.c_str() || *end || value < 1 || value > most) {
-        std::fprintf(stderr, "[rt] d3d12: LEONIDA_VK_MAX_QUEUES_PER_FAMILY=%s is not a number from 1 to %u: ignored\n",
-                     text.c_str(), most);
+        RT_LOG_WARN("d3d12: LEONIDA_VK_MAX_QUEUES_PER_FAMILY=%s is not a number from 1 to %u: ignored\n",
+                    text.c_str(), most);
         return most;
     }
-    std::fprintf(stderr, "[rt] d3d12: LEONIDA_VK_MAX_QUEUES_PER_FAMILY: at most %lu Vulkan queue(s) per family\n",
-                 value);
+    RT_LOG_INFO("d3d12: LEONIDA_VK_MAX_QUEUES_PER_FAMILY: at most %lu Vulkan queue(s) per family\n",
+                value);
     return std::uint32_t(value);
 }
 
@@ -192,17 +193,17 @@ VkPipelineCache create_seeded_pipeline_cache(PFN_vkCreatePipelineCache create_ca
     const PipelineCacheSeed seed(pipeline_cache_path());
     if (!seed.data()) return VK_NULL_HANDLE;
     if (!seed.compatible(identity)) {
-        std::fprintf(stderr, "[rt] d3d12: pipeline_cache.bin does not match this Vulkan device\n");
+        RT_LOG_WARN("d3d12: pipeline_cache.bin does not match this Vulkan device\n");
         return VK_NULL_HANDLE;
     }
     const VkPipelineCacheCreateInfo create{VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO,
                                            nullptr, 0, seed.size(), seed.data()};
     VkPipelineCache cache = VK_NULL_HANDLE;
     if (create_cache(device, &create, nullptr, &cache) != VK_SUCCESS) {
-        std::fprintf(stderr, "[rt] d3d12: Vulkan declined the pipeline cache seed\n");
+        RT_LOG_WARN("d3d12: Vulkan declined the pipeline cache seed\n");
         return VK_NULL_HANDLE;
     }
-    std::fprintf(stderr, "[rt] d3d12: loaded %zu bytes from pipeline_cache.bin\n", seed.size());
+    RT_LOG_INFO("d3d12: loaded %zu bytes from pipeline_cache.bin\n", seed.size());
     return cache;
 }
 
@@ -222,19 +223,18 @@ void report_subgroup_unavailable(const leonida::ShaderEntry& entry, const leonid
     const bool emulable = entry.stage == "cs" || entry.stage == "ms";
     const std::string so_far =
         names.size() > 1 ? " (shaders of this stage so far: " + std::to_string(names.size()) + ")" : "";
-    std::fprintf(stderr,
-                 "[rt] d3d12: %s (%s) is a %u-wide shader but this device cannot require that subgroup size for the "
-                 "stage (device sizes %u..%u, default %u, subgroupSizeControl %s); it runs at the device's size and "
-                 "is inexact where lanes of the other half matter%s\n",
-                 entry.name.c_str(), entry.stage.c_str(), request.wanted, caps.min_size, caps.max_size,
-                 caps.default_size, caps.subgroup_size_control ? "on" : "off",
-                 so_far.c_str());
+    RT_LOG_WARN("d3d12: %s (%s) is a %u-wide shader but this device cannot require that subgroup size for the "
+                "stage (device sizes %u..%u, default %u, subgroupSizeControl %s); it runs at the device's size and "
+                "is inexact where lanes of the other half matter%s\n",
+                entry.name.c_str(), entry.stage.c_str(), request.wanted, caps.min_size, caps.max_size,
+                caps.default_size, caps.subgroup_size_control ? "on" : "off",
+                so_far.c_str());
     if (emulable && request.wanted == 64)
-        std::fprintf(stderr, "[rt] d3d12: translate wave64 %s shaders with --wave64-emulate for this GPU "
-                             "(make_game.py --wave64-emulate auto does)\n", entry.stage.c_str());
+        RT_LOG_WARN("d3d12: translate wave64 %s shaders with --wave64-emulate for this GPU "
+                    "(make_game.py --wave64-emulate auto does)\n", entry.stage.c_str());
     else if (request.wanted == 64)
-        std::fprintf(stderr, "[rt] d3d12: no emulation exists for wave64 %s shaders yet (docs/d3d12_vulkan.md, "
-                             "subgroup size)\n", entry.stage.c_str());
+        RT_LOG_WARN("d3d12: no emulation exists for wave64 %s shaders yet (docs/d3d12_vulkan.md, "
+                    "subgroup size)\n", entry.stage.c_str());
 }
 
 struct Format {
@@ -724,13 +724,13 @@ struct DeviceState {
             arena.use_in_use[use] += bytes;
             arena.use_peak[use] = std::max(arena.use_peak[use], arena.use_in_use[use]);
             if (arena.log)
-                std::fprintf(stderr, "[rt] d3d12: arena %s VA 0x%llx + 0x%llx\n", kArenaUseNames[use],
+                RT_LOG_DEBUG("d3d12: arena %s VA 0x%llx + 0x%llx\n", kArenaUseNames[use],
                              (unsigned long long)start, (unsigned long long)bytes);
             return true;
         }
         ++arena.failures;
         if (arena.log)
-            std::fprintf(stderr, "[rt] d3d12: arena %s: no room for 0x%llx bytes\n", kArenaUseNames[use],
+            RT_LOG_DEBUG("d3d12: arena %s: no room for 0x%llx bytes\n", kArenaUseNames[use],
                          (unsigned long long)bytes);
         return false;
     }
@@ -738,7 +738,7 @@ struct DeviceState {
     // A console VA outside the arena (an upload or readback buffer: its device address minus heap_base).
     void log_va(const char* what, std::uint64_t va, VkDeviceSize bytes) {
         if (arena.log)
-            std::fprintf(stderr, "[rt] d3d12: %s VA 0x%llx + 0x%llx (outside the arena)\n", what,
+            RT_LOG_DEBUG("d3d12: %s VA 0x%llx + 0x%llx (outside the arena)\n", what,
                          (unsigned long long)va, (unsigned long long)bytes);
     }
 
@@ -747,14 +747,13 @@ struct DeviceState {
         std::lock_guard lock(arena.mutex);
         if (!arena.size) return;
         const double mib = 1.0 / (1 << 20);
-        std::fprintf(stderr,
-                     "[rt] d3d12: GPU address arena: peak end %.1f of %.1f MiB (%.1f%%), peak live %.1f MiB "
-                     "(buffers %.1f, descriptor heaps %.1f, shaders %.1f, heaps %.1f), %llu allocations, %llu refused\n",
-                     arena.peak_end * mib, arena.size * mib, 100.0 * double(arena.peak_end) / double(arena.size),
-                     arena.peak_in_use * mib, arena.use_peak[arena_buffer] * mib,
-                     arena.use_peak[arena_descriptor_heap] * mib, arena.use_peak[arena_shader] * mib,
-                     arena.use_peak[arena_heap] * mib,
-                     (unsigned long long)arena.allocations, (unsigned long long)arena.failures);
+        RT_LOG_INFO("d3d12: GPU address arena: peak end %.1f of %.1f MiB (%.1f%%), peak live %.1f MiB "
+                    "(buffers %.1f, descriptor heaps %.1f, shaders %.1f, heaps %.1f), %llu allocations, %llu refused\n",
+                    arena.peak_end * mib, arena.size * mib, 100.0 * double(arena.peak_end) / double(arena.size),
+                    arena.peak_in_use * mib, arena.use_peak[arena_buffer] * mib,
+                    arena.use_peak[arena_descriptor_heap] * mib, arena.use_peak[arena_shader] * mib,
+                    arena.use_peak[arena_heap] * mib,
+                    (unsigned long long)arena.allocations, (unsigned long long)arena.failures);
     }
 
     void arena_release(VkDeviceSize offset, VkDeviceSize bytes, ArenaUse use) {
@@ -791,19 +790,18 @@ struct DeviceState {
                 const std::filesystem::path dir = info.shader_dir.empty() ? configured_shader_directory(&error)
                                                                           : std::filesystem::path(info.shader_dir);
                 if (!error.empty())
-                    std::fprintf(stderr, "[rt] d3d12: invalid translated shader path: %s\n", error.c_str());
+                    RT_LOG_ERROR("d3d12: invalid translated shader path: %s\n", error.c_str());
                 else if (dir.empty())
-                    std::fprintf(stderr,
-                                 "[rt] d3d12: no translated shaders: set LEONIDA_SHADERS to <work>/shaders/spirv\n");
+                    RT_LOG_WARN("d3d12: no translated shaders: set LEONIDA_SHADERS to <work>/shaders/spirv\n");
                 else if (!shader_library.load(dir, &error))
-                    std::fprintf(stderr, "[rt] d3d12: %s\n", error.c_str());
+                    RT_LOG_ERROR("d3d12: %s\n", error.c_str());
                 else {
                     const auto path = shader_library.directory().u8string();
-                    std::fprintf(stderr, "[rt] d3d12: %zu translated shaders from %s\n",
-                                 shader_library.size(), reinterpret_cast<const char*>(path.c_str()));
+                    RT_LOG_INFO("d3d12: %zu translated shaders from %s\n",
+                                shader_library.size(), reinterpret_cast<const char*>(path.c_str()));
                 }
             } catch (const std::exception& e) {
-                std::fprintf(stderr, "[rt] d3d12: invalid translated shader path: %s\n", e.what());
+                RT_LOG_ERROR("d3d12: invalid translated shader path: %s\n", e.what());
             }
         }
         return shader_library.loaded() ? &shader_library : nullptr;
@@ -1390,11 +1388,10 @@ struct DeviceState {
                 if (leonida::spilled_to_host(required, preferred, memory.memoryTypes[i].propertyFlags))
                     std::call_once(spill_logged, [&] {
                         const std::uint32_t heap = memory.memoryTypes[i].heapIndex;
-                        std::fprintf(stderr,
-                                     "[rt] d3d12: a %llu-byte allocation did not fit in device-local memory and went "
-                                     "to memory type %u (heap %u, %llu MiB); later ones are not logged\n",
-                                     static_cast<unsigned long long>(requirements.size), i, heap,
-                                     static_cast<unsigned long long>(memory.memoryHeaps[heap].size >> 20));
+                        RT_LOG_WARN("d3d12: a %llu-byte allocation did not fit in device-local memory and went "
+                                    "to memory type %u (heap %u, %llu MiB); later ones are not logged\n",
+                                    static_cast<unsigned long long>(requirements.size), i, heap,
+                                    static_cast<unsigned long long>(memory.memoryHeaps[heap].size >> 20));
                     });
                 return out;
             }
@@ -3557,12 +3554,12 @@ public:
                 return !vertex || layout_feeds(e, desc.InputLayout);
             });
             if (!stage.entry) {
-                std::fprintf(stderr, "[rt] d3d12: no translated %s for FSSM sha256 %s\n", stage.name, hash.c_str());
+                RT_LOG_ERROR("d3d12: no translated %s for FSSM sha256 %s\n", stage.name, hash.c_str());
                 return E_INVALIDARG;
             }
             if (stage.entry->binding_count) {
                 if (!device_.bindless) {
-                    std::fprintf(stderr, "[rt] d3d12: %s uses set-0 bindings; the device has no bindless set 0\n",
+                    RT_LOG_ERROR("d3d12: %s uses set-0 bindings; the device has no bindless set 0\n",
                                  stage.entry->name.c_str());
                     return E_NOTIMPL;
                 }
@@ -3575,7 +3572,7 @@ public:
                 // (docs/d3d12_vulkan.md, "Pipelines").
                 if (const std::string refusal = leonida::mesh_limit_refusal(*stage.entry, device_.mesh_limits());
                     !refusal.empty()) {
-                    std::fprintf(stderr, "[rt] d3d12: %s\n", refusal.c_str());
+                    RT_LOG_ERROR("d3d12: %s\n", refusal.c_str());
                     return E_NOTIMPL;
                 }
             }
@@ -3613,7 +3610,7 @@ public:
             std::string link_error;
             if (!leonida::link_f16_halves(vs_stage.words, *vs_stage.entry, ps_stage.words, *ps_stage.entry,
                                           &link_error, device_.f16_half_top_location)) {
-                std::fprintf(stderr, "[rt] d3d12: %s\n", link_error.c_str());
+                RT_LOG_ERROR("d3d12: %s\n", link_error.c_str());
                 return E_FAIL;
             }
         }
@@ -3626,8 +3623,7 @@ public:
             const VkBool32 allowed = pixel ? device_.info.features.fragmentStoresAndAtomics
                                            : device_.info.features.vertexPipelineStoresAndAtomics;
             if (allowed || !leonida::spirv_declares_writable_storage(stage.words)) continue;
-            std::fprintf(stderr,
-                         "[rt] d3d12: %s (%s) writes a storage image or buffer, which needs the Vulkan feature %s; "
+            RT_LOG_ERROR("d3d12: %s (%s) writes a storage image or buffer, which needs the Vulkan feature %s; "
                          "the device does not have it enabled, so the pipeline is refused\n",
                          stage.entry->name.c_str(), stage.name,
                          pixel ? "fragmentStoresAndAtomics" : "vertexPipelineStoresAndAtomics");
@@ -3640,8 +3636,8 @@ public:
                 std::string why;
                 std::vector<std::uint32_t> patched = leonida::depth24_patch_fragment(stage.words, depth24_bias, why);
                 if (patched.empty()) {
-                    std::fprintf(stderr, "[rt] d3d12: %s keeps float depth on a D24 target stored as D32: %s\n",
-                                 stage.entry->name.c_str(), why.c_str());
+                    RT_LOG_WARN("d3d12: %s keeps float depth on a D24 target stored as D32: %s\n",
+                                stage.entry->name.c_str(), why.c_str());
                     depth24_fragment = false;
                 } else {
                     stage.words = std::move(patched);
@@ -3728,7 +3724,7 @@ public:
             const bool fed = std::any_of(attributes.begin(), attributes.end(),
                                          [&](const auto& a) { return a.location == e.register_index; });
             if (!fed) {  // D3D12 rejects an input layout that leaves a shader input unfed
-                std::fprintf(stderr, "[rt] d3d12: the input layout does not feed %s%u (register %u)\n",
+                RT_LOG_ERROR("d3d12: the input layout does not feed %s%u (register %u)\n",
                              e.semantic.c_str(), e.semantic_index, e.register_index);
                 return E_INVALIDARG;
             }
@@ -4018,10 +4014,10 @@ public:
         if (!entry) {
             const bool fspx = program.kind == leonida::ComputeProgram::Kind::fspx;
             if (ambiguous)
-                std::fprintf(stderr, "[rt] d3d12: FSPX kind-6 program sha256 %s is ambiguous without its kind-0 "
-                                     "state: its translations differ\n", leonida::sha256_hex(program.bytes).c_str());
+                RT_LOG_ERROR("d3d12: FSPX kind-6 program sha256 %s is ambiguous without its kind-0 "
+                             "state: its translations differ\n", leonida::sha256_hex(program.bytes).c_str());
             else
-                std::fprintf(stderr, "[rt] d3d12: no translated compute shader for %s sha256 %s\n",
+                RT_LOG_ERROR("d3d12: no translated compute shader for %s sha256 %s\n",
                              fspx ? (program.state.empty() ? "FSPX kind-6" : "FSPX kind-6 and kind-0") : "FSSM",
                              leonida::sha256_hex(program.bytes).c_str());
             return E_INVALIDARG;
@@ -4029,7 +4025,7 @@ public:
         // Set 0 (bindless images, samplers, the descriptor hash table): the device keeps it, and a pipeline whose
         // shader declares bindings has it in its layout and has it bound at every dispatch.
         if (entry->binding_count && !device_.bindless) {
-            std::fprintf(stderr, "[rt] d3d12: %s uses set-0 bindings; the device has no bindless set 0\n",
+            RT_LOG_ERROR("d3d12: %s uses set-0 bindings; the device has no bindless set 0\n",
                          entry->name.c_str());
             return E_NOTIMPL;
         }
@@ -4044,8 +4040,7 @@ public:
                 VkPhysicalDeviceProperties props{};
                 get_props(dinfo.physical, &props);
                 if (entry->lds_bytes > props.limits.maxComputeSharedMemorySize) {
-                    std::fprintf(stderr,
-                                 "[rt] d3d12: %s declares %u bytes of workgroup memory, over the device's "
+                    RT_LOG_ERROR("d3d12: %s declares %u bytes of workgroup memory, over the device's "
                                  "maxComputeSharedMemorySize %u\n",
                                  entry->name.c_str(), unsigned(entry->lds_bytes),
                                  unsigned(props.limits.maxComputeSharedMemorySize));
@@ -4055,7 +4050,7 @@ public:
         }
         const std::vector<std::uint32_t> words = library->spirv(*entry);
         if (words.empty()) {
-            std::fprintf(stderr, "[rt] d3d12: %s.spv is missing or not SPIR-V\n", entry->name.c_str());
+            RT_LOG_ERROR("d3d12: %s.spv is missing or not SPIR-V\n", entry->name.c_str());
             return E_FAIL;
         }
 
@@ -5077,10 +5072,10 @@ public:
             const std::string text = rt::config::get("vulkan.upload_sysmem").text;
             const bool sysmem = !text.empty() && text.size() < 4 && text[0] != '0';
             state_.upload_in_vram = leonida::resizable_bar(state_.memory) && !sysmem;
-            std::fprintf(stderr, "[rt] d3d12: upload heaps in %s\n",
-                         state_.upload_in_vram ? "VRAM (DEVICE_LOCAL | HOST_VISIBLE, Resizable BAR)"
-                         : sysmem             ? "system memory (LEONIDA_UPLOAD_SYSMEM)"
-                                              : "system memory (no Resizable BAR)");
+            RT_LOG_INFO("d3d12: upload heaps in %s\n",
+                        state_.upload_in_vram ? "VRAM (DEVICE_LOCAL | HOST_VISIBLE, Resizable BAR)"
+                        : sysmem             ? "system memory (LEONIDA_UPLOAD_SYSMEM)"
+                                             : "system memory (no Resizable BAR)");
         }
         for (const char* name : {"vkGetDeviceImageMemoryRequirements", "vkGetDeviceImageMemoryRequirementsKHR"})
             if (!state_.image_requirements)
@@ -5150,7 +5145,7 @@ public:
                 });
         }
         if (info.buffer_device_address && state_.context->loaded() && !create_arena())
-            std::fprintf(stderr, "[rt] d3d12: the GPU address arena could not be created\n");
+            RT_LOG_ERROR("d3d12: the GPU address arena could not be created\n");
         if (info.conditional_rendering) {
             const auto properties = reinterpret_cast<PFN_vkGetPhysicalDeviceProperties>(
                 info.get_instance_proc(info.instance, "vkGetPhysicalDeviceProperties"));
@@ -5206,7 +5201,7 @@ public:
             }, max_storage_range);
         }
         if (info.bindless && state_.context->loaded() && !create_bindless(get_device))
-            std::fprintf(stderr, "[rt] d3d12: the bindless set 0 could not be created\n");
+            RT_LOG_ERROR("d3d12: the bindless set 0 could not be created\n");
         query_luid_and_clock(get_device);
         // Timestamps: what the one VkQueue every D3D12 queue submits to can write.
         VkPhysicalDeviceProperties properties{};
@@ -5252,7 +5247,7 @@ public:
             load(labels.queue_end, "vkQueueEndDebugUtilsLabelEXT");
             state_.context->enable_debug_labels(labels);
             if (!state_.context->debug_labels())
-                std::fprintf(stderr, "[rt] d3d12: VK_EXT_debug_utils entry points missing; debug markers are off\n");
+                RT_LOG_WARN("d3d12: VK_EXT_debug_utils entry points missing; debug markers are off\n");
         }
 
         const bool sparse_aliasing = state_.context->vk.vkQueueBindSparse && info.features.sparseBinding &&
@@ -5311,25 +5306,25 @@ public:
                 };
             if (!leonida::bindless::size_bindings(features, properties.properties.limits, v11, indexed,
                                                   layout_supported))
-                std::fprintf(stderr, "[rt] d3d12: the device's descriptor limits are below the bindless set's default "
-                                     "sizes; it holds less\n");
+                RT_LOG_WARN("d3d12: the device's descriptor limits are below the bindless set's default "
+                            "sizes; it holds less\n");
         }
         namespace b = leonida::bindless;
-        std::fprintf(stderr, "[rt] d3d12: bindless set: %u 2D images, %u samplers, %u 2D-array, %u 3D, %u 1D, "
-                             "%u storage indices in 2D\n",
-                     features.counts[b::sampled_binding(leonida::ImageDimension::dim_2d)],
-                     features.counts[b::sampler_binding],
-                     features.counts[b::sampled_binding(leonida::ImageDimension::dim_2d_array)],
-                     features.counts[b::sampled_binding(leonida::ImageDimension::dim_3d)],
-                     features.counts[b::sampled_binding(leonida::ImageDimension::dim_1d)],
-                     features.counts[b::storage_binding(leonida::ImageDimension::dim_2d, 0)]);
+        RT_LOG_INFO("d3d12: bindless set: %u 2D images, %u samplers, %u 2D-array, %u 3D, %u 1D, "
+                    "%u storage indices in 2D\n",
+                    features.counts[b::sampled_binding(leonida::ImageDimension::dim_2d)],
+                    features.counts[b::sampler_binding],
+                    features.counts[b::sampled_binding(leonida::ImageDimension::dim_2d_array)],
+                    features.counts[b::sampled_binding(leonida::ImageDimension::dim_3d)],
+                    features.counts[b::sampled_binding(leonida::ImageDimension::dim_1d)],
+                    features.counts[b::storage_binding(leonida::ImageDimension::dim_2d, 0)]);
         // D3D12 promises a shader holds a full shader-visible sampler heap. Past this many distinct S#s, CreateSampler
         // logs that the array is full and a shader reads the fallback (clamping) sampler.
         if (features.counts[b::sampler_binding] < D3D12_MAX_SHADER_VISIBLE_SAMPLER_HEAP_SIZE + 1)
-            std::fprintf(stderr, "[rt] d3d12: the bindless set holds fewer samplers than a full shader-visible "
-                                 "sampler heap (%u of %u besides the fallback): its limits or "
-                                 "vkGetDescriptorSetLayoutSupport allow no more\n",
-                         features.counts[b::sampler_binding] - 1, unsigned(D3D12_MAX_SHADER_VISIBLE_SAMPLER_HEAP_SIZE));
+            RT_LOG_WARN("d3d12: the bindless set holds fewer samplers than a full shader-visible "
+                        "sampler heap (%u of %u besides the fallback): its limits or "
+                        "vkGetDescriptorSetLayoutSupport allow no more\n",
+                        features.counts[b::sampler_binding] - 1, unsigned(D3D12_MAX_SHADER_VISIBLE_SAMPLER_HEAP_SIZE));
         state_.bindless = std::make_unique<leonida::BindlessSet>(get_device, state_.info.device, state_.memory, features);
         if (!state_.bindless->ok() || !state_.context->vk.vkCreateSampler) {
             state_.bindless.reset();
@@ -5367,8 +5362,8 @@ public:
                 constexpr std::size_t max_retired = 8;
                 if (state_.bindless->retired_count() > max_retired) {
                     if (!state_.bindless_cap_logged.exchange(true))
-                        std::fprintf(stderr, "[rt] d3d12: more than %zu retired bindless table generations: waiting "
-                                             "for the queues that still use the oldest\n", max_retired);
+                        RT_LOG_WARN("d3d12: more than %zu retired bindless table generations: waiting "
+                                    "for the queues that still use the oldest\n", max_retired);
                     const std::uint64_t oldest = state_.bindless->oldest_retired_ticket();
                     lock.unlock();
                     const std::uint64_t completed = context.wait_retire_ticket(oldest);
@@ -5452,10 +5447,10 @@ public:
             }
         }
         if (size.capped)
-            std::fprintf(stderr, "[rt] d3d12: GPU address arena: %llu MiB of the %llu MiB asked for, capped by the "
-                                 "device's %s\n",
-                         static_cast<unsigned long long>(size.bytes >> 20),
-                         static_cast<unsigned long long>(size.requested >> 20), leonida::arena_cap_name(size.capped));
+            RT_LOG_WARN("d3d12: GPU address arena: %llu MiB of the %llu MiB asked for, capped by the "
+                        "device's %s\n",
+                        static_cast<unsigned long long>(size.bytes >> 20),
+                        static_cast<unsigned long long>(size.requested >> 20), leonida::arena_cap_name(size.capped));
         arena.memory = state_.allocate(requirements,
                                        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                                        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, nullptr, true, &arena.memory_type);
@@ -6046,7 +6041,7 @@ public:
         // the console spills those to memory, in a layout that is still open), and so does this.
         const rt::rootsig::DecodeResult parsed = rt::rootsig::parse_rts0(bytes, size);
         if (!parsed.ok) {
-            std::fprintf(stderr, "[rt] d3d12: root signature not understood: %s\n", parsed.error.c_str());
+            RT_LOG_ERROR("d3d12: root signature not understood: %s\n", parsed.error.c_str());
             return E_INVALIDARG;
         }
         // Two layouts, one per bind point (RootArgumentLayout): graphics keeps pack(), compute takes the console
@@ -6054,14 +6049,14 @@ public:
         const rt::rootsig::PackResult packed = rt::rootsig::pack(parsed.sig);
         const rt::rootsig::StagePackResult compute = rt::rootsig::pack_stage(parsed.sig, rt::rootsig::Stage::Compute);
         if (!packed.ok && !compute.ok) {
-            std::fprintf(stderr, "[rt] d3d12: root signature refused: %s (compute: %s)\n", packed.error.c_str(),
+            RT_LOG_ERROR("d3d12: root signature refused: %s (compute: %s)\n", packed.error.c_str(),
                          compute.error.c_str());
             return E_INVALIDARG;
         }
         if (!packed.ok)
-            std::fprintf(stderr, "[rt] d3d12: root signature usable for compute only: %s\n", packed.error.c_str());
+            RT_LOG_WARN("d3d12: root signature usable for compute only: %s\n", packed.error.c_str());
         if (!compute.ok)
-            std::fprintf(stderr, "[rt] d3d12: root signature usable for graphics only: %s\n", compute.error.c_str());
+            RT_LOG_WARN("d3d12: root signature usable for graphics only: %s\n", compute.error.c_str());
         RootArgumentLayout layout;
         layout.flags = parsed.sig.flags;
         layout.graphics_ok = packed.ok;
@@ -8769,7 +8764,7 @@ private:
         const auto transition =
             reinterpret_cast<PFN_vkTransitionImageLayoutEXT>(get_device(dev, "vkTransitionImageLayoutEXT"));
         if (!properties2 || !state_.format_properties2 || !to_image || !to_memory || !transition) {
-            std::fprintf(stderr, "[rt] d3d12: VK_EXT_host_image_copy entry points missing; using staging copies\n");
+            RT_LOG_WARN("d3d12: VK_EXT_host_image_copy entry points missing; using staging copies\n");
             return;
         }
         VkPhysicalDeviceHostImageCopyPropertiesEXT host{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_HOST_IMAGE_COPY_PROPERTIES_EXT};
@@ -8783,7 +8778,7 @@ private:
             return std::find(layouts.begin(), layouts.end(), VK_IMAGE_LAYOUT_GENERAL) != layouts.end();
         };
         if (!general(src) || !general(dst)) {
-            std::fprintf(stderr, "[rt] d3d12: host image copies do not accept GENERAL; using staging copies\n");
+            RT_LOG_WARN("d3d12: host image copies do not accept GENERAL; using staging copies\n");
             return;
         }
         state_.copy_memory_to_image = to_image;
@@ -9103,7 +9098,7 @@ WindowPresenter::~WindowPresenter() {
 namespace {
 HRESULT present_result(VkResult result) {
     if (result == VK_SUCCESS) return S_OK;
-    std::fprintf(stderr, "[rt] d3d12: present failed (VkResult %d)\n", int(result));
+    RT_LOG_ERROR("d3d12: present failed (VkResult %d)\n", int(result));
     if (result == VK_ERROR_DEVICE_LOST) return DXGI_ERROR_DEVICE_REMOVED;
     if (result == VK_ERROR_FORMAT_NOT_SUPPORTED) return DXGI_ERROR_UNSUPPORTED;
     return E_FAIL;
@@ -9197,13 +9192,13 @@ std::unique_ptr<WindowPresenter> create_window_presenter(ID3D12Device* device, H
     ID3D12Device* real = rt::d3d12_xs::device_proxy_real_device(device);
     Device* d = Device::from<Device>(real ? real : device);
     if (device && !d)
-        std::fprintf(stderr, "[rt] d3d12: create_window_presenter: %p is neither the Xbox device proxy nor a device of "
-                             "this layer; no presenter\n",
+        RT_LOG_ERROR("d3d12: create_window_presenter: %p is neither the Xbox device proxy nor a device of "
+                     "this layer; no presenter\n",
                      static_cast<void*>(device));
     if (!d || !window) return nullptr;
     const VulkanDeviceInfo& info = d->state().info;
     if (!info.presentation) {
-        std::fprintf(stderr, "[rt] d3d12: the Vulkan device was created without presentation support\n");
+        RT_LOG_ERROR("d3d12: the Vulkan device was created without presentation support\n");
         return nullptr;
     }
     const auto create_surface = reinterpret_cast<PFN_vkCreateWin32SurfaceKHR>(
@@ -9254,7 +9249,7 @@ std::unique_ptr<WindowPresenter> create_window_presenter(ID3D12Device* device, H
                                                                 },
                                                                 std::move(capture));
     if (!presenter->ok()) {
-        std::fprintf(stderr, "[rt] d3d12: cannot present to this window from the device's queue family\n");
+        RT_LOG_ERROR("d3d12: cannot present to this window from the device's queue family\n");
         return nullptr;
     }
     auto window_presenter = std::make_unique<WindowPresenter>(d->holder(), std::move(presenter));
@@ -9296,7 +9291,7 @@ HRESULT create_vulkan_device_standalone(REFIID riid, void** out, QueueTestSettin
                                    reinterpret_cast<void*>(GetProcAddress(library, "vkGetInstanceProcAddr")))
                              : nullptr;
     if (!get) {
-        std::fprintf(stderr, "[rt] d3d12: vulkan-1.dll not found\n");
+        RT_LOG_ERROR("d3d12: vulkan-1.dll not found\n");
         return E_FAIL;
     }
     const auto create_instance = reinterpret_cast<PFN_vkCreateInstance>(get(nullptr, "vkCreateInstance"));
@@ -9374,8 +9369,7 @@ HRESULT create_vulkan_device_standalone(REFIID riid, void** out, QueueTestSettin
             instance_info.enabledLayerCount = 1;
             instance_info.ppEnabledLayerNames = &layer;
         } else {
-            std::fprintf(stderr,
-                         "[rt] d3d12: LEONIDA_VK_VALIDATION is set but %s is not listed by the Vulkan loader "
+            RT_LOG_ERROR("d3d12: LEONIDA_VK_VALIDATION is set but %s is not listed by the Vulkan loader "
                          "(install the Vulkan SDK; under Wine set VK_INSTANCE_LAYERS=%s instead)\n",
                          layer, layer);
             return E_FAIL;
@@ -9399,12 +9393,12 @@ HRESULT create_vulkan_device_standalone(REFIID riid, void** out, QueueTestSettin
     instance_info.ppEnabledExtensionNames = inst_exts.empty() ? nullptr : inst_exts.data();
     OwnedRuntime owned{};
     if (create_instance(&instance_info, nullptr, &owned.instance) != VK_SUCCESS) {
-        std::fprintf(stderr, "[rt] d3d12: vkCreateInstance (Vulkan 1.3) failed\n");
+        RT_LOG_ERROR("d3d12: vkCreateInstance (Vulkan 1.3) failed\n");
         return E_FAIL;
     }
     owned.destroy_instance = reinterpret_cast<PFN_vkDestroyInstance>(get(owned.instance, "vkDestroyInstance"));
     const auto fail = [&](const char* why) {
-        std::fprintf(stderr, "[rt] d3d12: %s\n", why);
+        RT_LOG_ERROR("d3d12: %s\n", why);
         owned.destroy_instance(owned.instance, nullptr);
         return E_FAIL;
     };
@@ -9482,10 +9476,10 @@ HRESULT create_vulkan_device_standalone(REFIID riid, void** out, QueueTestSettin
                           "VK_KHR_synchronization2) with dynamicRendering, synchronization2, timelineSemaphore and "
                           "separateDepthStencilLayouts");
     if (!v13.core)
-        std::fprintf(stderr, "[rt] d3d12: Vulkan 1.2 device: dynamicRendering and synchronization2 through their KHR "
-                             "extensions; %s\n",
-                     v13.extended_dynamic_state ? "extended dynamic state through VK_EXT_extended_dynamic_state(2)"
-                                                : "no extended dynamic state, so no graphics pipelines");
+        RT_LOG_INFO("d3d12: Vulkan 1.2 device: dynamicRendering and synchronization2 through their KHR "
+                    "extensions; %s\n",
+                    v13.extended_dynamic_state ? "extended dynamic state through VK_EXT_extended_dynamic_state(2)"
+                                               : "no extended dynamic state, so no graphics pipelines");
 
     // VK_EXT_conditional_rendering for SetPredication, VK_KHR_swapchain for DXGI presentation, and optional
     // VK_KHR_acceleration_structure + VK_KHR_ray_query for hardware BVH builds (BLAS + TLAS).
@@ -9522,7 +9516,7 @@ HRESULT create_vulkan_device_standalone(REFIID riid, void** out, QueueTestSettin
             }
         }
         if (!info.mesh_shader)
-            std::fprintf(stderr, "[rt] d3d12: the GPU has no VK_EXT_mesh_shader: mesh-shader PSOs are unsupported\n");
+            RT_LOG_WARN("d3d12: the GPU has no VK_EXT_mesh_shader: mesh-shader PSOs are unsupported\n");
         if (has_as && has_dho && has_rq && chosen12.bufferDeviceAddress) {
             as_features.pNext = &rq_features;
             VkPhysicalDeviceFeatures2 features{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, &as_features};
@@ -9537,7 +9531,7 @@ HRESULT create_vulkan_device_standalone(REFIID riid, void** out, QueueTestSettin
             info.ray_tracing = false;  // no KHR extensions: AS resources keep their console VAs
         }
         if (!info.conditional_rendering)
-            std::fprintf(stderr, "[rt] d3d12: the GPU has no VK_EXT_conditional_rendering: SetPredication is unsupported\n");
+            RT_LOG_WARN("d3d12: the GPU has no VK_EXT_conditional_rendering: SetPredication is unsupported\n");
     }
     VkPhysicalDeviceConditionalRenderingFeaturesEXT enable_conditional{
         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_CONDITIONAL_RENDERING_FEATURES_EXT};
@@ -9576,7 +9570,7 @@ HRESULT create_vulkan_device_standalone(REFIID riid, void** out, QueueTestSettin
     VkPhysicalDeviceVulkan11Features enable11{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES,
                                               v13.enable(ext_chain)};
     enable11.shaderDrawParameters = chosen_draw_params ? VK_TRUE : VK_FALSE;
-    if (!chosen_draw_params) std::fprintf(stderr, "[rt] d3d12: the GPU has no shaderDrawParameters\n");
+    if (!chosen_draw_params) RT_LOG_WARN("d3d12: the GPU has no shaderDrawParameters\n");
     VkPhysicalDeviceVulkan12Features enable12{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES, &enable11};
     enable12.timelineSemaphore = VK_TRUE;
     enable12.separateDepthStencilLayouts = VK_TRUE;
@@ -9607,7 +9601,7 @@ HRESULT create_vulkan_device_standalone(REFIID riid, void** out, QueueTestSettin
     enable12.shaderOutputLayer = info.shader_output_layer;
     enable12.shaderOutputViewportIndex = info.shader_output_viewport_index;
     if (!info.bindless)
-        std::fprintf(stderr, "[rt] d3d12: the GPU lacks a descriptor-indexing feature the bindless set needs\n");
+        RT_LOG_WARN("d3d12: the GPU lacks a descriptor-indexing feature the bindless set needs\n");
     enable12.bufferDeviceAddress = VK_TRUE;
     info.buffer_device_address = true;
     std::uint32_t family_count = 0;
@@ -9666,13 +9660,13 @@ HRESULT create_vulkan_device_standalone(REFIID riid, void** out, QueueTestSettin
     enable.shaderSampledImageArrayDynamicIndexing = info.bindless;
     enable.shaderStorageImageArrayDynamicIndexing = info.bindless;
     if (!chosen_features.shaderInt64)
-        std::fprintf(stderr, "[rt] d3d12: the GPU has no shaderInt64; translated shaders (all declare Int64) will not load\n");
+        RT_LOG_WARN("d3d12: the GPU has no shaderInt64; translated shaders (all declare Int64) will not load\n");
     enable.samplerAnisotropy = info.sampler_anisotropy;
     enable.occlusionQueryPrecise = chosen_features.occlusionQueryPrecise;  // exact D3D12 occlusion counts
     enable.pipelineStatisticsQuery = chosen_features.pipelineStatisticsQuery;
     info.occlusion_query_precise = chosen_features.occlusionQueryPrecise == VK_TRUE;
     info.pipeline_statistics_query = chosen_features.pipelineStatisticsQuery == VK_TRUE;
-    if (!chosen_bc) std::fprintf(stderr, "[rt] d3d12: the GPU has no BC texture support\n");
+    if (!chosen_bc) RT_LOG_WARN("d3d12: the GPU has no BC texture support\n");
     const char* conditional_extension = VK_EXT_CONDITIONAL_RENDERING_EXTENSION_NAME;
 
     // Optional: VK_EXT_host_image_copy lets WriteToSubresource/ReadFromSubresource copy on the CPU.
@@ -9740,7 +9734,7 @@ HRESULT create_vulkan_device_standalone(REFIID riid, void** out, QueueTestSettin
         host_copy.pNext = *v13.next();  // after the conditional rendering features, if any
         *v13.next() = &host_copy;
     } else {
-        std::fprintf(stderr, "[rt] d3d12: no VK_EXT_host_image_copy; CPU texture copies use a staging submit\n");
+        RT_LOG_WARN("d3d12: no VK_EXT_host_image_copy; CPU texture copies use a staging submit\n");
     }
 
     // The pixel-shader extensions translated shaders can declare (VulkanDeviceInfo::fragment_shader_barycentric and
@@ -9903,8 +9897,8 @@ HRESULT create_vulkan_device_standalone(REFIID riid, void** out, QueueTestSettin
         custom_border.pNext = *v13.next();   // where later feature structs go since #1706
         *v13.next() = &custom_border;
     } else {
-        std::fprintf(stderr,
-                     "[rt] d3d12: no VK_EXT_custom_border_color; custom sampler border colours fall back to transparent black\n");
+        RT_LOG_WARN(
+            "d3d12: no VK_EXT_custom_border_color; custom sampler border colours fall back to transparent black\n");
     }
 
     // Optional: VK_EXT_external_memory_host lets OpenExistingHeapFromAddress import the caller's committed memory as
@@ -9984,19 +9978,17 @@ HRESULT create_vulkan_device_standalone(REFIID riid, void** out, QueueTestSettin
     info.queue = info.command_queues[0];
     info.max_push_constants_size = chosen.limits.maxPushConstantsSize;
     info.push_constants_need_fallback = (info.max_push_constants_size < 144);
-    std::fprintf(stderr, "[rt] d3d12: Vulkan device: %s (maxPushConstantsSize: %u bytes)\n", chosen.deviceName,
-                 chosen.limits.maxPushConstantsSize);
-    std::fprintf(stderr,
-                 "[rt] d3d12: subgroup sizes %u..%u (default %u), requirable in stages 0x%x, subgroupSizeControl %s, "
-                 "computeFullSubgroups %s\n",
-                 info.subgroup.min_size, info.subgroup.max_size, info.subgroup.default_size,
-                 unsigned(info.subgroup.required_stages), info.subgroup.subgroup_size_control ? "on" : "off",
-                 info.subgroup.compute_full_subgroups ? "on" : "off");
+    RT_LOG_INFO("d3d12: Vulkan device: %s (maxPushConstantsSize: %u bytes)\n", chosen.deviceName,
+                chosen.limits.maxPushConstantsSize);
+    RT_LOG_INFO("d3d12: subgroup sizes %u..%u (default %u), requirable in stages 0x%x, subgroupSizeControl %s, "
+                "computeFullSubgroups %s\n",
+                info.subgroup.min_size, info.subgroup.max_size, info.subgroup.default_size,
+                unsigned(info.subgroup.required_stages), info.subgroup.subgroup_size_control ? "on" : "off",
+                info.subgroup.compute_full_subgroups ? "on" : "off");
     if (info.push_constants_need_fallback) {
-        std::fprintf(stderr,
-                     "[rt] d3d12: WARNING: GPU maxPushConstantsSize (%u bytes) is below the 144 bytes required by "
-                     "the shader contract; uniform-buffer fallback required for the 16-byte tail\n",
-                     chosen.limits.maxPushConstantsSize);
+        RT_LOG_WARN("d3d12: WARNING: GPU maxPushConstantsSize (%u bytes) is below the 144 bytes required by "
+                    "the shader contract; uniform-buffer fallback required for the 16-byte tail\n",
+                    chosen.limits.maxPushConstantsSize);
     }
 
     auto* device = new Device(info);
