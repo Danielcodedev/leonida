@@ -33,6 +33,7 @@
 #include <utility>
 #include <vector>
 
+#include "../core/log.h"
 #include "shims.h"
 #include "startup_trace.h"
 #include "xmem.h"
@@ -98,7 +99,7 @@ void __stdcall XMemFreeDefault(void* p, uint64_t attributes) {
 BOOL WINAPI XMemIsToolsMemAvailable() {
     static std::atomic<bool> warned{false};
     if (!warned.exchange(true, std::memory_order_relaxed)) {
-        std::fprintf(stderr, "[rt] xmem: XMemIsToolsMemAvailable -> FALSE (no devkit tools memory; logged once)\n");
+        RT_LOG_WARN("xmem: XMemIsToolsMemAvailable -> FALSE (no devkit tools memory; logged once)\n");
     }
     return FALSE;
 }
@@ -118,9 +119,8 @@ SIZE_T __stdcall XMemVirtualQuery(HANDLE process, const void* address, void* out
 
     static std::atomic<bool> warned{false};
     if (!warned.exchange(true, std::memory_order_relaxed)) {
-        std::fprintf(stderr,
-                     "[rt] xmem: XMemVirtualQuery: fields after MEMORY_BASIC_INFORMATION are unknown; "
-                     "the 64-byte output is zero-filled there\n");
+        RT_LOG_WARN("xmem: XMemVirtualQuery: fields after MEMORY_BASIC_INFORMATION are unknown; "
+                    "the 64-byte output is zero-filled there\n");
     }
 
     // A null handle means the current process; GetCurrentProcess() is the (HANDLE)-1 pseudo handle.
@@ -146,7 +146,7 @@ BOOL __stdcall XMemGetWorkingSetStatistics(uint32_t /*kind*/, void* stats) {
     if (!stats) {
         static std::atomic<bool> warned{false};
         if (!warned.exchange(true, std::memory_order_relaxed)) {
-            std::fprintf(stderr, "[rt] xmem: XMemGetWorkingSetStatistics(nullptr) -> FALSE\n");
+            RT_LOG_WARN("xmem: XMemGetWorkingSetStatistics(nullptr) -> FALSE\n");
         }
         return FALSE;
     }
@@ -756,10 +756,9 @@ UINT WINAPI XMemResetWriteWatch(void* base_address, SIZE_T region_size) {
 BOOL WINAPI XMemTransferMemory(uint32_t type, SIZE_T size) {
     static std::atomic<bool> warned{false};
     if (!warned.exchange(true, std::memory_order_relaxed)) {
-        std::fprintf(stderr,
-                     "[rt] xmem: XMemTransferMemory(type %u, %zu bytes): a PC has no title/system memory partition; "
-                     "returning TRUE without moving anything (logged once)\n",
-                     type, static_cast<size_t>(size));
+        RT_LOG_WARN("xmem: XMemTransferMemory(type %u, %zu bytes): a PC has no title/system memory partition; "
+                    "returning TRUE without moving anything (logged once)\n",
+                    type, static_cast<size_t>(size));
     }
     if (rt::startup_trace::enabled()) {
         static std::mutex mutex;
