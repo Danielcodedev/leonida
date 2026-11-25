@@ -17,6 +17,7 @@
 #include <vector>
 
 #include "../core/config.h"
+#include "../core/log.h"
 #include "../shims/shims.h"
 #include "../shims/startup_trace.h"
 #include "base_reservation.h"
@@ -774,8 +775,8 @@ void install_on_existing_threads(Module& m) {
                 VirtualFree(block, 0, MEM_RELEASE);
                 static std::atomic<bool> logged{false};
                 if (!logged.exchange(true))
-                    std::fprintf(stderr, "[rt] loader: %s: a running thread did not take its TLS block (it ended, or "
-                                         "its TLS array kept changing); mapped thread-local data is not valid on it\n",
+                    RT_LOG_ERROR("loader: %s: a running thread did not take its TLS block (it ended, or "
+                                 "its TLS array kept changing); mapped thread-local data is not valid on it\n",
                                  m.name.c_str());
                 continue;
             }
@@ -792,8 +793,8 @@ void install_on_existing_threads(Module& m) {
                     ga_view = nullptr;
                     static std::atomic<bool> logged_view{false};
                     if (!logged_view.exchange(true))
-                        std::fprintf(stderr, "[rt] loader: %s: a running thread did not take its /GA TLS view; "
-                                             "index-0 TLS reads in it have no block\n",
+                        RT_LOG_ERROR("loader: %s: a running thread did not take its /GA TLS view; "
+                                     "index-0 TLS reads in it have no block\n",
                                      m.name.c_str());
                 }
             }
@@ -859,7 +860,7 @@ void release_existing_blocks_of_this_thread() {
         try {
             run_callbacks(*m, DLL_THREAD_DETACH);
         } catch (const std::exception& e) {
-            std::fprintf(stderr, "[rt] loader: thread detach: %s\n", e.what());
+            RT_LOG_ERROR("loader: thread detach: %s\n", e.what());
         }
     }
     ExistingThreadsLock lock;
@@ -888,7 +889,7 @@ void __cdecl on_host_thread_event(DWORD reason) {
         try {
             forget_ended_thread_id();
         } catch (const std::exception& e) {
-            std::fprintf(stderr, "[rt] loader: thread attach: %s\n", e.what());
+            RT_LOG_ERROR("loader: thread attach: %s\n", e.what());
         }
         for (size_t slot = 0; slot < kMaxMappedTlsModules; ++slot) {
             Module* m = g_tls_slot_owners[slot].load();
@@ -898,7 +899,7 @@ void __cdecl on_host_thread_event(DWORD reason) {
                 if (m->initialised) run_callbacks(*m, DLL_THREAD_ATTACH);
             } catch (const std::exception& e) {
                 // The thread runs on without this module's TLS; later slots still get theirs.
-                std::fprintf(stderr, "[rt] loader: thread attach, slot %zu (%s): %s\n", slot, m->name.c_str(),
+                RT_LOG_ERROR("loader: thread attach, slot %zu (%s): %s\n", slot, m->name.c_str(),
                              e.what());
             }
         }
@@ -908,7 +909,7 @@ void __cdecl on_host_thread_event(DWORD reason) {
         try {
             release_existing_blocks_of_this_thread();
         } catch (const std::exception& e) {
-            std::fprintf(stderr, "[rt] loader: thread detach: %s\n", e.what());
+            RT_LOG_ERROR("loader: thread detach: %s\n", e.what());
         }
         for (size_t i = kMaxMappedTlsModules; i-- > 0;) {
             Module* m = g_tls_slot_owners[i].load();
@@ -917,7 +918,7 @@ void __cdecl on_host_thread_event(DWORD reason) {
                 try {
                     if (m->initialised) run_callbacks(*m, DLL_THREAD_DETACH);
                 } catch (const std::exception& e) {
-                    std::fprintf(stderr, "[rt] loader: thread detach, slot %zu (%s): %s\n", i, m->name.c_str(),
+                    RT_LOG_ERROR("loader: thread detach, slot %zu (%s): %s\n", i, m->name.c_str(),
                                  e.what());
                 }
                 // Released even when the callbacks threw: a leaked block would be handed to the OS loader as the
@@ -1081,7 +1082,7 @@ Loader::~Loader() {
         } catch (const std::exception& e) {
             // A module may have changed its callback table since attach. A destructor cannot propagate the validation
             // error; report it and still let DllMain release resources before the image is freed.
-            std::fprintf(stderr, "[rt] TLS process detach failed for %s: %s\n", m.name.c_str(), e.what());
+            RT_LOG_ERROR("TLS process detach failed for %s: %s\n", m.name.c_str(), e.what());
         }
         auto* nt = at<IMAGE_NT_HEADERS64>(m.base, reinterpret_cast<IMAGE_DOS_HEADER*>(m.base)->e_lfanew);
         if ((nt->FileHeader.Characteristics & IMAGE_FILE_DLL) && m.entry_rva) {
@@ -1217,8 +1218,7 @@ void* Loader::load_runtime_candidate(Module* existing, const std::filesystem::pa
     // Win32 DONT_RESOLVE_DLL_REFERENCES (0x1) forbids resolving dependencies or running TLS/DllMain; refuse it
     // explicitly instead of silently performing a normal resolving + initialising load.
     if ((flags & DONT_RESOLVE_DLL_REFERENCES) != 0) {
-        std::fprintf(stderr,
-                     "[rt] loader: LoadLibraryEx(%s, DONT_RESOLVE_DLL_REFERENCES) is not supported for bundled DLLs\n",
+        RT_LOG_ERROR("loader: LoadLibraryEx(%s, DONT_RESOLVE_DLL_REFERENCES) is not supported for bundled DLLs\n",
                      display.c_str());
         SetLastError(ERROR_NOT_SUPPORTED);
         return nullptr;
@@ -1229,7 +1229,7 @@ void* Loader::load_runtime_candidate(Module* existing, const std::filesystem::pa
             initialise();
             return static_cast<void*>(existing->base);
         } catch (const std::exception& e) {
-            std::fprintf(stderr, "[rt] loader: run-time initialise of %s failed: %s\n", display.c_str(), e.what());
+            RT_LOG_ERROR("loader: run-time initialise of %s failed: %s\n", display.c_str(), e.what());
             SetLastError(ERROR_DLL_INIT_FAILED);
             return nullptr;
         }
@@ -1240,13 +1240,13 @@ void* Loader::load_runtime_candidate(Module* existing, const std::filesystem::pa
         Module& m = load(candidate);
         mapped = &m;
         initialise();
-        std::fprintf(stderr, "[rt] loader: %s mapped from game_dir (run-time load)\n", m.name.c_str());
+        RT_LOG_INFO("loader: %s mapped from game_dir (run-time load)\n", m.name.c_str());
         return static_cast<void*>(m.base);
     } catch (const std::exception& e) {
         // load() drops a module that failed to map or bind (dependencies included); this also drops one whose
         // initialise() failed, so later GetModuleHandle/LoadLibrary calls don't see it. ~Loader frees it via order_.
         by_name_.erase(module_key(mapped ? mapped->path : candidate));
-        std::fprintf(stderr, "[rt] loader: run-time load of %s failed: %s\n", display.c_str(), e.what());
+        RT_LOG_ERROR("loader: run-time load of %s failed: %s\n", display.c_str(), e.what());
         SetLastError(ERROR_DLL_INIT_FAILED);
         return nullptr;
     }
@@ -1274,7 +1274,7 @@ void* Loader::resolve_module_export(void* module_handle, const std::string& sym,
             if (binding == Binding::Module) initialise();
             return fn;
         } catch (const std::exception& e) {
-            std::fprintf(stderr, "[rt] loader: forwarder %s from %s failed: %s\n", it->second.c_str(),
+            RT_LOG_ERROR("loader: forwarder %s from %s failed: %s\n", it->second.c_str(),
                          target->name.c_str(), e.what());
             return nullptr;
         }
@@ -1573,15 +1573,14 @@ void Loader::initialize_tls(Module& m) {
         if (!(nt->FileHeader.Characteristics & IMAGE_FILE_DLL) && total && index != 0 && ga_tls_patch_enabled()) {
             static const DWORD ga_slot = TlsAlloc();
             if (ga_slot == TLS_OUT_OF_INDEXES || ga_slot >= 64) {
-                std::fprintf(stderr, "[rt] loader: %s: no TlsAlloc slot below 64 for its index-0 TLS reads\n",
+                RT_LOG_ERROR("loader: %s: no TlsAlloc slot below 64 for its index-0 TLS reads\n",
                              m.name.c_str());
             } else {
                 m.tls_ga_sites = patch_ga_tls_reads(m, ga_slot);
                 if (m.tls_ga_sites) m.tls_ga_slot = ga_slot;
-                std::fprintf(stderr,
-                             "[rt] loader: %s: %zu index-0 TLS reads (gs:[58h]) now read its own TLS (TlsSlots[%lu]); "
-                             "its module TLS index is %u\n",
-                             m.name.c_str(), m.tls_ga_sites, static_cast<unsigned long>(ga_slot), index);
+                RT_LOG_INFO("loader: %s: %zu index-0 TLS reads (gs:[58h]) now read its own TLS (TlsSlots[%lu]); "
+                            "its module TLS index is %u\n",
+                            m.name.c_str(), m.tls_ga_sites, static_cast<unsigned long>(ga_slot), index);
             }
         }
     }
@@ -1728,7 +1727,7 @@ bool Loader::resolve_compat(const std::string& key, const std::string& dll, cons
             throw std::runtime_error("LEONIDA_COMPAT_DIR: " + path_utf8(candidate) + " exists but Windows could not " +
                                      "load it (error " + std::to_string(load_error) + ")");
         compat_modules_.emplace(key, h);
-        std::fprintf(stderr, "[rt] compat: %s -> %s\n", dll.c_str(), path_utf8(candidate).c_str());
+        RT_LOG_INFO("compat: %s -> %s\n", dll.c_str(), path_utf8(candidate).c_str());
     }
     out = reinterpret_cast<void*>(GetProcAddress(h, by_ordinal ? MAKEINTRESOURCEA(ordinal) : name.c_str()));
     return true;
