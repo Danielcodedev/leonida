@@ -33,6 +33,7 @@
 #include <vector>
 
 #include "../src/shader_library.h"  // leonida::zlib_inflate
+#include "../core/log.h"
 #include "dstorage_xs_abi.h"
 #include "shims.h"
 
@@ -53,7 +54,7 @@ void log_once(const std::string& key, const std::string& line) {
     static auto* seen = new std::set<std::string>;
     std::lock_guard lock(log_mutex());
     if (!seen->insert(key).second) return;
-    std::fprintf(stderr, "[rt] dstorage: %s\n", line.c_str());
+    RT_LOG_WARN("dstorage: %s\n", line.c_str());
 }
 
 std::string guid_text(const GUID& g) {
