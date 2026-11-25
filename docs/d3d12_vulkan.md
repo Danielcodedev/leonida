@@ -2513,7 +2513,10 @@ The trace will enumerate them.
     device does on purpose (`d3d12_vulkan_device_test` fails on a `TRUE`). The PC runtime answers differently: on an
     RTX 4090 (driver 621.14) and on WARP it reports the capability as supported, and a list with `Offset` 16 and
     `RowPitch` 260 for an `R8G8B8A8_UNORM` footprint closes with `S_OK` (measured with a stand-alone D3D12 program,
-    Windows 11 26200). The layer cannot simply say the same: Vulkan takes a copy's buffer offset as a multiple of
+    Windows 11 26200). An older PC runtime keeps the rule: on Windows 10 22H2 (`d3d12.dll` and `d3d10warp.dll`
+    10.0.19041.3636) the query for `D3D12_FEATURE_D3D12_OPTIONS13` answers `E_INVALIDARG`, and WARP and a GTX 1070 Ti
+    close such a list with `E_INVALIDARG`, as the layer does; `d3d12_close_parity_test` counts its three cases as
+    matches on such a WARP. The layer cannot simply say the same: Vulkan takes a copy's buffer offset as a multiple of
     the texel block size and its row length in texels (VUID-vkCmdCopyBufferToImage-dstImage-07975), while the
     capability lifts D3D12's two alignments and is not documented as keeping offsets and pitches texel multiples
     (not tested here), so a footprint that is not texel-aligned would have to be repacked through scratch memory
