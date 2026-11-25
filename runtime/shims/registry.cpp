@@ -12,6 +12,7 @@
 #include <string>
 #include <vector>
 
+#include "../core/config.h"
 #include "shims.h"
 #include "startup_trace.h"
 
@@ -308,10 +309,9 @@ UnimplementedPolicy parse_unimplemented_policy(const char* text, bool* valid) {
 UnimplementedPolicy unimplemented_policy() {
     int p = g_policy.load();
     if (p < 0) {
-        char buf[32] = {};
-        const DWORD n = GetEnvironmentVariableA("LEONIDA_UNIMPLEMENTED", buf, sizeof buf);
+        const std::string text = rt::config::get("loader.unimplemented").text;
         bool valid = true;
-        const UnimplementedPolicy parsed = parse_unimplemented_policy(n < sizeof buf ? buf : "?", &valid);
+        const UnimplementedPolicy parsed = parse_unimplemented_policy(text.c_str(), &valid);
         if (!valid) std::fprintf(stderr, "[rt] LEONIDA_UNIMPLEMENTED: expected log, fail or stop; using log\n");
         int expected = -1;
         g_policy.compare_exchange_strong(expected, static_cast<int>(parsed));
