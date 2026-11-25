@@ -41,6 +41,8 @@
 #include <XAsyncProvider.h>
 #include <XTaskQueue.h>
 
+#include "../core/config.h"
+
 namespace rt::shims {
 void* xgameruntime_user_new_handle();   // xgameruntime_user.cpp
 }
@@ -105,11 +107,7 @@ constexpr GUID kEventClass = {0xbbfbdcc7, 0xbfe7, 0x409b, {0xa5, 0xca, 0xed, 0xf
 std::atomic<long> g_events{0};
 
 bool log_every_event() {
-    static const bool on = [] {
-        char value[4] = {};
-        size_t length = 0;
-        return getenv_s(&length, value, "LEONIDA_LOG_GAME_EVENTS") == 0 && length == 2 && value[0] == '1';
-    }();
+    static const bool on = rt::config::get("system.log_game_events").text == "1";
     return on;
 }
 
@@ -397,11 +395,7 @@ struct XDisplayHdrModeInfo {
 };
 
 bool hdr_requested() {
-    static const bool on = [] {
-        char value[4] = {};
-        size_t length = 0;
-        return getenv_s(&length, value, "LEONIDA_HDR") == 0 && length == 2 && value[0] == '1';
-    }();
+    static const bool on = rt::config::get("system.hdr").text == "1";
     return on;
 }
 

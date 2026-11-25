@@ -25,11 +25,14 @@
 #include <iterator>
 #include <mutex>
 #include <set>
+#include <string>
 #include <unordered_set>
 
 #include <XAsync.h>
 #include <XAsyncProvider.h>
 #include <XTaskQueue.h>
+
+#include "../core/config.h"
 
 namespace {
 
@@ -65,20 +68,17 @@ const char* gamertag() {
     static char tag[16] = "Player";
     static std::once_flag once;
     std::call_once(once, [] {
-        size_t length = 0;   // with the terminator; 0 when unset
-        if (getenv_s(&length, nullptr, 0, "LEONIDA_GAMERTAG") != 0 || length <= 1) return;
-        if (length - 1 > 15) {
+        const std::string value = rt::config::get("system.gamertag").text;  // "Player" when nothing sets it
+        if (value.size() > 15) {
             std::fprintf(stderr, "[rt] xgameruntime: LEONIDA_GAMERTAG is longer than 15 characters; using \"Player\"\n");
             return;
         }
-        char value[16] = {};
-        if (getenv_s(&length, value, "LEONIDA_GAMERTAG") != 0) return;
-        for (size_t i = 0; i + 1 < length; ++i)
-            if (static_cast<unsigned char>(value[i]) < 0x20 || static_cast<unsigned char>(value[i]) > 0x7e) {
+        for (const char c : value)
+            if (static_cast<unsigned char>(c) < 0x20 || static_cast<unsigned char>(c) > 0x7e) {
                 std::fprintf(stderr, "[rt] xgameruntime: LEONIDA_GAMERTAG is not printable ASCII; using \"Player\"\n");
                 return;
             }
-        std::memcpy(tag, value, length);
+        std::memcpy(tag, value.c_str(), value.size() + 1);
     });
     return tag;
 }
