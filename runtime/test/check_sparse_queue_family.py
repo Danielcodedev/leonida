@@ -29,7 +29,8 @@ SPARSE_FLAGS = "VkBufferCreateFlags = 7 (VK_BUFFER_CREATE_SPARSE_BINDING_BIT"
 MODE = re.compile(r"sharingMode:\s+VkSharingMode = (VK_SHARING_MODE_\w+)")
 COUNT = re.compile(r"queueFamilyIndexCount:\s+uint32_t = (\d+)")
 INDICES = re.compile(r"pQueueFamilyIndices\[(\d+)\]:\s+const uint32_t = (\d+)")
-# Each of the two runs gets 30 s, so both together stay inside the CTest TIMEOUT of 65 s (runtime/CMakeLists.txt).
+# Each of the two runs gets 30 s, so both together stay inside the CTest TIMEOUT of 65 s
+# (runtime/cmake/d3d12_vulkan.cmake).
 RUN_TIMEOUT = 30
 ACCESS_VIOLATION = 0xC0000005   # STATUS_ACCESS_VIOLATION, as Windows reports it in the exit code
 CASES = ["LAYER_MAP_COMPUTE_COPY_COMPUTE", "LAYER_MAP_COPY_COPY_COMPUTE", "LAYER_MAP_DIRECT_COPY_COMPUTE"]   # sorted

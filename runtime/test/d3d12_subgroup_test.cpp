@@ -189,7 +189,8 @@ Result run(vktest::Device& d, const std::filesystem::path& library, const leonid
     rt::d3d12::set_device_outer(inner, device.p);
 
     // Root signature: [0] four constants (s4..s7 in the console compute layout, D3D-448), the V# the shaders store
-    // through. The asm fixtures are built with LEONIDA_USER_DATA_SHIFT=4 to read it there (runtime/CMakeLists.txt).
+    // through. The asm fixtures are built with LEONIDA_USER_DATA_SHIFT=4 to read it there
+    // (runtime/cmake/d3d12_vulkan.cmake).
     D3D12_ROOT_PARAMETER param{};
     param.ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
     param.Constants = {0, 0, 4};

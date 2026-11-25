@@ -2,6 +2,8 @@
 
 #include "d3d12_trace.h"
 
+#include "../core/config.h"
+#include "../core/log.h"
 #include "../src/vulkan_present.h"
 
 #include <cerrno>
@@ -9,6 +11,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <string>
 
 namespace rt::d3d12 {
 
@@ -23,7 +26,7 @@ HRESULT from_pacer(std::int32_t value) { return HRESULT(value); }
 void log_once(bool& done, const char* text) {
     if (done) return;
     done = true;
-    std::fprintf(stderr, "[rt] present: %s\n", text);
+    RT_LOG_WARN("present: %s\n", text);
 }
 
 }  // namespace
@@ -34,33 +37,27 @@ XboxPresentation::XboxPresentation(std::unique_ptr<WindowPresenter> presenter, l
       pacer_(clock ? *clock : *own_clock_) {
     // A present waiting for a swapchain image gives up once SuspendX has been called.
     presenter_->set_abort([this] { return pacer_.suspended(); });
-    // LEONIDA_SDR_EOTF=gamma22 (or 2.2, any case) decodes SDR with a pure power of 2.2 instead of piecewise sRGB; "srgb" or
-    // unset keeps the default; anything else (also a value too long for the buffer, ERANGE) is logged once and ignored.
-    char eotf[32] = {};
-    std::size_t eotf_length = 0;
-    const errno_t env = getenv_s(&eotf_length, eotf, "LEONIDA_SDR_EOTF");
-    if (env == 0 && eotf_length > 1) {
-        if (!_stricmp(eotf, "gamma22") || !_stricmp(eotf, "2.2")) sdr_eotf_ = leonida::PresentPlanes::SdrEotf::gamma22;
-        else if (_stricmp(eotf, "srgb") != 0)
-            std::fprintf(stderr, "[rt] present: LEONIDA_SDR_EOTF=%s is not srgb, gamma22 or 2.2: piecewise sRGB used\n", eotf);
-    } else if (env == ERANGE) {
-        std::fprintf(stderr, "[rt] present: LEONIDA_SDR_EOTF is too long to be srgb, gamma22 or 2.2: piecewise sRGB used\n");
+    // present.sdr_eotf (LEONIDA_SDR_EOTF): gamma22 (or 2.2, any case) decodes SDR with a pure power of 2.2 instead
+    // of piecewise sRGB; "srgb" or unset keeps the default; anything else (also a value of 32 characters or more,
+    // the size of the buffer the variable was read into before it moved to the table) is logged once and ignored.
+    const std::string eotf = rt::config::get("present.sdr_eotf").text;
+    if (eotf.size() >= 32) {
+        RT_LOG_WARN("present: LEONIDA_SDR_EOTF is too long to be srgb, gamma22 or 2.2: piecewise sRGB "
+                    "used\n");
+    } else if (!_stricmp(eotf.c_str(), "gamma22") || !_stricmp(eotf.c_str(), "2.2")) {
+        sdr_eotf_ = leonida::PresentPlanes::SdrEotf::gamma22;
+    } else if (_stricmp(eotf.c_str(), "srgb") != 0) {
+        RT_LOG_WARN("present: LEONIDA_SDR_EOTF=%s is not srgb, gamma22 or 2.2: piecewise sRGB used\n",
+                    eotf.c_str());
     }
     // LEONIDA_PRESENT_UNCAP (any non-empty value other than "0") takes the frame-rate cap off: a WaitFrameEventX
     // hands a token out at once instead of at the next interval origin, and presents go unsynced (MAILBOX or
     // IMMEDIATE, not FIFO), so the frame rate is whatever the title renders. Registration and suspension still
     // apply, so the title keeps its call sequence.
-    {
-        char* value = nullptr;
-        std::size_t length = 0;
-        if (_dupenv_s(&value, &length, "LEONIDA_PRESENT_UNCAP") == 0 && value) {
-            if (value[0] != '\0' && std::strcmp(value, "0") != 0) {
-                pacer_.set_uncapped(true);
-                std::fprintf(stderr, "[rt] present: LEONIDA_PRESENT_UNCAP is set: frame events return at once and "
-                                     "presents do not wait for vblank\n");
-            }
-            std::free(value);
-        }
+    if (const std::string uncap = rt::config::get("present.uncap").text; !uncap.empty() && uncap != "0") {
+        pacer_.set_uncapped(true);
+        RT_LOG_INFO("present: LEONIDA_PRESENT_UNCAP is set: frame events return at once and "
+                    "presents do not wait for vblank\n");
     }
     display_white_thread_ = std::thread([this] { display_white_worker(); });
 }

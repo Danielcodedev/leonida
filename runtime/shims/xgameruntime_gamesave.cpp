@@ -45,6 +45,9 @@
 #include <XAsyncProvider.h>
 #include <XTaskQueue.h>
 
+#include "../core/config.h"
+#include "../core/log.h"
+
 namespace {
 
 namespace fs = std::filesystem;
@@ -167,10 +170,12 @@ std::string narrow(const std::wstring& w) {
 }
 
 fs::path save_root() {
+    // paths.save_dir (LEONIDA_SAVE_DIR). A folder of MAX_PATH * 2 characters or more is ignored, as before the
+    // setting moved to the table.
+    if (fs::path dir = rt::config::path("paths.save_dir"); !dir.empty() && dir.native().size() < MAX_PATH * 2)
+        return dir;
     wchar_t buffer[MAX_PATH * 2];
-    DWORD n = GetEnvironmentVariableW(L"LEONIDA_SAVE_DIR", buffer, static_cast<DWORD>(std::size(buffer)));
-    if (n > 0 && n < std::size(buffer)) return fs::path(buffer);
-    n = GetEnvironmentVariableW(L"LOCALAPPDATA", buffer, static_cast<DWORD>(std::size(buffer)));
+    const DWORD n = GetEnvironmentVariableW(L"LOCALAPPDATA", buffer, static_cast<DWORD>(std::size(buffer)));
     if (n > 0 && n < std::size(buffer)) return fs::path(buffer) / L"Leonida" / L"saves";
     return {};
 }
@@ -430,7 +435,7 @@ HRESULT open_provider(XUserHandle user, const char* config_id, XGameSaveProvider
     *out = p;
     static std::atomic<int> s_logged{0};
     if (s_logged.fetch_add(1) == 0)
-        std::fprintf(stderr, "[rt] xgamesave: offline provider for \"%s\" at %ls\n", config_id, user_dir.c_str());
+        RT_LOG_INFO("xgamesave: offline provider for \"%s\" at %ls\n", config_id, user_dir.c_str());
     return S_OK;
 }
 

@@ -49,6 +49,8 @@
 #include <thread>
 #include <vector>
 
+#include "../core/config.h"
+#include "../core/log.h"
 #include "gameinput.h"
 #include "gameinput_abi.h"
 #include "shims.h"
@@ -131,28 +133,31 @@ const rt::gameinput::HapticApi& haptics() { return *g_haptic_api.load(); }
 
 // ---- configuration ----------------------------------------------------------------------------------------------
 
-std::string env(const char* name) {
-    char buf[64];
-    const DWORD n = GetEnvironmentVariableA(name, buf, sizeof buf);
-    if (n == 0 || n >= sizeof buf) return {};
-    std::string s(buf, n);
+// A setting of the table (its variable, else leonida.toml), lower-cased; empty when nothing sets it. A value of 64
+// characters or more is ignored, as before the settings moved to the table. The messages below name the variable
+// also when the value came from the file.
+std::string env(rt::config::Name setting) {
+    const rt::config::Value value = rt::config::get(setting);
+    if (!value.is_set() || value.text.size() >= 64) return {};
+    std::string s = value.text;
     for (auto& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
     return s;
 }
 
 rt::gameinput::Config read_config() {
     rt::gameinput::Config c;
-    const std::string t = env("LEONIDA_DS_TRIGGERS");
+    const std::string t = env("input.ds_triggers");
     if (t == "off" || t == "0") c.ds_triggers = rt::gameinput::DsTriggerMode::Off;
     else if (t == "resistance") c.ds_triggers = rt::gameinput::DsTriggerMode::Resistance;
-    else if (!t.empty() && t != "rumble") std::fprintf(stderr, "[rt] gameinput: LEONIDA_DS_TRIGGERS=%s unknown, using rumble\n", t.c_str());
-    if (const std::string g = env("LEONIDA_DS_TRIGGER_GAIN"); !g.empty())
+    else if (!t.empty() && t != "rumble")
+        RT_LOG_WARN("gameinput: LEONIDA_DS_TRIGGERS=%s unknown, using rumble\n", t.c_str());
+    if (const std::string g = env("input.ds_trigger_gain"); !g.empty())
         c.ds_trigger_gain = std::clamp(static_cast<float>(std::atof(g.c_str())), 0.0f, 4.0f);
-    if (const std::string g = env("LEONIDA_MOUSE_SENSITIVITY"); !g.empty())
+    if (const std::string g = env("input.mouse_sensitivity"); !g.empty())
         c.mouse_sensitivity = std::clamp(static_cast<float>(std::atof(g.c_str())), 0.1f, 10.0f);
-    if (const std::string f = env("LEONIDA_DS_TRIGGER_FREQ"); !f.empty())
+    if (const std::string f = env("input.ds_trigger_freq"); !f.empty())
         c.ds_trigger_frequency = static_cast<uint8_t>(std::clamp(std::atoi(f.c_str()), 1, 255));
-    if (const std::string l = env("LEONIDA_DS_LIGHTBAR"); !l.empty()) {
+    if (const std::string l = env("input.ds_lightbar"); !l.empty()) {
         if (l == "off") {
             c.lightbar_set = true;
         } else if (l.size() == 6 && l.find_first_not_of("0123456789abcdef") == std::string::npos) {
@@ -162,19 +167,19 @@ rt::gameinput::Config read_config() {
             c.lightbar[1] = static_cast<uint8_t>(rgb >> 8);
             c.lightbar[2] = static_cast<uint8_t>(rgb);
         } else {
-            std::fprintf(stderr, "[rt] gameinput: LEONIDA_DS_LIGHTBAR=%s is not RRGGBB or off, ignored\n", l.c_str());
+            RT_LOG_WARN("gameinput: LEONIDA_DS_LIGHTBAR=%s is not RRGGBB or off, ignored\n", l.c_str());
         }
     }
-    if (env("LEONIDA_RUMBLE") == "0") c.rumble = false;
-    if (env("LEONIDA_GAMEINPUT_THREAD") == "0") c.background_thread = false;
-    const std::string k = env("LEONIDA_KEYBOARD_PAD");
+    if (env("input.rumble") == "0") c.rumble = false;
+    if (env("input.thread") == "0") c.background_thread = false;
+    const std::string k = env("input.keyboard_pad");
     if (k == "1" || k == "on" || k == "focus") c.keyboard_pad = rt::gameinput::KeyboardPadMode::Focused;
     else if (k == "always") c.keyboard_pad = rt::gameinput::KeyboardPadMode::Always;
     else if (!k.empty() && k != "0" && k != "off")
-        std::fprintf(stderr, "[rt] gameinput: LEONIDA_KEYBOARD_PAD=%s unknown (1, always or off), keyboard pad off\n",
-                     k.c_str());
+        RT_LOG_WARN("gameinput: LEONIDA_KEYBOARD_PAD=%s unknown (1, always or off), keyboard pad off\n",
+                    k.c_str());
     using leonida::InputFamily;
-    const std::string p = env("LEONIDA_PROMPTS");
+    const std::string p = env("input.prompts");
     if (p == "xbox") c.prompts = InputFamily::Xbox;
     else if (p == "playstation" || p == "ps5") c.prompts = InputFamily::PlayStation5;
     else if (p == "ps4") c.prompts = InputFamily::PlayStation4;
@@ -182,9 +187,9 @@ rt::gameinput::Config read_config() {
     else if (p == "nintendo" || p == "switch") c.prompts = InputFamily::Nintendo;
     else if (p == "keyboard") c.prompts = InputFamily::Keyboard;
     else if (!p.empty() && p != "auto")
-        std::fprintf(stderr, "[rt] gameinput: LEONIDA_PROMPTS=%s unknown (auto, xbox, playstation, ps5, ps4, ps3, "
-                             "nintendo or keyboard), following the devices\n", p.c_str());
-    if (const std::string m = env("LEONIDA_PROMPTS_SWITCH_MS"); !m.empty())
+        RT_LOG_WARN("gameinput: LEONIDA_PROMPTS=%s unknown (auto, xbox, playstation, ps5, ps4, ps3, "
+                    "nintendo or keyboard), following the devices\n", p.c_str());
+    if (const std::string m = env("input.prompts_switch_ms"); !m.empty())
         c.prompts_switch_ms = static_cast<uint32_t>(std::clamp(std::atoi(m.c_str()), 0, 2000));
     return c;
 }
@@ -1025,11 +1030,11 @@ void apply_prompt_config() {
     g_tracker.force(want);
     publish_active();
     if (want)
-        std::fprintf(stderr, "[rt] gameinput: LEONIDA_PROMPTS: input family set to %s\n",
-                     leonida::input_family_name(*want));
+        RT_LOG_INFO("gameinput: LEONIDA_PROMPTS: input family set to %s\n",
+                    leonida::input_family_name(*want));
     else
-        std::fprintf(stderr, "[rt] gameinput: LEONIDA_PROMPTS cleared: input family follows the devices (%s now)\n",
-                     leonida::input_family_name(g_tracker.active()));
+        RT_LOG_INFO("gameinput: LEONIDA_PROMPTS cleared: input family follows the devices (%s now)\n",
+                    leonida::input_family_name(g_tracker.active()));
 }
 
 Snapshot read_pad(Device* d) {
@@ -1274,10 +1279,10 @@ void open_raw(Device* d, const char* path) {
         // SDL reads Xbox pads on Windows through XInput ("XInput#n"); SDL's hidapi skips their XInput HID interface
         // (&IG_ in the path), which carries no full HID reports, so they have no raw I/O here.
         const bool xinput = path && std::strncmp(path, "XInput#", 7) == 0;
-        std::fprintf(stderr, "[rt] gameinput: %s: no raw HID (%s)\n", d->name.c_str(),
-                     xinput             ? "an XInput pad: SDL's hidapi does not open XInput HID interfaces"
-                     : path && *path    ? "its HID device could not be opened"
-                                        : "SDL reports no device path");
+        RT_LOG_WARN("gameinput: %s: no raw HID (%s)\n", d->name.c_str(),
+                    xinput             ? "an XInput pad: SDL's hidapi does not open XInput HID interfaces"
+                    : path && *path    ? "its HID device could not be opened"
+                                       : "SDL reports no device path");
         return;
     }
     std::vector<uint8_t> desc(4096);
@@ -1285,8 +1290,8 @@ void open_raw(Device* d, const char* path) {
     std::vector<rt::gameinput::RawReportSize> reports;
     const bool parsed = n > 0 && rt::gameinput::parse_report_descriptor(desc.data(), static_cast<size_t>(n), &reports);
     if (!parsed || reports.empty()) {
-        std::fprintf(stderr, "[rt] gameinput: %s: no raw HID (%s)\n", d->name.c_str(),
-                     n <= 0 ? "no report descriptor" : !parsed ? "malformed report descriptor" : "no reports declared");
+        RT_LOG_WARN("gameinput: %s: no raw HID (%s)\n", d->name.c_str(),
+                    n <= 0 ? "no report descriptor" : !parsed ? "malformed report descriptor" : "no reports declared");
         b->close(h);
         return;
     }
@@ -1347,7 +1352,7 @@ void open_pad(SDL_JoystickID jid, uint64_t ts) {
     State& s = g();
     SDL_Gamepad* p = SDL_OpenGamepad(jid);
     if (!p) {
-        std::fprintf(stderr, "[rt] gameinput: cannot open gamepad %u: %s\n", static_cast<unsigned>(jid), SDL_GetError());
+        RT_LOG_ERROR("gameinput: cannot open gamepad %u: %s\n", static_cast<unsigned>(jid), SDL_GetError());
         return;
     }
     const char* serial = SDL_GetGamepadSerial(p);
@@ -1478,10 +1483,10 @@ void open_pad(SDL_JoystickID jid, uint64_t ts) {
     d->last_snap = snap;
     push_reading(d, snap, ts);
     queue_event({CbType::Device, d, nullptr, ts, status, GameInputDeviceNoStatus, false, 0});
-    std::fprintf(stderr, "[rt] gameinput: connected %s (%04x:%04x, player %d%s%s%s%s)\n", d->name.c_str(),
-                 d->info.vendorId, d->info.productId, player + 1, d->is_dualsense ? ", DualSense trigger effects" : "",
-                 d->has_trigger_rumble ? ", trigger rumble" : "", d->has_motion ? ", gyro" : "",
-                 d->haptic ? ", force feedback" : "");
+    RT_LOG_INFO("gameinput: connected %s (%04x:%04x, player %d%s%s%s%s)\n", d->name.c_str(),
+                d->info.vendorId, d->info.productId, player + 1, d->is_dualsense ? ", DualSense trigger effects" : "",
+                d->has_trigger_rumble ? ", trigger rumble" : "", d->has_motion ? ", gyro" : "",
+                d->haptic ? ", force feedback" : "");
 }
 
 void close_pad(Device* d, uint64_t ts) {
@@ -1511,7 +1516,7 @@ void close_pad(Device* d, uint64_t ts) {
     d->history.clear();
     s.connected.erase(std::remove(s.connected.begin(), s.connected.end(), d), s.connected.end());
     queue_event({CbType::Device, d, nullptr, ts, GameInputDeviceNoStatus, old, false, 0});
-    std::fprintf(stderr, "[rt] gameinput: disconnected %s\n", d->name.c_str());
+    RT_LOG_INFO("gameinput: disconnected %s\n", d->name.c_str());
 }
 
 void ds_effect(float strength, uint8_t out[11]) {
@@ -1723,8 +1728,8 @@ void raw_mouse_thread() {
     HWND hwnd = CreateWindowExW(0, L"LeonidaRawMouse", L"", 0, 0, 0, 0, 0,
                                 HWND_MESSAGE, nullptr, inst, nullptr);
     if (!hwnd) {
-        std::fprintf(stderr, "[rt] gameinput: no raw mouse input (window: error %lu); using the cursor position\n",
-                     GetLastError());
+        RT_LOG_WARN("gameinput: no raw mouse input (window: error %lu); using the cursor position\n",
+                    GetLastError());
         return;
     }
     RAWINPUTDEVICE dev{};
@@ -1733,13 +1738,13 @@ void raw_mouse_thread() {
     dev.dwFlags = RIDEV_INPUTSINK;  // also while this (invisible) window has no focus; focus is checked per poll
     dev.hwndTarget = hwnd;
     if (!RegisterRawInputDevices(&dev, 1, sizeof(dev))) {
-        std::fprintf(stderr, "[rt] gameinput: no raw mouse input (register: error %lu); using the cursor position\n",
-                     GetLastError());
+        RT_LOG_WARN("gameinput: no raw mouse input (register: error %lu); using the cursor position\n",
+                    GetLastError());
         DestroyWindow(hwnd);
         return;
     }
     g_raw_ready = true;
-    std::fprintf(stderr, "[rt] gameinput: raw mouse input on (the right stick does not stop at the screen edge)\n");
+    RT_LOG_INFO("gameinput: raw mouse input on (the right stick does not stop at the screen edge)\n");
     MSG m;
     while (GetMessageW(&m, nullptr, 0, 0) > 0) DispatchMessageW(&m);
 }
@@ -1786,7 +1791,7 @@ bool is_keyboard_pad(SDL_JoystickID jid) { return jid != 0 && jid == g_keyboard.
 void detach_keyboard_pad() {
     if (g_keyboard.js) SDL_CloseJoystick(g_keyboard.js);
     if (g_keyboard.id) SDL_DetachVirtualJoystick(g_keyboard.id);
-    if (g_keyboard.id) std::fprintf(stderr, "[rt] gameinput: keyboard pad removed\n");
+    if (g_keyboard.id) RT_LOG_INFO("gameinput: keyboard pad removed\n");
     g_keyboard = {};
 }
 
@@ -1829,14 +1834,14 @@ bool attach_keyboard_pad() {
     g_keyboard.id = SDL_AttachVirtualJoystick(&d);
     g_keyboard.js = g_keyboard.id ? SDL_OpenJoystick(g_keyboard.id) : nullptr;
     if (!g_keyboard.js) {
-        std::fprintf(stderr, "[rt] gameinput: cannot attach the keyboard pad: %s\n", SDL_GetError());
+        RT_LOG_ERROR("gameinput: cannot attach the keyboard pad: %s\n", SDL_GetError());
         detach_keyboard_pad();
         g_keyboard.failed = true;
         return false;
     }
-    std::fprintf(stderr, "[rt] gameinput: keyboard pad attached (arrows d-pad, Enter A, Backspace B, X X, Y Y, "
-                         "Q/E shoulders, Esc Menu, Tab View, WASD left stick, mouse right stick, right/left "
-                         "button LT/RT)\n");
+    RT_LOG_INFO("gameinput: keyboard pad attached (arrows d-pad, Enter A, Backspace B, X X, Y Y, "
+                "Q/E shoulders, Esc Menu, Tab View, WASD left stick, mouse right stick, right/left "
+                "button LT/RT)\n");
     start_raw_mouse();
     return true;
 }
@@ -1913,15 +1918,15 @@ bool init_sdl() {
 #endif
     SDL_SetGamepadEventsEnabled(false);  // the shim reads state directly; nothing drains an event queue
     if (!SDL_InitSubSystem(SDL_INIT_GAMEPAD)) {
-        std::fprintf(stderr, "[rt] gameinput: SDL gamepad init failed: %s; no controllers\n", SDL_GetError());
+        RT_LOG_ERROR("gameinput: SDL gamepad init failed: %s; no controllers\n", SDL_GetError());
         s.sdl_failed = true;
         return false;
     }
     SDL_SetGamepadEventsEnabled(false);
     s.sdl_ready = true;
     const int v = SDL_GetVersion();
-    std::fprintf(stderr, "[rt] gameinput: SDL %d.%d.%d gamepads\n", SDL_VERSIONNUM_MAJOR(v), SDL_VERSIONNUM_MINOR(v),
-                 SDL_VERSIONNUM_MICRO(v));
+    RT_LOG_INFO("gameinput: SDL %d.%d.%d gamepads\n", SDL_VERSIONNUM_MAJOR(v), SDL_VERSIONNUM_MINOR(v),
+                SDL_VERSIONNUM_MICRO(v));
     return true;
 }
 
@@ -1972,8 +1977,8 @@ void poll_once() {
             edge != leonida::InputEdge::None) {
             publish_active();
             if (!g_tracker.forced())
-                std::fprintf(stderr, "[rt] gameinput: input in use: %s (%s, %s)\n",
-                             leonida::input_family_name(d->family), d->name.c_str(), leonida::input_edge_name(edge));
+                RT_LOG_INFO("gameinput: input in use: %s (%s, %s)\n",
+                            leonida::input_family_name(d->family), d->name.c_str(), leonida::input_edge_name(edge));
         }
         // A pad with sensors streams readings at ~125 Hz even when nothing else changes, so motion the title reads
         // between its frames is never stuck at the last button event; pads without sensors only read on change, as

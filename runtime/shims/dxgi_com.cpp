@@ -1,5 +1,6 @@
 #include "dxgi_com.h"
 #include "d3d12_stubs.h"
+#include "../core/log.h"
 
 #include <winternl.h>  // NTSTATUS, which d3dkmthk.h needs and WIN32_LEAN_AND_MEAN leaves out
 #include <d3dkmthk.h>
@@ -27,7 +28,7 @@ void stub(const char* method) {
     static std::mutex mutex;
     static std::set<std::string> seen;
     std::lock_guard lock(mutex);
-    if (seen.insert(method).second) std::fprintf(stderr, "[rt] dxgi: unimplemented %s\n", method);
+    if (seen.insert(method).second) RT_LOG_WARN("dxgi: unimplemented %s\n", method);
 }
 
 // IDXGIObject private data, shared by the factory, adapter and swapchain. SetPrivateData keeps a copy of the bytes;

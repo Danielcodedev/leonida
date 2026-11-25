@@ -14,10 +14,12 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path[:0] = [str(ROOT / "scripts"), str(ROOT / "runtime" / "test" / "shaders"), str(ROOT / "tools")]
+sys.path[:0] = [str(ROOT / "scripts"), str(ROOT / "runtime" / "test" / "shaders"), str(ROOT / "tools"),
+                str(ROOT / "tests")]
 import check  # noqa: E402
 import image_fuzz  # noqa: E402
 import run_gpu_tests  # noqa: E402
+import runtime_cmake  # noqa: E402
 
 SCRIPT = ROOT / "scripts" / "build_runtime.ps1"
 
@@ -63,7 +65,7 @@ class FallbackBuildsTheHarnesses(unittest.TestCase):
     def test_the_launcher_compiles_every_source_cmake_gives_gta6rt(self):
         """BUILD-680: main.cpp calls rt::fs::configure, but the fallback left out shims/file_system.cpp (LNK2019).
         Every source of CMake's add_executable(gta6rt ...) must be in the fallback's launcher list ($files)."""
-        cmake = (ROOT / "runtime" / "CMakeLists.txt").read_text(encoding="utf-8")
+        cmake = runtime_cmake.read()
         block = re.search(r"add_executable\(gta6rt\s+(.*?)\)", cmake, re.S).group(1)
         wanted = {item.replace("/", "\\") for item in block.split() if item.endswith(".cpp")}
         files = re.search(r"\$files = (.*?) \| ForEach-Object", self.body).group(1)
@@ -82,7 +84,7 @@ class FallbackBuildsTheHarnesses(unittest.TestCase):
         """BUILD-1457: a driver compiles on vk_pipeline_check's threads, and AMD's Windows compiler overflows the
         1 MB PE default. CMake links the checker with /STACK:<LEONIDA_PIPELINE_CHECK_STACK>; the fallback has to pass
         the same number on the checker's own cl line (a /link option applies to that one program)."""
-        cmake = (ROOT / "runtime" / "CMakeLists.txt").read_text(encoding="utf-8")
+        cmake = runtime_cmake.read()
         reserve = re.search(r"set\(LEONIDA_PIPELINE_CHECK_STACK (\d+)\)", cmake).group(1)
         self.assertGreaterEqual(int(reserve), 8 * 1024 * 1024)
         self.assertIn("target_link_options(vk_pipeline_check PRIVATE /STACK:${LEONIDA_PIPELINE_CHECK_STACK})", cmake)
@@ -95,7 +97,7 @@ class FallbackBuildsTheHarnesses(unittest.TestCase):
         header, and the driver compiles a pipeline's shaders on the thread that creates it. CMake links gta6rt with
         /STACK:<GTA6RT_STACK>; the fallback has to pass the same number, and it is the number run_entry gives the
         entry thread, so every game thread that asks for no size has the same room."""
-        cmake = (ROOT / "runtime" / "CMakeLists.txt").read_text(encoding="utf-8")
+        cmake = runtime_cmake.read()
         reserve = re.search(r"set\(GTA6RT_STACK (\d+)\)", cmake).group(1)
         self.assertGreaterEqual(int(reserve), 8 * 1024 * 1024)
         self.assertRegex(cmake, r"target_link_options\(gta6rt PRIVATE [^)]*/STACK:\$\{GTA6RT_STACK\}\)")
@@ -107,7 +109,7 @@ class FallbackBuildsTheHarnesses(unittest.TestCase):
         self.assertEqual(int(megabytes) << 20, int(reserve))
 
     def test_the_loader_gets_the_host_base_cmake_gives_it(self):
-        cmake = (ROOT / "runtime" / "CMakeLists.txt").read_text(encoding="utf-8")
+        cmake = runtime_cmake.read()
         base = re.search(r"set\(GTA6RT_HOST_BASE (/BASE:0x[0-9A-Fa-f]+)\)", cmake).group(1)
         self.assertRegex(cmake, r"target_link_options\(gta6rt PRIVATE [^)]*\$\{GTA6RT_HOST_BASE\}")
         lines = [line for line in self.body.splitlines() if "/Fe:gta6rt.exe" in line]

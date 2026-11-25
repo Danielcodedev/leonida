@@ -137,6 +137,8 @@ inline uint64_t extract_bits(uint64_t src, unsigned len, unsigned idx) {
 #include <atomic>
 #include <cstdio>
 
+#include "../core/log.h"
+
 namespace rt::cpu_emulation {
 
 struct Host {
@@ -293,8 +295,8 @@ inline LONG CALLBACK handler(EXCEPTION_POINTERS* info) {
         return EXCEPTION_CONTINUE_SEARCH;
     }
     if (count(d.op).fetch_add(1, std::memory_order_relaxed) == 0)
-        std::fprintf(stderr, "[rt] cpu: this CPU has no %s; emulating it (first at %p)\n", name(d.op),
-                     reinterpret_cast<void*>(c->Rip - d.length));
+        RT_LOG_WARN("cpu: this CPU has no %s; emulating it (first at %p)\n", name(d.op),
+                    reinterpret_cast<void*>(c->Rip - d.length));
     return EXCEPTION_CONTINUE_EXECUTION;
 }
 

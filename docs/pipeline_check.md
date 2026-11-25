@@ -306,8 +306,8 @@ A driver compiles on the thread that creates the shader module or the pipeline, 
 the shader's control-flow nesting. On Windows a thread that asks for no stack size gets the reserve written in the
 executable's PE header, 1 MB by default. That is the checker's main thread and every `std::thread` worker.
 
-`vk_pipeline_check` is linked with an **8 MB** reserve: `/STACK:8388608` in `runtime/CMakeLists.txt` and on the
-checker's `cl` line in `scripts/build_runtime.ps1`. The CTest `vk_pipeline_check_stack` reads `SizeOfStackReserve`
+`vk_pipeline_check` is linked with an **8 MB** reserve: `/STACK:8388608` in `runtime/cmake/vulkan_tools.cmake` and on
+the checker's `cl` line in `scripts/build_runtime.ps1`. The CTest `vk_pipeline_check_stack` reads `SizeOfStackReserve`
 back from the built file (`runtime/test/check_stack_reserve.cmake`; the program is not run), and
 `tests/test_build_runtime_fallback.py` keeps the two numbers the same.
 
@@ -336,8 +336,9 @@ Not measured: other AMD GPU families, other vendors' Windows drivers, and a corp
 (`runtime/shims/d3d12_vulkan_device.cpp`), so there the compiler runs on a game thread. The entry thread has 8 MB
 from `run_entry` (`runtime/shims/process_shim.h`). A thread the game starts with `dwStackSize` 0, a thread-pool
 thread and a `std::thread` of the shims get the reserve in `gta6rt.exe`'s header, because the game's `CreateThread`
-is Windows' own. `gta6rt` is therefore linked with the same 8 MB (`GTA6RT_STACK` in `runtime/CMakeLists.txt`, and
-the loader's `cl` line in `scripts/build_runtime.ps1`). The CTest `gta6rt_stack` reads the header, and
+is Windows' own. `gta6rt` is therefore linked with the same 8 MB (`GTA6RT_STACK` in
+`runtime/cmake/windows_runtime.cmake`, and the loader's `cl` line in `scripts/build_runtime.ps1`). The CTest
+`gta6rt_stack` reads the header, and
 `run_tiny_game_stack` asks Windows from inside a program the loader runs: the entry thread and a thread created
 with `dwStackSize` 0 both report 8 MB. Not covered: a thread the title creates with an explicit smaller size keeps
 that size. Which threads the game creates pipelines on is not known without its executable.

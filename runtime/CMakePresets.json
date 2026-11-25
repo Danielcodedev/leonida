@@ -1,0 +1,53 @@
+{
+  "version": 5,
+  "cmakeMinimumRequired": { "major": 3, "minor": 24, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "generator": "Ninja"
+    },
+    {
+      "name": "dev",
+      "displayName": "dev",
+      "description": "For working on the runtime: no optimisation, assertions on, diagnostics compiled in",
+      "inherits": "base",
+      "binaryDir": "${sourceDir}/build-dev",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "LEONIDA_DIAGNOSTICS": "ON"
+      }
+    },
+    {
+      "name": "release",
+      "displayName": "release",
+      "description": "What a player runs: optimised, with debug information, no diagnostics. Builds into runtime/build",
+      "inherits": "base",
+      "binaryDir": "${sourceDir}/build",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "LEONIDA_DIAGNOSTICS": "OFF"
+      }
+    },
+    {
+      "name": "diag",
+      "displayName": "diag",
+      "description": "The release build with diagnostics compiled in, for finding a fault at release speed",
+      "inherits": "release",
+      "binaryDir": "${sourceDir}/build-diag",
+      "cacheVariables": {
+        "LEONIDA_DIAGNOSTICS": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    { "name": "dev", "configurePreset": "dev" },
+    { "name": "release", "configurePreset": "release" },
+    { "name": "diag", "configurePreset": "diag" }
+  ],
+  "testPresets": [
+    { "name": "dev", "configurePreset": "dev", "output": { "outputOnFailure": true } },
+    { "name": "release", "configurePreset": "release", "output": { "outputOnFailure": true } },
+    { "name": "diag", "configurePreset": "diag", "output": { "outputOnFailure": true } }
+  ]
+}

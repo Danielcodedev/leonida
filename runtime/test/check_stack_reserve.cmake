@@ -54,6 +54,6 @@ read_le("${TOOL}" ${reserve_offset} ${width} reserve)
 
 if(reserve LESS WANT)
   message(FATAL_ERROR "${TOOL} reserves ${reserve} bytes of stack, expected at least ${WANT}: the link option "
-                      "from runtime/CMakeLists.txt (BUILD-1457) did not reach the linker")
+                      "from runtime/cmake/*.cmake (BUILD-1457) did not reach the linker")
 endif()
 message(STATUS "stack reserve: ${reserve} bytes (at least ${WANT} wanted)")

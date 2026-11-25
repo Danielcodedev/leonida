@@ -106,7 +106,7 @@ The first boot with the executable settles most of this: the dry-run report show
   7. a zero size: a success that touches no memory (an assumption: the reference does not say);
   8. a range past the end of the file (`E_DSTORAGE_END_OF_FILE`), then a destination or source the process cannot
      access (`E_DSTORAGE_ACCESS_VIOLATION`; the worker survives it). This needs asynchronous exceptions under
-     clang-cl, so `runtime/CMakeLists.txt` builds `dstorage.cpp` with `/EHa` there; MSVC always catches it.
+     clang-cl, so `runtime/cmake/windows_runtime.cmake` builds `dstorage.cpp` with `/EHa` there; MSVC always catches it.
 
   Step 7 does not apply to a zlib request (its `DestinationSize` is never 0 after step 5); its stream fails as
   described next.

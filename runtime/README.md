@@ -22,6 +22,38 @@ cmake -S runtime -B runtime/build
 cmake --build runtime/build --config RelWithDebInfo
 ```
 
+`runtime/CMakePresets.json` names three builds. They use Ninja, so run them from an x64 Native Tools prompt, inside
+`runtime/`:
+
+| Preset | Build type | `LEONIDA_DIAGNOSTICS` | Folder |
+|---|---|---|---|
+| `dev` | `Debug` | on | `runtime/build-dev` |
+| `release` | `RelWithDebInfo` | off | `runtime/build` |
+| `diag` | `RelWithDebInfo` | on | `runtime/build-diag` |
+
+```powershell
+cmake --preset diag
+cmake --build --preset diag
+ctest --preset diag
+```
+
+`LEONIDA_DIAGNOSTICS=ON` compiles every target with `LEONIDA_DIAGNOSTICS` defined; code that only helps to find a
+fault belongs behind it. `release` shares `runtime/build` with the commands above: a folder configured with another
+generator has to be removed before the preset can use it.
+
+`runtime/CMakeLists.txt` holds the options and the order of the build; the targets are in the files it includes:
+
+| File | What it defines |
+|---|---|
+| `runtime/cmake/windows_runtime.cmake` | `gta6rt.exe`, the libraries its shims link, the shim test programs |
+| `runtime/cmake/runtime_tests.cmake` | the tests that need no Vulkan headers, the stand-in titles (`tiny_*`) |
+| `runtime/cmake/vulkan_tools.cmake` | the standalone Vulkan tools and their tests |
+| `runtime/cmake/d3d12_vulkan.cmake` | the D3D12 COM objects over the Vulkan backend and their tests |
+| `runtime/cmake/vulkan_cpu_tests.cmake` | the tests of the Vulkan layer that need its headers but no GPU |
+
+A test that checks the build by reading it uses `tests/runtime_cmake.py`, which reads these files along with
+`runtime/CMakeLists.txt`.
+
 Requirements: Windows x64, Visual Studio 2022 with the C++ desktop workload. The GPU tools need the
 Vulkan SDK; the runtime and CPU tests do not. The loader is x64-only and the PE mapper rejects any
 other machine.
@@ -129,6 +161,60 @@ With `LEONIDA_RNG_SEED=<number>` (decimal, or hexadecimal with `0x`; read once w
 `BCryptGenRandom` on the RNG algorithms answers from a seeded splitmix64 generator instead of the host's, so two
 runs with the same seed get the same bytes. The shim prints `[rt] bcrypt: deterministic LEONIDA_RNG_SEED enabled`
 with the seed on stderr; a seed of 0 uses a fixed non-zero state. Unset, the host's generator answers as before.
+
+## Settings: `leonida.toml` and `gta6rt config`
+
+Every setting of the runtime is a row of one table, `kSettings` in `runtime/core/config.h`: a name in the settings
+file (`section.name`), an environment variable and a default. A value is taken from the first of these that has one:
+
+1. the environment variable, when it is set and not empty;
+2. the settings file;
+3. the default.
+
+The settings file is the one `LEONIDA_CONFIG` names, else `leonida.toml` in the folder of `gta6rt.exe`, if there is
+one. `runtime/leonida.example.toml` lists every setting with its default and its variable; copy it and remove the
+`# ` in front of what you change. The file is read once, when `gta6rt` starts. A section or name that is not in the
+table, a name set twice, or a `LEONIDA_CONFIG` that names no file ends the run with exit code 2 and a line such as
+`leonida.toml:12: there is no setting vulkan.validaton`, so a misspelt setting cannot pass as one that does nothing.
+
+The format is the part of TOML the file needs: `[section]` lines, `name = value` lines and `#` comments. A value is
+text in single quotes (taken as written, so a Windows path needs no doubled backslashes), text in double quotes
+(only `\\` and `\"` are escapes), a number, or `true`/`false`. `''` leaves a setting unset.
+
+`gta6rt config` prints the file in use and one line per setting: its name, where its value comes from (`default`,
+`file` or `environment`), its variable and the value.
+
+```text
+settings file: C:\leonida\runtime\build\leonida.toml
+system.gamertag               environment  LEONIDA_GAMERTAG                  Tester
+vulkan.validation             file         LEONIDA_VK_VALIDATION             1
+vulkan.arena_mb               default      LEONIDA_ARENA_MB                  256
+```
+
+Only `gta6rt` loads a settings file. The test programs and tools load none, so for them a setting comes from its
+environment variable or is the default.
+
+## Log levels: `LEONIDA_LOG`
+
+The runtime's diagnostics are the `[rt] <module>: ...` lines on stderr. Each has a level: `error`, `warn`, `info`
+or `debug`. `LEONIDA_LOG` (`log.level` in `leonida.toml`) names the highest level that is printed: `off`, `error`,
+`warn`, `info`, `debug` or `trace`, in any case. A level prints its own lines and those of the levels before it;
+`off` prints none. The default is `debug`, which prints what the runtime printed before it had levels; no line has
+the level `trace` yet. There is one level for all modules.
+
+A value that is not a level prints one warning that lists the levels, and `debug` is used:
+
+```text
+[rt] log: LEONIDA_LOG=loud unknown (off, error, warn, info, debug or trace), using debug
+```
+
+Not filtered, because they are answers of the program and not log lines: the usage text and the `error: ...` lines
+of the command line, the binding report, the `gta6rt config` table and the `[d3d12-trace]` lines of
+`--trace-d3d12`. `gta6rt` reads the setting once, at startup. The test programs do not read it and log at the
+default.
+
+In the code a log line is one of the macros of `runtime/core/log.h`, such as `RT_LOG_WARN("module: text\n", ...)`;
+the macro adds the `[rt] ` prefix. The header needs no library, so a header-only part of the runtime can log.
 
 ## PE loader
 
@@ -406,8 +492,13 @@ blocks the import-driven work:
   console-only pipeline call, and the rest is open (`docs/d3d12_vulkan.md`, question 2).
 - The command-queue and fence extensions: the proxies forward the public slots, and the console's own methods past
   them (`PresentX`, `SuspendX`, `ResumeX`) have unknown slots, so they are refused with a log.
-  `PresentX` and the frame events themselves are implemented (`shims/xbox_present.*`, `xbox_present_test`) but
-  nothing reaches them yet: their queue and device slots are unmeasured.
+  `PresentX` and the frame events themselves are implemented (`shims/xbox_present.*`, `xbox_present_test`), and the
+  proxies have a place to hang them: a frame-event sink on device slots 78/79/80 and a present sink on the queue
+  (`shims/d3d12_xs_device.h`). `gta6rt` sets neither sink yet, so the frame calls still get the proxy's own answers
+  and a `PresentX` is still refused. The `PresentX` slot is not measured for this title (public code gives 30 for
+  an older runtime layout and 32 for a newer one), so no slot is taken for it by default:
+  `LEONIDA_XS_PRESENT_X_SLOT` (`d3d12.present_x_slot` in `leonida.toml`) names it, a queue slot from 19 to 127. A
+  value outside that range is logged once and ignored. The setting is read once per run.
 - Most of the `xgameruntime` surface: an offline shim covers `XGameRuntimeInitialize`, device/console queries,
   `XTaskQueue` and `XAsync`, and `QueryApiImpl` serves `XThreadingImpl`, `XErrorImpl`, `XNetworkingImpl`,
   `XPersistentLocalStorageImpl` and `XSystemImpl` (see `xgameruntime_test`); any other class is refused with a log.

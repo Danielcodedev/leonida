@@ -283,6 +283,27 @@ int main() {
                     name[c.size()] == ',' || name[c.size()] == ' ')) return true;
             return false;
         };
+        // D3D12_RESOURCE_HEAP_TIER_1 lets a heap hold one resource category only, so a host at that tier refuses the
+        // heap of a placed case that does not set two of the three DENY flags (measured on a GTX 1070 Ti, NVIDIA
+        // 582.66: E_INVALIDARG from CreateHeap; WARP on the same PC reports tier 2 and accepts it). The layer
+        // accepts such a heap on every GPU. On a tier 1 host only that pair is excused, for the case's "created"
+        // value: the layer's S_OK against the host's E_INVALIDARG.
+        D3D12_FEATURE_DATA_D3D12_OPTIONS host_options{};
+        const bool host_tier1 =
+            SUCCEEDED(host->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS, &host_options, sizeof(host_options))) &&
+            host_options.ResourceHeapTier == D3D12_RESOURCE_HEAP_TIER_1;
+        std::vector<std::string> mixed_heap_created;
+        for (const Case& c : cases()) {
+            const UINT deny = UINT(c.flags) & UINT(D3D12_HEAP_FLAG_DENY_BUFFERS | D3D12_HEAP_FLAG_DENY_RT_DS_TEXTURES |
+                                                   D3D12_HEAP_FLAG_DENY_NON_RT_DS_TEXTURES);
+            if (c.kind == Kind::placed && !(deny & (deny - 1)))  // fewer than two DENY flags
+                mixed_heap_created.push_back(std::string(c.name) + ": created");
+        }
+        const auto mixed_heap = [&](const std::string& name) {
+            for (const std::string& c : mixed_heap_created)
+                if (name == c) return true;
+            return false;
+        };
         std::printf("heap properties: host %s (UMA %d, the layer's UMA %d)\n", host_name.c_str(), host_arch.UMA,
                     our_arch.UMA);
         // A resource one side couldn't create has fewer entries: compare case by case on the names both have.
@@ -308,6 +329,15 @@ int main() {
             if (b == kFaulted) {
                 std::printf("heap properties %s: the host faults, not compared (ours 0x%llx)\n", ours.names[i].c_str(),
                             static_cast<unsigned long long>(a));
+                ++skipped;
+                continue;
+            }
+            if (host_tier1 && mixed_heap(ours.names[i]) && a == std::uint32_t(S_OK) &&
+                b == std::uint32_t(E_INVALIDARG)) {
+                std::printf("heap properties %s: not comparable on this host (resource heap tier 1 refuses a heap "
+                            "of more than one resource category; ours 0x%llx, host 0x%llx)\n",
+                            ours.names[i].c_str(), static_cast<unsigned long long>(a),
+                            static_cast<unsigned long long>(b));
                 ++skipped;
                 continue;
             }

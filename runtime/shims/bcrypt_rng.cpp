@@ -21,7 +21,10 @@ using NTSTATUS = LONG;
 #include <cstring>
 #include <cwchar>
 #include <new>
+#include <string>
 
+#include "../core/config.h"
+#include "../core/log.h"
 #include "shims.h"
 
 namespace rt::bcrypt_rng {
@@ -77,14 +80,14 @@ BOOL CALLBACK init_bcrypt_once(PINIT_ONCE, PVOID, PVOID*) {
         g_rtl_gen_random = reinterpret_cast<RtlGenRandomFn>(GetProcAddress(adv, "SystemFunction036"));
     }
 
-    char seed_buf[64]{};
-    const DWORD len = GetEnvironmentVariableA("LEONIDA_RNG_SEED", seed_buf, static_cast<DWORD>(sizeof(seed_buf)));
+    // A value of 64 characters or more is not taken as a seed, as before the setting moved to the table.
+    const std::string seed_text = rt::config::get("loader.rng_seed").text;
     uint64_t seed = 0;
-    if (len > 0 && len < sizeof(seed_buf) && parse_u64(seed_buf, seed)) {
+    if (seed_text.size() < 64 && parse_u64(seed_text.c_str(), seed)) {
         g_seeded_mode = true;
         g_prng_state = seed ? seed : 0x9E3779B97F4A7C15ULL;
-        std::fprintf(stderr, "[rt] bcrypt: deterministic LEONIDA_RNG_SEED enabled (0x%llx)\n",
-                     static_cast<unsigned long long>(seed));
+        RT_LOG_INFO("bcrypt: deterministic LEONIDA_RNG_SEED enabled (0x%llx)\n",
+                    static_cast<unsigned long long>(seed));
     }
     return TRUE;
 }

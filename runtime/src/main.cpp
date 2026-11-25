@@ -24,6 +24,7 @@
 #include <filesystem>
 #include <map>
 #include <string>
+#include <string_view>
 #include <system_error>
 #include <vector>
 
@@ -33,6 +34,8 @@
 #include "host_cpu.h"
 #include "mods.h"
 #include "pe_loader.h"
+#include "../core/config.h"
+#include "../core/log.h"
 #include "../shims/d3d12_trace.h"
 #include "../shims/d3d12_xs_device.h"
 #include "../shims/file_system.h"
@@ -52,17 +55,57 @@ const char* binding_name(rt::Binding b) {
     }
 }
 
+// The folder of gta6rt.exe; empty when Windows does not give its path.
+std::filesystem::path program_dir() {
+    std::wstring self(32768, L'\0');
+    const DWORD n = GetModuleFileNameW(nullptr, self.data(), static_cast<DWORD>(self.size()));
+    if (!n || n >= self.size()) return {};
+    return std::filesystem::path(self.substr(0, n)).parent_path();
+}
+
 int usage() {
     std::fprintf(stderr,
-                 "usage: gta6rt --dry-run <image> [--game-dir DIR] [--overlay DIR] [--mods DIR] [--archetype-lookup RVA[,ARG]] [--view-mode-getter RVA] [--trace FILE]\n"
+                 "usage: gta6rt config\n"
+                 "       gta6rt --dry-run <image> [--game-dir DIR] [--overlay DIR] [--mods DIR] [--archetype-lookup RVA[,ARG]] [--view-mode-getter RVA] [--trace FILE]\n"
                  "       gta6rt --init <image> [--game-dir DIR] [--overlay DIR] [--mods DIR] [--archetype-lookup RVA[,ARG]] [--view-mode-getter RVA] [--trace-d3d12] [--trace FILE]\n"
                  "       gta6rt --run <exe> [--game-dir DIR] [--overlay DIR] [--mods DIR] [--archetype-lookup RVA[,ARG]] [--view-mode-getter RVA] [--trace-d3d12] [--trace FILE] [-- game arguments...]\n");
     return 2;
 }
 
+// Prints UTF-8 text to stdout: as wide text on a console, which shows a path the code page lacks, and as the bytes
+// themselves into a pipe or a file.
+void print_utf8(const std::string& text) {
+    const HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
+    DWORD mode;
+    if (GetConsoleMode(out, &mode)) {
+        const int size = MultiByteToWideChar(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), nullptr, 0);
+        std::wstring wide(static_cast<size_t>(size > 0 ? size : 0), L'\0');
+        if (size > 0) MultiByteToWideChar(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), wide.data(), size);
+        std::fflush(stdout);
+        DWORD written;
+        if (WriteConsoleW(out, wide.data(), static_cast<DWORD>(wide.size()), &written, nullptr)) return;
+    }
+    std::fwrite(text.data(), 1, text.size(), stdout);
+}
+
 }  // namespace
 
 int wmain(int argc, wchar_t** argv) {
+    // The settings file, before anything reads a setting (core/config.h). A file that cannot be read, or that names
+    // a setting that does not exist, ends the run: a misspelt setting must not pass as one that does nothing.
+    if (std::string error; !rt::config::load(program_dir(), &error)) {
+        std::fprintf(stderr, "error: %s\n", error.c_str());
+        return 2;
+    }
+    // The log level (core/log.h), before the first "[rt]" line. A gta6rt that was started again to reserve the image
+    // range (base_reservation.h) reads the same setting; the first one already printed the warning for a value that
+    // is not a level.
+    rt::log::apply_settings(!rt::base_reservation::inherited().has_value());
+    // `gta6rt config`, alone on the command line: every setting, its value and where the value comes from.
+    if (argc == 2 && std::wstring_view(argv[1]) == L"config") {
+        print_utf8(rt::config::report());
+        return 0;
+    }
     std::filesystem::path image, game_dir, overlay_dir, mods_dir;
     uint32_t archetype_lookup_rva = 0;  // --archetype-lookup RVA[,ARG]: the game's archetype lookup by hash
     int archetype_lookup_arg = 0;
@@ -121,15 +164,11 @@ int wmain(int argc, wchar_t** argv) {
     };
     game_dir = game_dir.empty() ? absolute_or_same(image).parent_path() : absolute_or_same(game_dir);
     if (!overlay_dir.empty()) overlay_dir = absolute_or_same(overlay_dir);
-    // LEONIDA_SHADERS too: the D3D12 device reads it at the title's first pipeline state, after it may have moved.
-    if (const DWORD size = GetEnvironmentVariableW(L"LEONIDA_SHADERS", nullptr, 0)) {
-        std::wstring shaders(size, L'\0');
-        const DWORD n = GetEnvironmentVariableW(L"LEONIDA_SHADERS", shaders.data(), size);
-        if (n && n < size) {
-            shaders.resize(n);
-            SetEnvironmentVariableW(L"LEONIDA_SHADERS", absolute_or_same(shaders).c_str());
-        }
-    }
+    // paths.shaders (LEONIDA_SHADERS, else leonida.toml) too: the D3D12 device reads it at the title's first
+    // pipeline state, after it may have moved. The absolute path goes into the variable, which wins over the file,
+    // so a relative path in either is taken from the folder gta6rt was started in.
+    if (const std::filesystem::path shaders = rt::config::path("paths.shaders"); !shaders.empty())
+        SetEnvironmentVariableW(L"LEONIDA_SHADERS", absolute_or_same(shaders).c_str());
     // An image without relocations whose range this process already uses (arm64 Wine on macOS) runs in a new
     // process that has the range reserved from the start (base_reservation.h); that process does not do this again.
     if (!rt::base_reservation::inherited())
@@ -146,28 +185,36 @@ int wmain(int argc, wchar_t** argv) {
     }
     {
         const leonida::mods::LoadResult mods = leonida::mods::load_mods(mods_dir);
-        for (const std::string& e : mods.errors) std::fprintf(stderr, "[rt] mods: skipped %s\n", e.c_str());
+        for (const std::string& e : mods.errors) RT_LOG_WARN("mods: skipped %s\n", e.c_str());
         for (const auto& m : mods.mods) {
-            std::fprintf(stderr, "[rt] mods: %s%s\n", m.name.c_str(), m.enabled ? "" : " (disabled)");
+            RT_LOG_INFO("mods: %s%s\n", m.name.c_str(), m.enabled ? "" : " (disabled)");
             for (const auto& sw : m.archetype_swaps)
-                std::fprintf(stderr, "[rt] mods:   archetype %s (0x%08X) -> %s (0x%08X)\n", sw.from_name.c_str(),
-                             sw.from, sw.to_name.c_str(), sw.to);
+                RT_LOG_INFO("mods:   archetype %s (0x%08X) -> %s (0x%08X)\n", sw.from_name.c_str(),
+                            sw.from, sw.to_name.c_str(), sw.to);
         }
         leonida::mods::set_active(leonida::mods::ArchetypeSwaps(mods.mods));
         const leonida::mods::CameraView camera = leonida::mods::camera_of(mods.mods);
         leonida::mods::set_active_camera(camera);
         if (camera.first_person)
-            std::fprintf(stderr, "[rt] mods: first-person view (value %u) for %s%s\n", camera.first_person_value,
-                         camera.contexts.empty() ? "every context" : "the listed contexts",
-                         view_mode_getter_rva ? "" : "; not applied: no --view-mode-getter RVA for this executable");
-        if (leonida::mods::active().size())
-            std::fprintf(stderr, archetype_lookup_rva ? "[rt] mods: %zu archetype swap(s) loaded\n"
-                                 : "[rt] mods: %zu archetype swap(s) loaded; not applied: no --archetype-lookup RVA for "
-                                   "this executable (docs/modding.md)\n", leonida::mods::active().size());
+            RT_LOG_INFO("mods: first-person view (value %u) for %s%s\n", camera.first_person_value,
+                        camera.contexts.empty() ? "every context" : "the listed contexts",
+                        view_mode_getter_rva ? "" : "; not applied: no --view-mode-getter RVA for this executable");
+        if (leonida::mods::active().size()) {
+            if (archetype_lookup_rva)
+                RT_LOG_INFO("mods: %zu archetype swap(s) loaded\n", leonida::mods::active().size());
+            else
+                RT_LOG_WARN("mods: %zu archetype swap(s) loaded; not applied: no --archetype-lookup RVA for "
+                            "this executable (docs/modding.md)\n", leonida::mods::active().size());
+        }
     }
     rt::d3d12_trace::set_enabled(trace_d3d12);
     // Slot 133 imports the title's pages; xmem commits them on first touch, so they are committed first.
     rt::d3d12_xs::set_placed_at_va_pages_hook(&rt::xmem::commit_physical_range);
+    // loader.skip_int3 (LEONIDA_SKIP_INT3), set before the trace's exception handler exists. The variable turns it on
+    // with any value, also 0, as before the setting moved to the table; in leonida.toml only true (or a value other
+    // than 0) does, so that skip_int3 = false there means off.
+    if (const rt::config::Value skip = rt::config::get("loader.skip_int3"); skip.is_set())
+        rt::startup_trace::set_skip_int3(skip.source == rt::config::Source::Environment || skip.text != "0");
     if (int trace_error = 0; !trace_file.empty() && !rt::startup_trace::open(trace_file.c_str(), &trace_error)) {
         std::fprintf(stderr, trace_error == EEXIST ? "error: the trace file already exists; --trace only creates a new file\n"
                                                    : "error: cannot create the trace file\n");
@@ -176,12 +223,12 @@ int wmain(int argc, wchar_t** argv) {
     // The console's Zen 2 instructions this CPU may lack (docs/cpu_features.md): emulated on #UD. Installed after the
     // trace's handler so it runs first, and an emulated instruction is not recorded as an exception.
     if (const auto host = rt::cpu_emulation::detect_host(); !host.sse4a || !host.clzero || !host.monitorx || !host.clwb)
-        std::fprintf(stderr, "[rt] cpu: this CPU lacks%s%s%s%s; the game's uses are emulated (docs/cpu_features.md)\n",
-                     host.sse4a ? "" : " SSE4a", host.clzero ? "" : " CLZERO", host.monitorx ? "" : " MONITORX",
-                     host.clwb ? "" : " CLWB");
+        RT_LOG_WARN("cpu: this CPU lacks%s%s%s%s; the game's uses are emulated (docs/cpu_features.md)\n",
+                    host.sse4a ? "" : " SSE4a", host.clzero ? "" : " CLZERO", host.monitorx ? "" : " MONITORX",
+                    host.clwb ? "" : " CLWB");
     if (!rt::cpu_emulation::install())
-        std::fprintf(stderr, "[rt] cpu: AddVectoredExceptionHandler failed (error %lu); instructions this CPU lacks "
-                             "will stop the game\n", GetLastError());
+        RT_LOG_ERROR("cpu: AddVectoredExceptionHandler failed (error %lu); instructions this CPU lacks "
+                     "will stop the game\n", GetLastError());
 
     try {
         rt::Loader loader(game_dir);
@@ -192,10 +239,10 @@ int wmain(int argc, wchar_t** argv) {
             const auto r = leonida::hooks::hook_image_results(main_module.base, view_mode_getter_rva,
                                                               &leonida::mods::override_view_mode);
             if (r.ok)
-                std::fprintf(stderr, "[rt] mods: view-mode getter at RVA 0x%X hooked: %zu direct call(s) redirected\n",
-                             view_mode_getter_rva, r.redirected);
+                RT_LOG_INFO("mods: view-mode getter at RVA 0x%X hooked: %zu direct call(s) redirected\n",
+                            view_mode_getter_rva, r.redirected);
             else
-                std::fprintf(stderr, "[rt] mods: view-mode getter at RVA 0x%X not hooked: %s\n", view_mode_getter_rva,
+                RT_LOG_ERROR("mods: view-mode getter at RVA 0x%X not hooked: %s\n", view_mode_getter_rva,
                              r.error);
         }
         if (archetype_lookup_rva) {
@@ -203,10 +250,10 @@ int wmain(int argc, wchar_t** argv) {
                 main_module.base, archetype_lookup_rva,
                 [](uint32_t hash) { return leonida::mods::active().remap(hash); }, archetype_lookup_arg);
             if (r.ok)
-                std::fprintf(stderr, "[rt] mods: archetype lookup at RVA 0x%X hooked (argument %d): %zu direct "
-                                     "call(s) redirected\n", archetype_lookup_rva, archetype_lookup_arg, r.redirected);
+                RT_LOG_INFO("mods: archetype lookup at RVA 0x%X hooked (argument %d): %zu direct "
+                            "call(s) redirected\n", archetype_lookup_rva, archetype_lookup_arg, r.redirected);
             else
-                std::fprintf(stderr, "[rt] mods: archetype lookup at RVA 0x%X not hooked: %s\n", archetype_lookup_rva,
+                RT_LOG_ERROR("mods: archetype lookup at RVA 0x%X not hooked: %s\n", archetype_lookup_rva,
                              r.error);
         }
         if (run) rt::process::set_command_line(image.filename().wstring(), game_args);

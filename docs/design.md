@@ -114,7 +114,7 @@ SPIRV-Tools 2026.1 validates this fixture. Version 2025.1 reports a known error 
 It sets up MSVC through `vcvars64.bat` and builds at BelowNormal priority on half the cores, writing to `runtime\build\`.
 If VS's "C++ CMake tools" component is installed, it uses CMake and Ninja. Otherwise it calls `cl` directly. That
 component may not be installed, and the devkitPro MSYS `cmake` on PATH can't build MSVC projects. When you
-add a source file, add it to `runtime\CMakeLists.txt` and to the file list in `build_runtime.ps1`.
+add a source file, add it to `runtime\cmake\windows_runtime.cmake` and to the file list in `build_runtime.ps1`.
 
 ## Asset status (no exe needed)
 

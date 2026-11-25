@@ -90,7 +90,10 @@ and `state = 0xFFFFFFFF`, which isn't a valid PC state. At the first call, `va` 
 range the title had just reserved, and `desc` is a buffer of that range's size with Xbox bits in `Flags` above
 the PC flags. The shape matches the console `CreatePlacedResourceX`. A buffer on those pages is imported with
 `VK_EXT_external_memory_host` where the driver allows it, so the title's writes are the GPU's reads; a driver that
-refuses falls back to a committed buffer. A texture gets a committed texture whose `GetGPUVirtualAddress` is the
+refuses falls back to a committed buffer. So does a buffer placed inside a page at an offset the driver cannot bind
+it at: NVIDIA 582.66 on a GTX 1070 Ti binds such a buffer only at a multiple of 256 bytes, so one placed 64 bytes
+into a page is not imported there (`d3d12_existing_heap_test`).
+A texture gets a committed texture whose `GetGPUVirtualAddress` is the
 title's address (the console behavior: a title clears a texture through that pointer), but its pixels do not alias
 the title's pages yet. Both paths limit `Flags` to the PC bits; the buffer path also makes the Xbox layout word
 `ROW_MAJOR`.

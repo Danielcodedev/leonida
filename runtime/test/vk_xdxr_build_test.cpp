@@ -2,7 +2,7 @@
 // device the Vulkan loader picks and written to <out dir>/<case>.bin, the acceleration structure as the GPU left it,
 // with <case>.json describing the scene: its address and the triangles (or instances) it was built from.
 // `python -I tools/xdxr_bvh.py check-build <out dir>` then validates every structure and traces rays through it
-// against brute force (ctest runs both; see CMakeLists.txt).
+// against brute force (ctest runs both; see cmake/vulkan_tools.cmake).
 //
 // Cases: one triangle; five (two levels); 1000 random triangles; an indexed R16 grid with a 16-byte vertex stride;
 // R32 indices with R32G32 vertices; a geometry transform; two geometries with an inactive (NaN) triangle; no

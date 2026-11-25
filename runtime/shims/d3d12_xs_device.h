@@ -15,6 +15,7 @@
 //   slots 78/79/80  SetFrameIntervalX, ScheduleFrameEventX, WaitFrameEventX. A per-device token state machine answers
 //             them before the PC vtable is indexed; WaitFrameEventX returns at once with a fresh non-zero token.
 //             Slot 80 is outside a PC ID3D12Device11 table, so it is checked before the beyond-table refusal.
+//             A frame-event sink (set_device_frame_event_sink below) takes the three calls over when one is set.
 // The slots 48/73/78/79/80 are the public HLE Freminet/ScarlettX's observation, not Microsoft documentation, and can
 // be moved with LEONIDA_XS_QUEUE_X_SLOT, LEONIDA_XS_LIST_X_SLOT, LEONIDA_XS_FRAME_INTERVAL_SLOT,
 // LEONIDA_XS_SCHEDULE_EVENT_SLOT and LEONIDA_XS_WAIT_EVENT_SLOT (3..127; anything else is logged once and ignored).
@@ -38,8 +39,9 @@
 // in PC order, and a slot past it, up to the end of the proxy's table (128 queue, 64 fence slots), is logged with its
 // first four argument words and refused with E_NOTIMPL. A slot past the table faults on the vtable read inside a
 // reserved, never-committed region, and the fault is logged with the slot. That is where the console's queue methods
-// (PresentX, SuspendX, ResumeX) will show up; their slots are not known and are not guessed, and that the console
-// keeps the public slots is an assumption (docs/d3d12_command_objects.md §5.2). Heap, queue and fence proxies are
+// (PresentX, SuspendX, ResumeX) will show up; their slots are not known and are not guessed (PresentX is routed only
+// at a slot a setting names, see PresentSink below), and that the console keeps the public slots is an assumption
+// (docs/d3d12_command_objects.md §5.2). Heap, queue and fence proxies are
 // unwrapped wherever a device or queue method hands them to the real runtime: queue Signal/Wait (14/15), device
 // CreateSharedHandle (31), MakeResident/Evict (34/35), SetEventOnMultipleFenceCompletion (45), SetResidencyPriority
 // (46) and EnqueueMakeResident (50). Command lists are not wrapped, so ExecuteCommandLists passes them through and a
@@ -79,6 +81,53 @@ bool set_device_adapter_provider(void* device, DxgiAdapterProvider provider);
 void* device_proxy_from_dxgi_device(void* dxgi_device);
 // The device proxy itself, given the proxy or its DXGI pointer; null for anything else.
 void* device_proxy_primary(void* device);
+
+// The frame calls of device slots 78/79/80 (at their configured indices). With no sink the proxy answers them
+// itself, as described at the top: S_OK, and a fresh non-zero token at once. A sink takes them over: the proxy passes
+// the title's words on and returns the sink's result. A sink is meant to stand in front of the presentation class
+// (rt::d3d12::XboxPresentation, whose timing is src/frame_pacer.h); the proxy does not know that class, so this file
+// needs neither a presenter nor Vulkan. A null function leaves that one call with the proxy's own answer.
+// The reserved pointer of ScheduleFrameEventX and WaitFrameEventX (their third word) is not passed on: nothing models
+// it. A null token pointer is refused with E_POINTER before the sink is called.
+// The sink is not copied: it and what `context` points at must stay valid until another sink (or null) is set and
+// every frame call that had already entered the sink has returned. A wait can block in the sink, so whoever takes a
+// sink away makes its waits return first.
+struct FrameEventSink {
+    void* context;
+    HRESULT (*set_frame_interval)(void* context, void* output, std::uint32_t interval_us, std::uint32_t latency,
+                                  std::uint32_t flags);
+    HRESULT (*schedule_frame_event)(void* context, std::uint32_t event, std::uint32_t offset_us, std::uint32_t flags);
+    HRESULT (*wait_frame_event)(void* context, std::uint32_t event, std::uint32_t timeout_ms, std::uint32_t flags,
+                                std::uint64_t* token);
+};
+// `device` is the proxy or its DXGI pointer; a null `sink` goes back to the proxy's own answers. False, with a line
+// on stderr, when `device` is neither: nothing is set then.
+bool set_device_frame_event_sink(void* device, const FrameEventSink* sink);
+// The sink set on a device proxy, or null. Test helper.
+const FrameEventSink* device_frame_event_sink(const void* device);
+
+// PresentX on the command queue. It is a queue method past the public chain and its slot is not measured for this
+// title (public code gives 30 for an older runtime layout and 32 for a newer one, shims/xbox_present.h), so no slot
+// is taken for it unless a setting names one: d3d12.present_x_slot (LEONIDA_XS_PRESENT_X_SLOT), a slot of the queue
+// proxy's refused tail (19..127; anything else is logged once and ignored). The setting is read once, on the first
+// queue call past the public chain or the first queue_present_x_slot().
+// A call on that slot goes to the present sink of the queue's device, also for a queue made before the sink was set:
+// the sink gets the real queue behind the proxy and the title's three words (plane count, planes, parameters), and
+// its result is the title's. The two structures are not read here; their layouts are in shims/xbox_present.h. With
+// the slot set and no sink (or a sink with a null function) the call is refused with E_NOTIMPL and logged once.
+// The sink is not copied; the lifetime rule is the frame-event sink's.
+struct PresentSink {
+    void* context;
+    HRESULT (*present_x)(void* context, ID3D12CommandQueue* queue, std::uint32_t plane_count, const void* planes,
+                         const void* params);
+};
+// `device` is the proxy or its DXGI pointer; a null `sink` takes the sink away. False, with a line on stderr, when
+// `device` is neither: nothing is set then.
+bool set_device_present_sink(void* device, const PresentSink* sink);
+// The present sink set on a device proxy, or null. Test helper.
+const PresentSink* device_present_sink(const void* device);
+// The queue slot taken for PresentX, or 0 when the setting names none.
+unsigned queue_present_x_slot();
 
 // True when `heap` is a descriptor-heap proxy created by device slot 14.
 bool is_heap_proxy(const void* heap);

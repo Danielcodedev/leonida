@@ -3,14 +3,18 @@
 ``add_executable(foo_test ...)`` without an ``add_test(... COMMAND foo_test)`` builds
 the test but never runs it -- in ``ctest``, in the Windows runtime job or under Wine.
 This happened to ``d3d12_indirect_rt_test``; the only intentional exception is
-``d3d12_clear_test`` (see the comment next to its target in runtime/CMakeLists.txt).
+``d3d12_clear_test`` (see the comment next to its target in runtime/cmake/d3d12_vulkan.cmake).
 """
 import os
 import re
+import sys
 import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / "tests"))
+import runtime_cmake  # noqa: E402
+
 CMAKE = Path(os.environ.get("LEONIDA_RUNTIME_CMAKE", str(ROOT / "runtime" / "CMakeLists.txt")))
 SOURCE = Path(os.environ.get("LEONIDA_RUNTIME_TEST_SOURCE",
                              str(ROOT / "runtime" / "test" / "d3d12_indirect_rt_test.cpp")))
@@ -32,7 +36,7 @@ def registered_commands(text):
 class CTestRegistrationTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.cmake = CMAKE.read_text(encoding="utf-8")
+        cls.cmake = runtime_cmake.read(CMAKE)
 
     def test_all_test_executables_have_an_add_test(self):
         missing = built_test_executables(self.cmake) - registered_commands(self.cmake) - NOT_IN_CTEST

@@ -23,6 +23,7 @@
 #include "queue_families.h"
 #include "resource_tiling.h"
 #include "xdxr_build.h"
+#include "../core/log.h"
 
 #include <algorithm>
 #include <atomic>
@@ -2793,15 +2794,15 @@ private:
             if (result != ReplayResult::success) {
                 int none = static_cast<int>(ReplayResult::success);
                 held_failure_.compare_exchange_strong(none, static_cast<int>(result));
-                std::fprintf(stderr, "[rt] d3d12: a held ExecuteCommandLists failed when it was released (result %d); "
-                                     "nothing was submitted for it, and a Signal behind it still signals\n",
+                RT_LOG_ERROR("d3d12: a held ExecuteCommandLists failed when it was released (result %d); "
+                             "nothing was submitted for it, and a Signal behind it still signals\n",
                              static_cast<int>(result));
             }
             break;
         }
         case Deferred::Kind::signal:
             if (!submit(VK_NULL_HANDLE, op.fence, op.value))
-                std::fprintf(stderr, "[rt] d3d12: a held Signal failed when it was released\n");
+                RT_LOG_ERROR("d3d12: a held Signal failed when it was released\n");
             break;
         case Deferred::Kind::marker:
             marker_now(op.marker_kind, op.label.c_str());
@@ -2844,8 +2845,8 @@ private:
                     ++it;
                     continue;
                 }
-                std::fprintf(stderr, "[rt] d3d12: a fence was released while a queue still held work that names it; "
-                                     "that work is dropped\n");
+                RT_LOG_WARN("d3d12: a fence was released while a queue still held work that names it; "
+                            "that work is dropped\n");
                 dropped.push_back(std::move(*it));
                 it = held_.erase(it);
                 context_.holds().held_changed(-1);
@@ -2874,10 +2875,10 @@ private:
                     if (context_.holds().pending(op.waits[i], op.wait_values[i])) value = op.wait_values[i];
             std::size_t signals = 0;
             for (const Deferred& op : held_) signals += op.kind == Deferred::Kind::signal;
-            std::fprintf(stderr, "[rt] d3d12: queue destroyed with %zu held operation(s) never submitted: waits for a "
-                                 "fence value (%llu) that no Signal reached; the fence was never signaled%s\n",
-                         held_.size(), static_cast<unsigned long long>(value),
-                         signals ? "; CPU waits on the fences of its held Signals are completed" : "");
+            RT_LOG_WARN("d3d12: queue destroyed with %zu held operation(s) never submitted: waits for a "
+                        "fence value (%llu) that no Signal reached; the fence was never signaled%s\n",
+                        held_.size(), static_cast<unsigned long long>(value),
+                        signals ? "; CPU waits on the fences of its held Signals are completed" : "");
             for (const Deferred& op : held_)
                 if (op.kind == Deferred::Kind::signal) context_.cancel_fence_waits(op.fence);
             context_.holds().held_changed(-static_cast<std::int64_t>(held_.size()));

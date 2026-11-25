@@ -55,7 +55,8 @@ $folders = @("") + $configs
 $rt = Find-RuntimeLoader $build $folders
 # A gta6rt.exe older than the runtime sources (a pull since the last build) would report the old shim table, so it
 # is rebuilt then too, not only when missing.
-$sources = @("runtime\src", "runtime\shims", "runtime\CMakeLists.txt") | ForEach-Object { Join-Path $root $_ } |
+$sources = @("runtime\src", "runtime\shims", "runtime\CMakeLists.txt", "runtime\cmake") |
+    ForEach-Object { Join-Path $root $_ } |
     Where-Object { Test-Path -LiteralPath $_ }
 $newest = $sources | ForEach-Object { Get-ChildItem -LiteralPath $_ -Recurse -File -ErrorAction SilentlyContinue } |
     Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1

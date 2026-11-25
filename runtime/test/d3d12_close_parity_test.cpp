@@ -146,6 +146,9 @@ struct Case {
     bool warp_ok;  // WARP's Close verdict, measured
     Known known;
     Recorder record;
+    // The case copies from a placed footprint whose offset or row pitch is not aligned: warp_ok and known are for
+    // a WARP that reports UnrestrictedBufferTextureCopyPitchSupported. One that does not must refuse the list.
+    bool unaligned_footprint = false;
 };
 
 #define CALLS(...) [](Env& e) { __VA_ARGS__; return true; }
@@ -216,11 +219,11 @@ std::vector<Case> cases() {
         {"CopyTextureRegion upload, offset 0, row pitch 256", true, match,
          CALLS(RECORD_COPY(subresource(e.tex.p, 0), 0, footprint(e.upload.p, 0, 256), nullptr))},
         {"CopyTextureRegion upload, offset 16 (not 512-aligned)", true, stricter,
-         CALLS(RECORD_COPY(subresource(e.tex.p, 0), 0, footprint(e.upload.p, 16, 256), nullptr))},
+         CALLS(RECORD_COPY(subresource(e.tex.p, 0), 0, footprint(e.upload.p, 16, 256), nullptr)), true},
         {"CopyTextureRegion upload, offset 4 (not 512-aligned)", true, stricter,
-         CALLS(RECORD_COPY(subresource(e.tex.p, 0), 0, footprint(e.upload.p, 4, 256), nullptr))},
+         CALLS(RECORD_COPY(subresource(e.tex.p, 0), 0, footprint(e.upload.p, 4, 256), nullptr)), true},
         {"CopyTextureRegion upload, row pitch 260 (not 256-aligned)", true, stricter,
-         CALLS(RECORD_COPY(subresource(e.tex.p, 0), 0, footprint(e.upload.p, 0, 260), nullptr))},
+         CALLS(RECORD_COPY(subresource(e.tex.p, 0), 0, footprint(e.upload.p, 0, 260), nullptr)), true},
         {"CopyTextureRegion upload, row pitch 128 (shorter than a row)", false, match,
          CALLS(RECORD_COPY(subresource(e.tex.p, 0), 0, footprint(e.upload.p, 0, 128), nullptr))},
         {"CopyTextureRegion upload, footprint format UNKNOWN", false, looser,
@@ -487,6 +490,9 @@ int main() {
     }
 
     bool warp_ran = false;
+    // Whether the live WARP reports UnrestrictedBufferTextureCopyPitchSupported; an older runtime that does not know
+    // D3D12_FEATURE_D3D12_OPTIONS13 answers E_INVALIDARG, which counts as not reported.
+    bool warp_unrestricted_pitch = false;
     if (!hostwine::host_is_wine()) {
         Ref<IDXGIFactory4> factory;
         Ref<IDXGIAdapter> adapter;
@@ -497,6 +503,10 @@ int main() {
             Env env;
             REQUIRE(env.init(host.p));
             for (std::size_t i = 0; i < table.size(); ++i) REQUIRE(run_case(env, table[i], warp[i]));
+            D3D12_FEATURE_DATA_D3D12_OPTIONS13 options13{};
+            warp_unrestricted_pitch =
+                SUCCEEDED(host->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS13, &options13, sizeof(options13))) &&
+                options13.UnrestrictedBufferTextureCopyPitchSupported;
             // Nothing is executed, so nothing should remove the device; if something did, its answers are suspect.
             REQUIRE(host->GetDeviceRemovedReason() == S_OK);
             warp_ran = true;
@@ -506,13 +516,20 @@ int main() {
     }
 
     unsigned failures = 0, matched = 0, known_stricter = 0, known_looser = 0, warp_changed = 0, skipped = 0;
+    unsigned aligned_only = 0;  // unaligned-footprint cases a WARP without the unrestricted-pitch capability refuses
     std::printf("%-62s | %-10s | %-10s | %s\n", "case", "layer", "WARP", "expected");
     for (std::size_t i = 0; i < table.size(); ++i) {
         const Case& c = table[i];
         const bool live = warp_ran && warp[i] != not_run;
-        const char* expected = c.known == Known::match ? "match"
-                               : c.known == Known::layer_stricter ? "layer stricter (known)"
-                                                                  : "layer looser (known)";
+        // D3D12 wants a placed footprint's offset a multiple of 512 and its row pitch a multiple of 256 unless the
+        // device reports UnrestrictedBufferTextureCopyPitchSupported. A WARP that does not report it refuses the
+        // list (d3d10warp.dll 10.0.19041.3636 on Windows 10 22H2: Close is E_INVALIDARG), which is what the layer
+        // does, so the difference the table records does not exist there and the layer has to agree.
+        const bool aligned_only_warp = c.unaligned_footprint && live && !warp_unrestricted_pitch && FAILED(warp[i]);
+        const Known known = aligned_only_warp ? Known::match : c.known;
+        const char* expected = known == Known::match ? "match"
+                               : known == Known::layer_stricter ? "layer stricter (known)"
+                                                                : "layer looser (known)";
         std::printf("%-62s | %-10s | %-10s | %s\n", c.name, text(layer[i]).c_str(),
                     live ? text(warp[i]).c_str() : (c.warp_ok ? "(S_OK)" : "(failure)"), expected);
         if (layer[i] == not_run) {
@@ -524,11 +541,16 @@ int main() {
                         c.warp_ok ? "S_OK" : "a failure");
             ++warp_changed;
         }
+        if (aligned_only_warp) {
+            std::printf("  this WARP does not report UnrestrictedBufferTextureCopyPitchSupported and refuses the "
+                        "list, so the layer has to agree with it\n");
+            ++aligned_only;
+        }
         const bool reference_ok = live ? SUCCEEDED(warp[i]) : c.warp_ok;
         const bool layer_ok = SUCCEEDED(layer[i]);
-        const bool want_layer_ok = c.known == Known::match ? reference_ok : !reference_ok;
+        const bool want_layer_ok = known == Known::match ? reference_ok : !reference_ok;
         if (layer_ok != want_layer_ok) {
-            if (c.known == Known::match)
+            if (known == Known::match)
                 std::fprintf(stderr, "FAIL %s: layer Close %s, WARP %s\n", c.name, text(layer[i]).c_str(),
                              reference_ok ? "succeeds" : "fails");
             else
@@ -536,8 +558,8 @@ int main() {
             ++failures;
             continue;
         }
-        if (c.known == Known::match) ++matched;
-        else if (c.known == Known::layer_stricter) ++known_stricter;
+        if (known == Known::match) ++matched;
+        else if (known == Known::layer_stricter) ++known_stricter;
         else ++known_looser;
     }
     const unsigned validation_errors = vk.validation_errors() - errors_before;
@@ -545,6 +567,9 @@ int main() {
         std::fprintf(stderr, "%u Vulkan validation errors\n", validation_errors);
         ++failures;
     }
+    if (aligned_only)
+        std::printf("close parity: %u unaligned-footprint cases counted as matches, not as known layer-stricter: this "
+                    "WARP does not report UnrestrictedBufferTextureCopyPitchSupported\n", aligned_only);
     std::printf("close parity: %zu cases, %u match %s, %u known layer-stricter, %u known layer-looser, %u not run, "
                 "%u where WARP differs from the measured column, %u failures\n",
                 table.size(), matched, warp_ran ? "WARP" : "the measured WARP column", known_stricter, known_looser,

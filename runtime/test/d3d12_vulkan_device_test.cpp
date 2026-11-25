@@ -1758,7 +1758,8 @@ int compare_feature_support(ID3D12Device* ours) {
                static_cast<UINT>(ours_data.HighestShaderModel), host_hr, want);
     }
 
-    // 0x3 is 1.2 by number: SDKs without the 1.2 headers do not name it (runtime/CMakeLists.txt probes for that).
+    // 0x3 is 1.2 by number: SDKs without the 1.2 headers do not name it (runtime/cmake/windows_runtime.cmake probes
+    // for that).
     const D3D_ROOT_SIGNATURE_VERSION versions[] = {D3D_ROOT_SIGNATURE_VERSION_1_0, D3D_ROOT_SIGNATURE_VERSION_1_1,
                                                    static_cast<D3D_ROOT_SIGNATURE_VERSION>(0x3)};
     UINT host_version = 0;
@@ -3063,9 +3064,20 @@ struct PlacedArgs {
     const IID* riid = &__uuidof(ID3D12Resource);
 };
 
+// Set by placed() when the device refused the case's heap and that heap takes more than one resource category (it
+// does not set two of the three DENY flags). compare_placed_reserved clears it before the host's call and reads it
+// after: a host at D3D12_RESOURCE_HEAP_TIER_1 refuses such a heap.
+bool g_placed_mixed_heap_refused = false;
+
 HRESULT placed(ID3D12Device* device, const D3D12_RESOURCE_DESC* desc, const PlacedArgs& args = {}) {
     ID3D12Heap* heap = nullptr;
-    if (FAILED(device->CreateHeap(&args.heap, IID_PPV_ARGS(&heap)))) return E_UNEXPECTED;
+    if (FAILED(device->CreateHeap(&args.heap, IID_PPV_ARGS(&heap)))) {
+        const UINT deny = UINT(args.heap.Flags) &
+                          UINT(D3D12_HEAP_FLAG_DENY_BUFFERS | D3D12_HEAP_FLAG_DENY_RT_DS_TEXTURES |
+                               D3D12_HEAP_FLAG_DENY_NON_RT_DS_TEXTURES);
+        if (!(deny & (deny - 1))) g_placed_mixed_heap_refused = true;  // fewer than two DENY flags
+        return E_UNEXPECTED;
+    }
     void* out = nullptr;
     const HRESULT hr = device->CreatePlacedResource(heap, args.offset, desc, args.state, args.clear, *args.riid,
                                                     args.output ? &out : nullptr);
@@ -4382,28 +4394,33 @@ int compare_heap_neighbours(ID3D12Device* ours) {
         const char* name;
         InvalidCase call;
         bool windows10_refuses = false;
+        // The heap takes more than one resource category (it does not set two of the three DENY flags), which a host
+        // at D3D12_RESOURCE_HEAP_TIER_1 refuses.
+        bool mixed = false;
     };
     static const Case cases[] = {
-        {"heap: alignment 0", [](ID3D12Device* d) { return heap_create(d, heap_desc_of(0)); }},
+        {"heap: alignment 0", [](ID3D12Device* d) { return heap_create(d, heap_desc_of(0)); }, false, true},
         {"heap: alignment 64 KiB", [](ID3D12Device* d) {
              return heap_create(d, heap_desc_of(D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT));
-         }},
+         }, false, true},
         {"heap: alignment 4 MiB", [](ID3D12Device* d) {
              return heap_create(d, heap_desc_of(D3D12_DEFAULT_MSAA_RESOURCE_PLACEMENT_ALIGNMENT,
                                                 {D3D12_HEAP_TYPE_DEFAULT}, D3D12_HEAP_FLAG_NONE,
                                                 D3D12_DEFAULT_MSAA_RESOURCE_PLACEMENT_ALIGNMENT));
-         }},
+         }, false, true},
         {"heap: size 1000", [](ID3D12Device* d) {
              return heap_create(d, heap_desc_of(0, {D3D12_HEAP_TYPE_DEFAULT}, D3D12_HEAP_FLAG_NONE, 1000));
-         }},
-        {"heap: upload", [](ID3D12Device* d) { return heap_create(d, heap_desc_of(0, {D3D12_HEAP_TYPE_UPLOAD})); }},
+         }, false, true},
+        {"heap: upload", [](ID3D12Device* d) {
+             return heap_create(d, heap_desc_of(0, {D3D12_HEAP_TYPE_UPLOAD}));
+         }, false, true},
         {"heap: readback", [](ID3D12Device* d) {
              return heap_create(d, heap_desc_of(0, {D3D12_HEAP_TYPE_READBACK}));
-         }},
+         }, false, true},
         {"heap: custom write-combine L0", [](ID3D12Device* d) {
              return heap_create(d, heap_desc_of(0, {D3D12_HEAP_TYPE_CUSTOM, D3D12_CPU_PAGE_PROPERTY_WRITE_COMBINE,
                                                     D3D12_MEMORY_POOL_L0}));
-         }},
+         }, false, true},
         {"heap: ALLOW_ONLY_BUFFERS (two DENY flags)", [](ID3D12Device* d) {
              return heap_create(d, heap_desc_of(0, {D3D12_HEAP_TYPE_DEFAULT}, D3D12_HEAP_FLAG_ALLOW_ONLY_BUFFERS));
          }},
@@ -4412,13 +4429,26 @@ int compare_heap_neighbours(ID3D12Device* ours) {
         // case above.
         {"heap: HARDWARE_PROTECTED", [](ID3D12Device* d) {
              return heap_create(d, heap_desc_of(0, {D3D12_HEAP_TYPE_DEFAULT}, D3D12_HEAP_FLAG_HARDWARE_PROTECTED));
-         }, true},
+         }, true, true},
     };
+    // D3D12_RESOURCE_HEAP_TIER_1 lets a heap hold one resource category only, so a host at that tier refuses the
+    // cases marked mixed with E_INVALIDARG (measured on a GTX 1070 Ti, NVIDIA 582.66; WARP on the same PC reports
+    // tier 2 and accepts them). The layer accepts them on every GPU, as the accepted_heaps checks in main require.
+    // On a tier 1 host only that pair is excused: the layer's S_OK against the host's E_INVALIDARG.
+    D3D12_FEATURE_DATA_D3D12_OPTIONS host_options{};
+    const bool host_tier1 =
+        SUCCEEDED(host->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS, &host_options, sizeof(host_options))) &&
+        host_options.ResourceHeapTier == D3D12_RESOURCE_HEAP_TIER_1;
     int mismatches = 0;
     for (const Case& c : cases) {
         const HRESULT a = call_guarded(c.call, ours), b = call_guarded(c.call, host.p);
         if (a == b) continue;
         if (c.windows10_refuses && windows10_refusal(c.name, host.p, a, b)) continue;
+        if (c.mixed && host_tier1 && a == S_OK && b == E_INVALIDARG) {
+            std::printf("invalid arguments %s: not comparable on this host (resource heap tier 1 refuses a heap of "
+                        "more than one resource category; ours 0x%08lx, host 0x%08lx)\n", c.name, a, b);
+            continue;
+        }
         ++mismatches;
         std::fprintf(stderr, "invalid arguments %s: ours 0x%08lx, host 0x%08lx\n", c.name, a, b);
     }
@@ -4906,6 +4936,16 @@ int compare_placed_reserved(ID3D12Device* ours) {
              return reserved(d, desc);
          }},
     };
+    // D3D12_RESOURCE_HEAP_TIER_1 lets a heap hold one resource category only, so a host at that tier refuses the
+    // heap most placed cases use (D3D12_HEAP_FLAG_NONE): E_INVALIDARG from CreateHeap, measured on a GTX 1070 Ti
+    // (NVIDIA 582.66), where WARP on the same PC reports tier 2 and accepts it. placed() then answers E_UNEXPECTED
+    // before the host's CreatePlacedResource is reached, so the host has no answer to compare with. Only that is
+    // excused: a tier 1 host that refused the case's own heap for taking more than one category.
+    D3D12_FEATURE_DATA_D3D12_OPTIONS host_options{};
+    const bool host_tier1 =
+        SUCCEEDED(host->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS, &host_options, sizeof(host_options))) &&
+        host_options.ResourceHeapTier == D3D12_RESOURCE_HEAP_TIER_1;
+    int heap_tier_skipped = 0;
     const bool verbose = GetEnvironmentVariableA("LEONIDA_D3D49_VERBOSE", nullptr, 0) > 0;
     int mismatches = 0;
     for (const Case& c : cases) {
@@ -4913,10 +4953,23 @@ int compare_placed_reserved(ID3D12Device* ours) {
             std::printf("invalid arguments %s:", c.name);
             std::fflush(stdout);
         }
-        const HRESULT a = call_guarded(c.call, ours), b = call_guarded(c.call, host.p);
+        const HRESULT a = call_guarded(c.call, ours);
+        g_placed_mixed_heap_refused = false;
+        const HRESULT b = call_guarded(c.call, host.p);
+        const bool host_refused_mixed_heap = g_placed_mixed_heap_refused;
         if (verbose) std::printf(" ours 0x%08lx host 0x%08lx\n", a, b);
         if (a == b) continue;
         if (c.windows10_refuses && windows10_refusal(c.name, host.p, a, b)) continue;
+        if (host_tier1 && host_refused_mixed_heap && b == E_UNEXPECTED) {
+            if (!heap_tier_skipped++)
+                std::printf("invalid arguments placed: the host is at resource heap tier 1 and refuses a heap of more "
+                            "than one resource category; the cases that use one are not compared (first: %s)\n",
+                            c.name);
+            if (verbose)
+                std::printf("invalid arguments %s: not comparable on this host (resource heap tier 1; ours 0x%08lx, "
+                            "host 0x%08lx)\n", c.name, a, b);
+            continue;
+        }
         if (c.comparable && !c.comparable(host.p)) {
             std::printf("invalid arguments %s: not comparable on this host (ours 0x%08lx, host 0x%08lx)\n", c.name,
                         a, b);
@@ -4925,6 +4978,9 @@ int compare_placed_reserved(ID3D12Device* ours) {
         ++mismatches;
         std::fprintf(stderr, "invalid arguments %s: ours 0x%08lx, host 0x%08lx\n", c.name, a, b);
     }
+    if (heap_tier_skipped)
+        std::printf("invalid arguments placed: %d of %zu placed and reserved cases not compared on this resource heap "
+                    "tier 1 host\n", heap_tier_skipped, std::size(cases));
     return mismatches;
 }
 

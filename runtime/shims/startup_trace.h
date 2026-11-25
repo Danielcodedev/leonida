@@ -49,6 +49,8 @@ inline unsigned long long seq = 0;
 inline std::chrono::steady_clock::time_point start;
 inline void* veh = nullptr;
 inline thread_local bool in_handler = false;
+// set_skip_int3(): whether the handler steps over an int3 in guest code (skip_int3, below).
+inline std::atomic<bool> skip_int3_on{false};
 // With nothing to handle it, OutputDebugStringW's DBG_PRINTEXCEPTION_WIDE_C falls back to OutputDebugStringA on its
 // own ANSI copy (ExceptionInformation[3]), a second, lossy exception for the same text. Every debug string on the
 // thread resets this, so only the exception right after the wide one, with that same pointer, is skipped.
@@ -78,6 +80,10 @@ inline void append_escaped(std::string& out, const char* s, size_t n) {
 }  // namespace detail
 
 inline bool enabled() noexcept { return detail::on.load(std::memory_order_acquire); }
+
+// loader.skip_int3 (LEONIDA_SKIP_INT3): whether the handler steps over an int3 in guest code (skip_int3, below).
+// Off until this is called; gta6rt calls it from the setting before it opens the trace.
+inline void set_skip_int3(bool skip) noexcept { detail::skip_int3_on.store(skip, std::memory_order_release); }
 
 // A JSON string literal, quotes included.
 inline std::string quote(const std::string& s) {
@@ -191,12 +197,13 @@ inline void log_exception(const EXCEPTION_POINTERS& info) {
     }
 }
 
-// LEONIDA_SKIP_INT3 (diagnostic, with --trace): an int3 in guest code is logged once per address and stepped over,
-// so a boot can be followed past the title's soft asserts (an int3 followed by code that carries on). Off by default:
-// a console title never reaches one in a correct run, so each skipped address is a finding, not a fix.
+// loader.skip_int3 (LEONIDA_SKIP_INT3; diagnostic, with --trace): an int3 in guest code is logged once per address
+// and stepped over, so a boot can be followed past the title's soft asserts (an int3 followed by code that carries
+// on). Off by default: a console title never reaches one in a correct run, so each skipped address is a finding, not
+// a fix. This header reads no setting itself: gta6rt turns it on with set_skip_int3() before it opens the trace.
 inline bool skip_int3(EXCEPTION_POINTERS* info) {
-    static const bool skip = GetEnvironmentVariableW(L"LEONIDA_SKIP_INT3", nullptr, 0) != 0;
-    if (!skip || info->ExceptionRecord->ExceptionCode != EXCEPTION_BREAKPOINT || !info->ContextRecord) return false;
+    if (!detail::skip_int3_on.load(std::memory_order_acquire)) return false;
+    if (info->ExceptionRecord->ExceptionCode != EXCEPTION_BREAKPOINT || !info->ContextRecord) return false;
     const auto* at = static_cast<const unsigned char*>(info->ExceptionRecord->ExceptionAddress);
     if (!at || *at != 0xCC || info->ContextRecord->Rip != reinterpret_cast<DWORD64>(at)) return false;
     static std::mutex m;

@@ -1,12 +1,6 @@
 #include "host_cpu.h"
 
-#include <cstring>
-
-#if defined(_WIN32)
-#include <windows.h>
-#else
-#include <cstdlib>
-#endif
+#include "../core/config.h"
 
 #if defined(_M_X64) || defined(__x86_64__)
 #if defined(_MSC_VER)
@@ -67,14 +61,6 @@ std::string message(const std::vector<const char*>& missing) {
            "macOS, set ROSETTA_ADVERTISE_AVX=1. LEONIDA_SKIP_CPU_CHECK=1 skips this check";
 }
 
-bool check_skipped() {
-#if defined(_WIN32)
-    char v[4] = {};
-    return GetEnvironmentVariableA("LEONIDA_SKIP_CPU_CHECK", v, sizeof v) == 1 && v[0] == '1';
-#else
-    const char* v = std::getenv("LEONIDA_SKIP_CPU_CHECK");
-    return v && std::strcmp(v, "1") == 0;
-#endif
-}
+bool check_skipped() { return rt::config::get("loader.skip_cpu_check").text == "1"; }
 
 }  // namespace rt::host_cpu

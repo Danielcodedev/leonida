@@ -34,6 +34,8 @@
 #include <XAsyncProvider.h>
 #include <XTaskQueue.h>
 
+#include "../core/config.h"
+#include "../core/log.h"
 #include "file_system.h"
 #include "shims.h"
 
@@ -75,9 +77,9 @@ std::atomic<int> g_api_refs{0};
 
 HRESULT api_initialize(const char* which, ULONG gdk_ver, ULONG gs_ver, int mode, const ApiImplOptions* options) {
     if (g_api_refs.fetch_add(1) == 0)
-        std::fprintf(stderr, "[rt] xgameruntime: %s(gdk=%lu, gs=%lu, mode=%#x, options=%s) (offline)\n", which,
-                     gdk_ver, gs_ver, mode & 0xFF,
-                     options ? (options->is_inline ? "inline game config" : "default game config") : "none");
+        RT_LOG_INFO("xgameruntime: %s(gdk=%lu, gs=%lu, mode=%#x, options=%s) (offline)\n", which,
+                    gdk_ver, gs_ver, mode & 0xFF,
+                    options ? (options->is_inline ? "inline game config" : "default game config") : "none");
     return S_OK;
 }
 
@@ -169,7 +171,7 @@ ULONG STDMETHODCALLTYPE object_release(void* self) {
 template <int Slot> uint64_t STDMETHODCALLTYPE private_slot(void*) {
     static std::atomic<bool> s_logged{false};
     if (!s_logged.exchange(true))
-        std::fprintf(stderr, "[rt] xgameruntime: XThreadingImpl private slot %d called; answering 0\n", Slot);
+        RT_LOG_WARN("xgameruntime: XThreadingImpl private slot %d called; answering 0\n", Slot);
     return 0;
 }
 
@@ -179,8 +181,8 @@ template <int Slot> uint64_t STDMETHODCALLTYPE private_slot(void*) {
 HRESULT STDMETHODCALLTYPE begin_alloc_not_provided(void*) {
     static std::atomic<bool> s_logged{false};
     if (!s_logged.exchange(true))
-        std::fprintf(stderr, "[rt] xgameruntime: XThreadingImpl slot 8 (XAsyncBeginAlloc) called; not provided, "
-                             "returning E_NOTIMPL\n");
+        RT_LOG_WARN("xgameruntime: XThreadingImpl slot 8 (XAsyncBeginAlloc) called; not provided, "
+                    "returning E_NOTIMPL\n");
     return E_NOTIMPL;
 }
 
@@ -242,7 +244,7 @@ std::mutex g_error_mutex{};   // guards g_error_callback + g_error_context as on
 HRESULT STDMETHODCALLTYPE error_report(void*, HRESULT hr, const char* message) {
     static std::atomic<int> s_logged{0};
     if (s_logged.fetch_add(1) < 64)
-        std::fprintf(stderr, "[rt] xgameruntime: XErrorReport(0x%08lx, %s)\n", static_cast<unsigned long>(hr),
+        RT_LOG_ERROR("xgameruntime: XErrorReport(0x%08lx, %s)\n", static_cast<unsigned long>(hr),
                      message ? message : "(null)");
     std::lock_guard<std::mutex> lock(g_error_mutex);
     if (XErrorCallback cb = g_error_callback.load()) cb(hr, message, g_error_context.load());
@@ -634,7 +636,7 @@ HRESULT WINAPI QueryApiImpl(const GUID* class_id, REFIID interface_id, void** ou
     print_guid(iid, &interface_id);
     static std::atomic<int> s_logged{0};
     if (s_logged.fetch_add(1) < 256)   // one line per request, bounded
-        std::fprintf(stderr, "[rt] xgameruntime: QueryApiImpl(class %s, interface %s): not provided yet\n", cls, iid);
+        RT_LOG_WARN("xgameruntime: QueryApiImpl(class %s, interface %s): not provided yet\n", cls, iid);
     return kClassNotProvided;
 }
 
@@ -653,7 +655,7 @@ HRESULT WINAPI GetApiVersionImpl(uint64_t* first, uint64_t* second) {
 
 // HRESULT XGameRuntimeInitialize(). Reference counted, as in the GDK: each call needs an XGameRuntimeUninitialize.
 HRESULT __stdcall XGameRuntimeInitialize() {
-    if (g_runtime_refs.fetch_add(1) == 0) std::fprintf(stderr, "[rt] xgameruntime: initialized (offline)\n");
+    if (g_runtime_refs.fetch_add(1) == 0) RT_LOG_INFO("xgameruntime: initialized (offline)\n");
     return S_OK;
 }
 
@@ -675,10 +677,10 @@ enum class XSystemDeviceType : uint32_t {
 // XSystemDeviceType XSystemGetDeviceType(). The package is the Xbox Series build, so report Series X (Anaconda).
 // LEONIDA_DEVICE_TYPE=<0..8> overrides it, for trying other code paths on day one.
 uint32_t __stdcall XSystemGetDeviceType() {
-    char s[16];
-    const DWORD n = GetEnvironmentVariableA("LEONIDA_DEVICE_TYPE", s, sizeof(s));
-    if (n > 0 && n < sizeof(s)) {
-        int v = std::atoi(s);
+    // A value of 16 characters or more is ignored, as before the setting moved to the table.
+    const std::string s = rt::config::get("system.device_type").text;
+    if (s.size() < 16) {
+        int v = std::atoi(s.c_str());
         if (v >= 0 && v <= 8) return static_cast<uint32_t>(v);
     }
     return static_cast<uint32_t>(XSystemDeviceType::XboxScarlettAnaconda);
@@ -824,10 +826,10 @@ XSystemAnalyticsInfo __stdcall XSystemGetAnalyticsInfo() {
         copy_string_padded(info.form, sizeof(info.form), "Xbox Series X");
     }
 
-    char form_override[64];
-    const DWORD n = GetEnvironmentVariableA("LEONIDA_ANALYTICS_FORM", form_override, sizeof(form_override));
-    if (n > 0 && n < sizeof(form_override)) {
-        copy_string_padded(info.form, sizeof(info.form), form_override);
+    // A form of 64 characters or more is ignored, as before the setting moved to the table.
+    const std::string form_override = rt::config::get("system.analytics_form").text;
+    if (!form_override.empty() && form_override.size() < 64) {
+        copy_string_padded(info.form, sizeof(info.form), form_override.c_str());
     }
     return info;
 }
@@ -839,15 +841,22 @@ constexpr char kDefaultPackageIdentifier[XPACKAGE_IDENTIFIER_MAX_LENGTH] = "Leon
 static_assert(sizeof(kDefaultPackageIdentifier) == XPACKAGE_IDENTIFIER_MAX_LENGTH,
               "default package identifier must match XPACKAGE_IDENTIFIER_MAX_LENGTH");
 
+// The identifier of the running package: system.package_id (LEONIDA_PACKAGE_ID). A value too long for an
+// identifier is ignored and the default is used, as before the setting moved to the table.
+static std::string configured_package_identifier() {
+    std::string id = rt::config::get("system.package_id").text;
+    if (id.empty() || id.size() >= XPACKAGE_IDENTIFIER_MAX_LENGTH) id = kDefaultPackageIdentifier;
+    return id;
+}
+
 // HRESULT XPackageGetCurrentProcessPackageIdentifier(size_t bufferSize, char* buffer).
 // Retrieves the package identifier string for the current process.
 HRESULT __stdcall XPackageGetCurrentProcessPackageIdentifier(size_t bufferSize, char* buffer) {
     if (!buffer || bufferSize == 0) return E_INVALIDARG;
 
-    char id[XPACKAGE_IDENTIFIER_MAX_LENGTH] = {};
-    const DWORD n = GetEnvironmentVariableA("LEONIDA_PACKAGE_ID", id, sizeof(id));
-    const char* selected = (n > 0 && n < sizeof(id)) ? id : kDefaultPackageIdentifier;
-    const size_t len = std::strlen(selected);
+    const std::string id = configured_package_identifier();
+    const char* selected = id.c_str();
+    const size_t len = id.size();
 
     if (bufferSize < len + 1) return HRESULT_FROM_WIN32(ERROR_INSUFFICIENT_BUFFER);
     std::memcpy(buffer, selected, len + 1);
@@ -869,29 +878,14 @@ static std::unordered_map<uint64_t, std::string> s_active_mounts;
 static std::string resolve_package_path(const char* packageIdentifier, HRESULT& result) {
 
     // Check against configured process/game package identifier; mounting the game itself is denied
-    char game_id[XPACKAGE_IDENTIFIER_MAX_LENGTH] = {};
-    const DWORD n = GetEnvironmentVariableA("LEONIDA_PACKAGE_ID", game_id, sizeof(game_id));
-    const char* process_id = (n > 0 && n < sizeof(game_id)) ? game_id : kDefaultPackageIdentifier;
-
-    if (std::strcmp(packageIdentifier, process_id) == 0) {
+    if (configured_package_identifier() == packageIdentifier) {
         result = E_ACCESSDENIED;
         return {};
     }
 
     // Check optional installed content packages mapping: "id1=path1;id2=path2"
-    DWORD capacity = GetEnvironmentVariableW(L"LEONIDA_CONTENT_PACKAGES", nullptr, 0);
-    std::wstring wide_mapping;
-    DWORD map_len = 0;
-    while (capacity > 0) {
-        wide_mapping.resize(capacity);
-        map_len = GetEnvironmentVariableW(L"LEONIDA_CONTENT_PACKAGES", wide_mapping.data(), capacity);
-        if (map_len < capacity) break;
-        capacity = map_len;
-    }
-    if (map_len > 0 && map_len < capacity) {
-        // The GDK returns UTF-8 bytes even when Windows uses a legacy ANSI code page.
-        wide_mapping.resize(map_len);
-        std::string mapping = utf8_of(wide_mapping);
+    // The table gives UTF-8, which is what the GDK returns even when Windows uses a legacy ANSI code page.
+    if (std::string mapping = rt::config::get("system.content_packages").text; !mapping.empty()) {
         char* token = mapping.data();
         while (token && *token) {
             char* sep = std::strchr(token, ';');
@@ -978,11 +972,9 @@ HRESULT __stdcall XPackageGetMountPath(XPackageMountHandle mount, size_t pathSiz
 // bool XPackageIsPackagedProcess().
 // Returns true on Xbox Series console. LEONIDA_PACKAGED=0 overrides it.
 bool __stdcall XPackageIsPackagedProcess() {
-    char s[16];
-    const DWORD n = GetEnvironmentVariableA("LEONIDA_PACKAGED", s, sizeof(s));
-    if (n > 0 && n < sizeof(s)) {
-        if (std::atoi(s) == 0) return false;
-    }
+    // A value of 16 characters or more is ignored, as before the setting moved to the table.
+    const std::string s = rt::config::get("system.packaged").text;
+    if (s.size() < 16 && std::atoi(s.c_str()) == 0) return false;
     return true;
 }
 
@@ -1005,7 +997,7 @@ const GUID* const kPackageIids[] = {&kPackage1, &kPackage2, &kPackage3, nullptr}
 template <int Slot> HRESULT STDMETHODCALLTYPE package_not_implemented(void*) {
     static std::atomic<bool> s_logged{false};
     if (!s_logged.exchange(true))
-        std::fprintf(stderr, "[rt] xgameruntime: XPackageImpl slot %d not implemented offline (E_NOTIMPL)\n", Slot);
+        RT_LOG_WARN("xgameruntime: XPackageImpl slot %d not implemented offline (E_NOTIMPL)\n", Slot);
     return E_NOTIMPL;
 }
 HRESULT STDMETHODCALLTYPE pkg_identifier(void*, size_t size, char* buffer) {
@@ -1016,9 +1008,9 @@ bool STDMETHODCALLTYPE pkg_is_packaged(void*) { return XPackageIsPackagedProcess
 // there is no folder or no config. Wide on purpose: a game folder named outside the ANSI code page must reach the file
 // intact.
 std::string package_config() {
-    wchar_t env[MAX_PATH] = {};
-    const DWORD n = GetEnvironmentVariableW(L"LEONIDA_GAME_DIR", env, MAX_PATH);
-    const std::filesystem::path dir = (n > 0 && n < MAX_PATH) ? std::filesystem::path(env) : rt::fs::game_dir();
+    // A folder of MAX_PATH characters or more is ignored, as before the setting moved to the table.
+    std::filesystem::path dir = rt::config::path("paths.game_dir");
+    if (dir.empty() || dir.native().size() >= MAX_PATH) dir = rt::fs::game_dir();
     if (dir.empty()) return {};
     std::ifstream f(dir / L"MicrosoftGame.Config", std::ios::binary);
     if (!f) return {};
@@ -1210,7 +1202,7 @@ HRESULT STDMETHODCALLTYPE game_get_title_id(void*, uint32_t* title_id) {
     if (!package_title_id(id)) {
         static std::atomic<bool> s_logged{false};
         if (!s_logged.exchange(true))
-            std::fprintf(stderr, "[rt] xgameruntime: XGameGetXboxTitleId: no <TitleId> in MicrosoftGame.Config\n");
+            RT_LOG_ERROR("xgameruntime: XGameGetXboxTitleId: no <TitleId> in MicrosoftGame.Config\n");
         return E_FAIL;
     }
     *title_id = id;
@@ -1220,8 +1212,8 @@ HRESULT STDMETHODCALLTYPE game_get_title_id(void*, uint32_t* title_id) {
 // void XLaunchNewGame(const char* exePath, const char* args, XUserHandle defaultUser): on the console this ends the
 // title and starts another. Offline there is no other title to start; the call is logged and returns.
 void STDMETHODCALLTYPE game_launch_new(void*, const char* exe_path, const char* args, void*) {
-    std::fprintf(stderr, "[rt] xgameruntime: XLaunchNewGame(\"%s\", \"%s\") ignored offline\n",
-                 exe_path ? exe_path : "", args ? args : "");
+    RT_LOG_WARN("xgameruntime: XLaunchNewGame(\"%s\", \"%s\") ignored offline\n",
+                exe_path ? exe_path : "", args ? args : "");
 }
 
 // HRESULT XLaunchRestartOnCrash(const char* args, uint32_t reserved): asks the console to restart the title after a
@@ -1229,7 +1221,7 @@ void STDMETHODCALLTYPE game_launch_new(void*, const char* exe_path, const char* 
 HRESULT STDMETHODCALLTYPE game_restart_on_crash(void*, const char*, uint32_t) {
     static std::atomic<bool> s_logged{false};
     if (!s_logged.exchange(true))
-        std::fprintf(stderr, "[rt] xgameruntime: XLaunchRestartOnCrash: no restart is registered offline\n");
+        RT_LOG_WARN("xgameruntime: XLaunchRestartOnCrash: no restart is registered offline\n");
     return S_OK;
 }
 

@@ -2455,7 +2455,9 @@ The trace will enumerate them.
   created with `VK_IMAGE_USAGE_HOST_TRANSFER_BIT_EXT` when the device supports that usage with the requested
   image format and flags, moved to
   `GENERAL` and zero-filled on the host at creation, and copied with `vkCopyMemoryToImageEXT`/
-  `vkCopyImageToMemoryEXT` while they stay in `GENERAL` (D3D12's `COMMON`). Every other case (no extension, a
+  `vkCopyImageToMemoryEXT` while they stay in `GENERAL` (D3D12's `COMMON`). A driver can accept the usage and then
+  name no memory type for the image (NVIDIA 582.66 on a GTX 1070 Ti: `memoryTypeBits` 0 with the usage, 0x82
+  without it); the image is then made again without the usage. Every other case (no extension, such an image, a
   texture a barrier has moved, a default-heap texture, which D3D12 does not allow but the layer copies and logs) is
   a `CopyTextureRegion` from or to a host-visible staging buffer, replayed on the device's queue and waited for, so
   the layout tracker and a first use's zero fill behave exactly as for the application's own copies.
@@ -2511,7 +2513,10 @@ The trace will enumerate them.
     device does on purpose (`d3d12_vulkan_device_test` fails on a `TRUE`). The PC runtime answers differently: on an
     RTX 4090 (driver 621.14) and on WARP it reports the capability as supported, and a list with `Offset` 16 and
     `RowPitch` 260 for an `R8G8B8A8_UNORM` footprint closes with `S_OK` (measured with a stand-alone D3D12 program,
-    Windows 11 26200). The layer cannot simply say the same: Vulkan takes a copy's buffer offset as a multiple of
+    Windows 11 26200). An older PC runtime keeps the rule: on Windows 10 22H2 (`d3d12.dll` and `d3d10warp.dll`
+    10.0.19041.3636) the query for `D3D12_FEATURE_D3D12_OPTIONS13` answers `E_INVALIDARG`, and WARP and a GTX 1070 Ti
+    close such a list with `E_INVALIDARG`, as the layer does; `d3d12_close_parity_test` counts its three cases as
+    matches on such a WARP. The layer cannot simply say the same: Vulkan takes a copy's buffer offset as a multiple of
     the texel block size and its row length in texels (VUID-vkCmdCopyBufferToImage-dstImage-07975), while the
     capability lifts D3D12's two alignments and is not documented as keeping offsets and pitches texel multiples
     (not tested here), so a footprint that is not texel-aligned would have to be repacked through scratch memory
@@ -2557,7 +2562,7 @@ The trace will enumerate them.
   `d3d12_clear_test` (renamed from `d3d12_uint_clear_test` in #525, D3D-45) compares full and rectangular D3D12
   readbacks with WARP over eleven integer input sets on every UINT and SINT render-target format it lists, beside
   the UNORM/SNORM/FLOAT and depth/stencil cases. ctest runs only its `--rgb9e5` mode (`d3d12_rgb9e5_rtv`), so the
-  WARP comparison is run by hand until #521's 0.5 tie rounding lands (`runtime/CMakeLists.txt`).
+  WARP comparison is run by hand until #521's 0.5 tie rounding lands (`runtime/cmake/d3d12_vulkan.cmake`).
   `clear_color_test` checks both replay paths without a GPU, including unchanged float values.
   This does not add typed-view reinterpretation of typeless resources or new integer formats.
 - **RGBA8 typeless RTV clears:** explicit UNORM, SRGB, UINT, SINT and SNORM RTVs on a

@@ -27,6 +27,7 @@
 
 #include "vulkan_backend.h"
 #include "vulkan_present_compose.h"
+#include "../core/log.h"
 
 // Use the original EXT spellings. They are aliases of the promoted KHR types and are available in older headers.
 #if defined(VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME) && defined(VK_EXT_SURFACE_MAINTENANCE_1_EXTENSION_NAME)
@@ -108,7 +109,21 @@ inline bool blit_unsupported_format(VkFormat format) {
         return format >= VK_FORMAT_BC1_RGB_UNORM_BLOCK && format <= VK_FORMAT_BC7_SRGB_BLOCK;
     }
 }
+// A path as UTF-8 text, for a message.
+inline std::string path_text(const std::filesystem::path& path) {
+    const auto text = path.u8string();
+    return std::string(reinterpret_cast<const char*>(text.data()), text.size());
+}
 }  // namespace detail
+
+// Writing presented frames to disk. The runtime fills this from the settings present.capture_dir,
+// present.capture_every and present.capture_limit (LEONIDA_CAPTURE, LEONIDA_CAPTURE_EVERY, LEONIDA_CAPTURE_LIMIT);
+// this header reads no setting itself.
+struct PresentCapture {
+    std::filesystem::path dir;  // the folder the frames go to, made when it is missing; empty: no capture
+    int every = 30;             // presented frames between files; below 1 counts as 1
+    int limit = 24;             // files at most; below 1 counts as 1
+};
 
 class VulkanPresenter {
 public:
@@ -116,7 +131,8 @@ public:
                     VkPhysicalDevice physical, VkQueue queue, std::uint32_t family, VkSurfaceKHR surface,
                     bool swapchain_maintenance1 = false,
                     std::function<VkExtent2D()> extent_fn = nullptr,
-                    std::function<VkSurfaceKHR()> recreate_surface_fn = nullptr)
+                    std::function<VkSurfaceKHR()> recreate_surface_fn = nullptr,
+                    PresentCapture capture = {})
         : context_(context), instance_(instance), physical_(physical), queue_(queue), surface_(surface),
           maintenance1_(swapchain_maintenance1), extent_fn_(std::move(extent_fn)),
           recreate_surface_fn_(std::move(recreate_surface_fn)) {
@@ -170,27 +186,27 @@ public:
                 vk.vkCreateSemaphore(device, &semaphore, nullptr, &frame.acquired) != VK_SUCCESS)
                 return;
         }
-        // LEONIDA_CAPTURE=<dir>: besides presenting, copy the swapchain image to host memory and write it out as a
-        // binary PPM, every LEONIDA_CAPTURE_EVERY presented frames (default 30), at most LEONIDA_CAPTURE_LIMIT of
-        // them (default 24). Off unless the variable is set; a capture that cannot be made shows nothing and is
+        // Capture (PresentCapture; LEONIDA_CAPTURE=<dir> in the runtime): besides presenting, copy the swapchain image
+        // to host memory and write it out as a binary PPM, every capture.every presented frames, at most
+        // capture.limit of them. Off unless a folder is named; a capture that cannot be made shows nothing and is
         // reported here instead of failing the presenter.
-        if (const char* dir = std::getenv("LEONIDA_CAPTURE"); dir && *dir) {
-            capture_dir_ = dir;
+        if (!capture.dir.empty()) {
+            capture_dir_ = std::move(capture.dir);
             // Create the folder: a capture run names its own output folder and should not have to make it first.
             std::error_code created;
             std::filesystem::create_directories(capture_dir_, created);
             capture_to_disk_ = true;
             capture_ = true;  // the swapchain needs TRANSFER_SRC, and every frame copies into a staging buffer
-            if (const char* every = std::getenv("LEONIDA_CAPTURE_EVERY")) capture_every_ = std::max(1, std::atoi(every));
-            if (const char* limit = std::getenv("LEONIDA_CAPTURE_LIMIT")) capture_limit_ = std::max(1, std::atoi(limit));
-            std::fprintf(stderr, "[rt] present: capture on: every %d presented frame(s), at most %d, into %s\n",
-                         capture_every_, capture_limit_, capture_dir_.c_str());
+            capture_every_ = std::max(1, capture.every);
+            capture_limit_ = std::max(1, capture.limit);
+            RT_LOG_INFO("present: capture on: every %d presented frame(s), at most %d, into %s\n",
+                        capture_every_, capture_limit_, detail::path_text(capture_dir_).c_str());
         }
         ok_ = recreate(true, false);
         if (!ok_ && capture_to_disk_) {
             // The surface refused a TRANSFER_SRC swapchain, or the staging buffer could not be made: present
             // without the capture rather than not at all.
-            std::fprintf(stderr, "[rt] present: capture is unavailable on this surface; presenting without it\n");
+            RT_LOG_WARN("present: capture is unavailable on this surface; presenting without it\n");
             capture_to_disk_ = false;
             capture_ = false;
             capture_dir_.clear();
@@ -418,8 +434,8 @@ private:
             }
             if (!logged) {
                 logged = true;
-                std::fprintf(stderr, "[rt] d3d12: %zu Presents are queued behind held work; this one waits for it\n",
-                             max_deferred_presents);
+                RT_LOG_WARN("d3d12: %zu Presents are queued behind held work; this one waits for it\n",
+                            max_deferred_presents);
             }
             if (should_abort()) return;
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
@@ -448,7 +464,7 @@ private:
                                            p.has_rect ? &p.rect : nullptr, p.srgb, p.tear,
                                            p.has_planes ? &p.planes : nullptr);
         if (result != VK_SUCCESS)
-            std::fprintf(stderr, "[rt] d3d12: a Present held behind queued work failed when it was released (%d)\n",
+            RT_LOG_ERROR("d3d12: a Present held behind queued work failed when it was released (%d)\n",
                          int(result));
     }
 
@@ -1112,12 +1128,10 @@ private:
         }
         char name[64];
         std::snprintf(name, sizeof name, "frame_%05llu.ppm", static_cast<unsigned long long>(number));
-        std::string path = capture_dir_;
-        if (path.back() != '/' && path.back() != '\\') path += '/';
-        path += name;
+        const std::filesystem::path path = capture_dir_ / name;
         std::ofstream file(path, std::ios::binary | std::ios::trunc);
         if (!file) {
-            std::fprintf(stderr, "[rt] present: cannot write %s\n", path.c_str());
+            RT_LOG_ERROR("present: cannot write %s\n", detail::path_text(path).c_str());
             return;
         }
         file << "P6\n" << extent.width << ' ' << extent.height << "\n255\n";
@@ -1125,15 +1139,13 @@ private:
         file.close();
         const double scale = 1.0 / double(texels);
         const double mean[3] = {sum[0] * scale, sum[1] * scale, sum[2] * scale};
-        path.resize(path.size() - std::strlen(name));
-        path += "index.txt";
-        std::ofstream index(path, std::ios::app);
+        std::ofstream index(capture_dir_ / "index.txt", std::ios::app);
         if (index)
             index << "frame " << number << " format " << int(format) << " (" << capture_format_name(format)
                   << ") extent " << extent.width << 'x' << extent.height << " mean rgb " << std::fixed
                   << std::setprecision(2) << mean[0] << ' ' << mean[1] << ' ' << mean[2] << '\n';
         ++capture_written_;
-        std::fprintf(stderr, "[rt] present: capture %s (%ux%u, mean rgb %.2f %.2f %.2f)\n", name, extent.width,
+        RT_LOG_DEBUG("present: capture %s (%ux%u, mean rgb %.2f %.2f %.2f)\n", name, extent.width,
                      extent.height, mean[0], mean[1], mean[2]);
     }
 
@@ -1216,8 +1228,8 @@ private:
             }
             if (!found && !warned_hdr_) {
                 warned_hdr_ = true;
-                std::fprintf(stderr, "[rt] present: the surface has no HDR10 (ST.2084) format; HDR10 planes are converted to "
-                                     "SDR by tone mapping\n");
+                RT_LOG_WARN("present: the surface has no HDR10 (ST.2084) format; HDR10 planes are converted to "
+                            "SDR by tone mapping\n");
             }
         }
         for (const VkFormat wanted : srgb ? std::array<VkFormat, 2>{VK_FORMAT_B8G8R8A8_SRGB, VK_FORMAT_R8G8B8A8_SRGB}
@@ -1232,7 +1244,8 @@ private:
             if (found) break;
         }
         if (!found && srgb) {
-            if (!warned_srgb_) std::fprintf(stderr, "[rt] present: the surface has no sRGB 8-bit format; an sRGB back buffer is shown darker\n");
+            if (!warned_srgb_)
+                RT_LOG_WARN("present: the surface has no sRGB 8-bit format; an sRGB back buffer is shown darker\n");
             warned_srgb_ = true;
             for (const auto& f : formats)
                 if ((f.format == VK_FORMAT_B8G8R8A8_UNORM || f.format == VK_FORMAT_R8G8B8A8_UNORM) &&
@@ -1450,7 +1463,7 @@ private:
     VkFormat captured_format_ = VK_FORMAT_UNDEFINED;
     // LEONIDA_CAPTURE: write the copies the staging buffer makes to <capture_dir_> (see finish_pending_capture()).
     bool capture_to_disk_ = false;
-    std::string capture_dir_;
+    std::filesystem::path capture_dir_;
     int capture_every_ = 30;  // presented frames between files
     int capture_limit_ = 24;  // files at most
     VkFence pending_capture_ = VK_NULL_HANDLE;  // owns the shared staging bytes until written

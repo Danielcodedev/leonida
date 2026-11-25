@@ -260,15 +260,58 @@ int check_title_placed(ID3D12Device* device, const char* kind, void* pages, UINT
     return 0;
 }
 
-int check_title_placed_all(ID3D12Device* device) {
+// A buffer placed inside a page, as the title places small UAV buffers (64-byte aligned, found in review on an RTX
+// 5090): the import starts at the page and the buffer is bound at the offset. Vulkan binds a buffer only at a multiple
+// of the alignment the driver names for it, with the driver's size for it fitting behind the offset, so whether that
+// works is the driver's: NVIDIA 582.66 on a GTX 1070 Ti names 256 bytes (the same as its
+// minUniformBufferOffsetAlignment) and rounds the 4032 bytes up to 4096, and the layer answers with its
+// ordinary-buffer fallback there. The driver is asked through the buffer the layer imports at the page's start, which
+// has the same description and so the same usage; where it cannot bind 64 bytes in, the fallback is checked instead.
+int check_title_placed_inside_page(ID3D12Device* device, const vktest::Device& vk, void* page) {
+    const char* who = "vulkan slot-133 buffer";
+    constexpr UINT64 offset = 64, size = 0x1000 - offset;
+    void* const address = static_cast<char*>(page) + offset;
+    D3D12_RESOURCE_DESC desc{};
+    desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+    desc.Width = size;
+    desc.Height = desc.DepthOrArraySize = desc.MipLevels = 1;
+    desc.SampleDesc.Count = 1;
+    desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+    VkMemoryRequirements requirements{};
+    {
+        Ref<ID3D12Resource> at_start;
+        EXPECT_HR(rt::d3d12::create_buffer_at_host_address(device, page, desc, 0xFFFFFFFFu,
+                                                           IID_PPV_ARGS(&at_start.p)),
+                  S_OK);
+        EXPECT(at_start->GetGPUVirtualAddress() == reinterpret_cast<D3D12_GPU_VIRTUAL_ADDRESS>(page));
+        const VkBuffer buffer = rt::d3d12::vulkan_buffer(at_start.p);
+        EXPECT(buffer != VK_NULL_HANDLE);
+        vk.fn<PFN_vkGetBufferMemoryRequirements>("vkGetBufferMemoryRequirements")(vk.device, buffer, &requirements);
+    }
+    EXPECT(requirements.alignment != 0);
+    const UINT64 imported = (offset + size + vk.host_pointer_alignment - 1) / vk.host_pointer_alignment *
+                            vk.host_pointer_alignment;
+    if (offset % requirements.alignment == 0 && requirements.size <= imported - offset)
+        return check_title_placed(device, "64 bytes into a page", address, size);
+    Ref<ID3D12Resource> fallback;
+    EXPECT_HR(rt::d3d12::create_buffer_at_host_address(device, address, desc, 0xFFFFFFFFu, IID_PPV_ARGS(&fallback.p)),
+              S_OK);
+    EXPECT(fallback.p != nullptr && fallback->GetDesc().Width == size);
+    EXPECT(fallback->GetGPUVirtualAddress() != reinterpret_cast<D3D12_GPU_VIRTUAL_ADDRESS>(address));
+    std::printf("%s: 64 bytes into a page, %llu bytes: this driver binds the buffer only at a multiple of %llu bytes "
+                "(its size for it: %llu), so it is not imported; ordinary-buffer fallback verified\n",
+                who, static_cast<unsigned long long>(size), static_cast<unsigned long long>(requirements.alignment),
+                static_cast<unsigned long long>(requirements.size));
+    return 0;
+}
+
+int check_title_placed_all(ID3D12Device* device, const vktest::Device& vk) {
     constexpr SIZE_T size = 4 * 0x10000;
     int failures = 0;
     void* pages = VirtualAlloc(nullptr, size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
     if (!pages) return 1;
     failures += check_title_placed(device, "VirtualAlloc range", pages, size);
-    // Inside a page, as the title places small UAV buffers (64-byte aligned, found in review on an RTX 5090): the
-    // import starts at the page and the buffer is bound at the offset.
-    failures += check_title_placed(device, "64 bytes into a page", static_cast<char*>(pages) + 64, 0x1000 - 64);
+    failures += check_title_placed_inside_page(device, vk, pages);
     VirtualFree(pages, 0, MEM_RELEASE);
     HANDLE section = CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0, DWORD(size), nullptr);
     void* view = section ? MapViewOfFile(section, FILE_MAP_ALL_ACCESS, 0, 0, size) : nullptr;
@@ -352,7 +395,7 @@ int main() {
         const std::vector<Case> vulkan_cases = open_cases(ours.p);
         print_cases(vulkan_cases, "vulkan");
         failures += check_import(ours.p, vk.host_pointer_alignment != 0);
-        if (vk.host_pointer_alignment) failures += check_title_placed_all(ours.p);
+        if (vk.host_pointer_alignment) failures += check_title_placed_all(ours.p, vk);
         Ref<IDXGIFactory4> factory;
         if (!hostwine::host_is_wine() && SUCCEEDED(CreateDXGIFactory1(IID_PPV_ARGS(&factory.p)))) {
             for (const bool warp : {false, true}) {

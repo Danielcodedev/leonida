@@ -1,5 +1,5 @@
 // Shim registry: reimplementations of console-only imports.
-// Add a DLL by writing a shims/<dll>.cpp with a SHIM_TABLE and listing it in CMakeLists.txt.
+// Add a DLL by writing a shims/<dll>.cpp with a SHIM_TABLE and listing it in cmake/windows_runtime.cmake.
 #pragma once
 #include <cstdint>
 #include <string>

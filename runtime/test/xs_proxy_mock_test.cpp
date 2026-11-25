@@ -11,6 +11,7 @@
 //     patching this executable's own import table before the first proxy table is built (one process each).
 // Every device, queue, fence and resource here is a mock that records the calls it gets. No game data, no Xbox DLLs.
 #include "../shims/d3d12_xs_device.h"
+#include "../src/frame_pacer.h"
 
 #include <d3d12.h>
 #include <windows.h>
@@ -891,6 +892,129 @@ int check_xbox_slots() {
 #endif
 }
 
+// ---- 7a. A frame-event sink on device slots 78/79/80 ----
+//
+// The sink stands in front of a leonida::FramePacer on a clock that only moves when the test moves it, the way the
+// presentation class is meant to stand there. Every wait below has its origin behind it or a zero timeout, so
+// nothing blocks. The pacer's answers differ from the proxy's own (an interval of 0 is refused, a wait before the
+// next origin times out), so each result shows which of the two answered.
+struct SinkState {
+    leonida::FramePacer* pacer;
+    unsigned calls[3];         // interval, schedule, wait
+    void* output;              // the first word of the last SetFrameIntervalX
+    std::uint32_t flags[3];    // the flags word of the last call of each kind
+    std::uint32_t timeout_ms;  // of the last wait
+};
+
+HRESULT sink_set_frame_interval(void* context, void* output, std::uint32_t interval_us, std::uint32_t latency,
+                                std::uint32_t flags) {
+    auto* state = static_cast<SinkState*>(context);
+    ++state->calls[0];
+    state->output = output;
+    state->flags[0] = flags;
+    return static_cast<HRESULT>(state->pacer->set_frame_interval(interval_us, latency, flags));
+}
+
+HRESULT sink_schedule_frame_event(void* context, std::uint32_t event, std::uint32_t offset_us,
+                                  std::uint32_t flags) {
+    auto* state = static_cast<SinkState*>(context);
+    ++state->calls[1];
+    state->flags[1] = flags;
+    return static_cast<HRESULT>(state->pacer->schedule_frame_event(event, offset_us, flags));
+}
+
+HRESULT sink_wait_frame_event(void* context, std::uint32_t event, std::uint32_t timeout_ms, std::uint32_t flags,
+                              std::uint64_t* token) {
+    auto* state = static_cast<SinkState*>(context);
+    ++state->calls[2];
+    state->flags[2] = flags;
+    state->timeout_ms = timeout_ms;
+    return static_cast<HRESULT>(state->pacer->wait_frame_event(event, timeout_ms, flags, token));
+}
+
+int check_frame_sink() {
+    constexpr std::uint32_t kPeriod = 16667;
+    constexpr std::uint64_t kUntouched = 0xfeedfacecafef00dull;
+    const HRESULT invalid_state = static_cast<HRESULT>(leonida::pacer_hr::invalid_state);
+    const HRESULT timed_out = static_cast<HRESULT>(leonida::pacer_hr::timeout);
+
+    Mock* mock = nullptr;
+    void* device = make_device(mock, 9, true);  // 76 PC slots: 78, 79 and 80 are all past the PC table
+    EXPECT(device && xs::device_frame_event_sink(device) == nullptr);
+
+    // No sink: the proxy answers, and its wait hands a token out at once although nothing is registered.
+    std::uint64_t own = 0;
+    EXPECT(hr_of(raw(device, 80, 0, 0, 0, 0, word(&own))) == S_OK && own != 0);
+
+    leonida::ManualFrameClock clock;
+    leonida::FramePacer pacer(clock);
+    SinkState state{};
+    state.pacer = &pacer;
+    const xs::FrameEventSink sink{&state, &sink_set_frame_interval, &sink_schedule_frame_event,
+                                  &sink_wait_frame_event};
+    // Only a device proxy takes a sink: the PC device behind it is refused, and so is a null pointer.
+    EXPECT(!xs::set_device_frame_event_sink(mock, &sink) && !xs::set_device_frame_event_sink(nullptr, &sink));
+    EXPECT(xs::set_device_frame_event_sink(device, &sink) && xs::device_frame_event_sink(device) == &sink);
+
+    // 80 before anything is registered: the pacer's ERROR_INVALID_STATE, and the token is left alone.
+    std::uint64_t token = kUntouched;
+    EXPECT(hr_of(raw(device, 80, 0, 0, 0, 0, word(&token))) == invalid_state && token == kUntouched);
+    EXPECT(state.calls[2] == 1);
+
+    // 78 SetFrameIntervalX(output, interval_us, latency, flags): an interval of 0 is the pacer's E_INVALIDARG (the
+    // proxy's own answer is S_OK); a valid one sets the pacer's period, and the output and flags words arrive.
+    EXPECT(hr_of(raw(device, 78, 0x1234, 0, 1, 0)) == E_INVALIDARG);
+    EXPECT(hr_of(raw(device, 78, 0x1234, kPeriod, 1, 6)) == S_OK);
+    EXPECT(state.calls[0] == 2 && pacer.period_us() == kPeriod && !pacer.registered());
+    EXPECT(state.output == reinterpret_cast<void*>(std::uintptr_t{0x1234}) && state.flags[0] == 6);
+
+    // 79 ScheduleFrameEventX(event, offset_us, pEvent, flags): the event is the first word, the offset the second
+    // and the flags the fourth; the reserved pointer (the third word) is not passed on.
+    EXPECT(hr_of(raw(device, 79, 7, 0, 0x5678, 0)) == E_INVALIDARG);        // not the origin event
+    EXPECT(hr_of(raw(device, 79, 0, kPeriod, 0x5678, 0)) == E_INVALIDARG);  // an offset of a whole period
+    EXPECT(hr_of(raw(device, 79, 0, 0, 0x5678, 5)) == S_OK);
+    EXPECT(state.calls[1] == 3 && state.flags[1] == 5 && pacer.registered());
+
+    // 80 WaitFrameEventX(event, timeout_ms, pEvent, flags, &token) is paced now. Before the first origin a zero
+    // wait times out and leaves the token alone; once the clock is past the origin the wait returns a token that
+    // the pacer issued. The timeout is the second word and the flags the fourth.
+    EXPECT(hr_of(raw(device, 80, 0, 0, 0, 0, word(&token))) == timed_out && token == kUntouched);
+    clock.advance_us(kPeriod);
+    EXPECT(hr_of(raw(device, 80, 0, 250, 0x5678, 3, word(&token))) == S_OK && token == 1);
+    EXPECT(pacer.tokens_issued() == 1 && state.timeout_ms == 250 && state.flags[2] == 3);
+
+    // One token per origin: a second wait in the same interval times out, the next origin gives the next token.
+    std::uint64_t next = kUntouched;
+    EXPECT(hr_of(raw(device, 80, 0, 0, 0, 0, word(&next))) == timed_out && next == kUntouched);
+    clock.advance_us(kPeriod);
+    EXPECT(hr_of(raw(device, 80, 0, 0, 0, 0, word(&next))) == S_OK && next == 2);
+
+    // A null token pointer is refused by the proxy with E_POINTER, as without a sink; the sink is not called.
+    const unsigned waits = state.calls[2];
+    EXPECT(hr_of(raw(device, 80, 0, 0, 0, 0, 0)) == E_POINTER && state.calls[2] == waits);
+    // None of the calls reached the PC device.
+    EXPECT(mock->calls[78] == 0 && mock->calls[79] == 0 && mock->calls[80] == 0);
+
+    // A sink with a null function leaves that call with the proxy: the wait answers at once with a token of the
+    // proxy's own although the pacer's next origin has not come, and the sink's wait is not called.
+    const xs::FrameEventSink no_wait{&state, &sink_set_frame_interval, &sink_schedule_frame_event, nullptr};
+    EXPECT(xs::set_device_frame_event_sink(device, &no_wait) && xs::device_frame_event_sink(device) == &no_wait);
+    std::uint64_t unpaced = 0;
+    EXPECT(hr_of(raw(device, 80, 0, 0, 0, 0, word(&unpaced))) == S_OK && unpaced != 0 && unpaced != own);
+    EXPECT(state.calls[2] == waits && pacer.tokens_issued() == 2);
+
+    // Without a sink again the proxy answers all three: an interval of 0 is S_OK, as before.
+    EXPECT(xs::set_device_frame_event_sink(device, nullptr) && xs::device_frame_event_sink(device) == nullptr);
+    const unsigned intervals = state.calls[0];
+    EXPECT(hr_of(raw(device, 78, 0, 0, 1, 0)) == S_OK && state.calls[0] == intervals);
+    EXPECT(hr_of(raw(device, 80, 0, 0, 0, 0, word(&unpaced))) == S_OK && unpaced != 0);
+
+    EXPECT(release(device) == 0 && mock->refs == 0);
+    std::printf("%s: a frame-event sink takes device slots 78/79/80 over: the pacer's results and tokens come "
+                "back and a wait is paced by the clock; without one the proxy answers them itself\n", g_label);
+    return 0;
+}
+
 // ---- 8. Environment overrides for the Xbox device slots (one process each, read once) ----
 
 int run_env_slots(bool valid) {
@@ -942,6 +1066,113 @@ int run_env_slots(bool valid) {
     EXPECT(release(device) == 0 && mock->refs == 0);
     std::printf("%s: environment slot overrides %s\n", g_label,
                 valid ? "move all five routes" : "outside 3..127 are ignored");
+    return 0;
+}
+
+// ---- 8a. PresentX on the queue: the slot a setting names and the present sink (one process each, read once) ----
+//
+// No slot is taken for PresentX by default, so each case sets the variable before the first queue call past the
+// public chain. The sink is a function of this test: it records what it gets and returns what the test tells it to.
+struct PresentState {
+    unsigned calls;
+    ID3D12CommandQueue* queue;
+    std::uint32_t plane_count;
+    const void* planes;
+    const void* params;
+    HRESULT result;
+};
+
+HRESULT sink_present_x(void* context, ID3D12CommandQueue* queue, std::uint32_t plane_count, const void* planes,
+                       const void* params) {
+    auto* state = static_cast<PresentState*>(context);
+    ++state->calls;
+    state->queue = queue;
+    state->plane_count = plane_count;
+    state->planes = planes;
+    state->params = params;
+    return state->result;
+}
+
+int run_present_slot(bool valid) {
+    constexpr unsigned kSlot = 32;
+    // 18 is GetDesc, the last public slot: not a slot of the refused tail, so the setting is ignored.
+    EXPECT(SetEnvironmentVariableA("LEONIDA_XS_PRESENT_X_SLOT", valid ? "32" : "18") != FALSE);
+
+    Mock* mock = nullptr;
+    void* device = make_device(mock, 9, true);
+    EXPECT(device && xs::device_present_sink(device) == nullptr);
+    void* queue = make_queue(device);  // made before a sink is set
+    EXPECT(queue);
+    Mock* const queue_mock = reinterpret_cast<Mock*>(xs::queue_proxy_real_queue(queue));
+    xs::reset_device_proxy_stats();
+
+    PresentState state{};
+    const xs::PresentSink sink{&state, &sink_present_x};
+    const std::uint64_t planes[2] = {}, params[1] = {};
+
+    if (!valid) {
+        // No slot is taken: with a sink set, the whole tail is still refused and the sink is never called.
+        EXPECT(xs::queue_present_x_slot() == 0);
+        EXPECT(xs::set_device_present_sink(device, &sink));
+        for (unsigned slot = 19; slot < xs::queue_proxy_table_size(); ++slot)
+            EXPECT(hr_of(raw(queue, slot, 1, word(planes), word(params))) == E_NOTIMPL &&
+                   queue_mock->calls[slot] == 0);
+        EXPECT(state.calls == 0);
+        // GetDesc (18) keeps its PC method.
+        EXPECT(hr_of(raw(queue, 18)) == S_OK && queue_mock->calls[18] == 1);
+        EXPECT(xs::set_device_present_sink(device, nullptr));
+        EXPECT(release(queue) == 0 && release(device) == 0 && mock->refs == 0);
+        std::printf("%s: a PresentX slot outside 19..127 is ignored: no slot is taken and the tail is refused\n",
+                    g_label);
+        return 0;
+    }
+
+    EXPECT(xs::queue_present_x_slot() == kSlot);
+    // No sink yet: the call is refused and the real queue is not called.
+    EXPECT(hr_of(raw(queue, kSlot, 1, word(planes), word(params))) == E_NOTIMPL && queue_mock->calls[kSlot] == 0);
+
+    // Only a device proxy takes a sink: the PC device behind it is refused, and so is a null pointer.
+    EXPECT(!xs::set_device_present_sink(mock, &sink) && !xs::set_device_present_sink(nullptr, &sink));
+    EXPECT(xs::set_device_present_sink(device, &sink) && xs::device_present_sink(device) == &sink);
+
+    // PresentX(plane count, planes, parameters): the sink gets the real queue behind the proxy and the three words.
+    // The count is a UINT, so only the low half of its word arrives.
+    state.result = S_OK;
+    EXPECT(hr_of(raw(queue, kSlot, 0xdeadbeef00000002ull, word(planes), word(params))) == S_OK);
+    EXPECT(state.calls == 1 && state.queue == xs::queue_proxy_real_queue(queue) && state.plane_count == 2);
+    EXPECT(state.planes == planes && state.params == params);
+    // The sink's result is the title's, a failure too; null planes and parameters are passed on as they are.
+    const HRESULT refused = static_cast<HRESULT>(0x887A0004);  // DXGI_ERROR_UNSUPPORTED
+    state.result = refused;
+    EXPECT(hr_of(raw(queue, kSlot, 0, 0, 0)) == refused);
+    EXPECT(state.calls == 2 && state.plane_count == 0 && !state.planes && !state.params);
+    EXPECT(queue_mock->calls[kSlot] == 0 && xs::queue_slot_hits(kSlot) == 3 &&
+           xs::queue_slot_first_call_seen(kSlot));
+
+    // Only the named slot is PresentX: 30, the other public number, is refused like the rest of the tail, and
+    // GetDesc (18) keeps its PC method.
+    EXPECT(hr_of(raw(queue, 30, 1, word(planes), word(params))) == E_NOTIMPL && state.calls == 2);
+    EXPECT(queue_mock->calls[30] == 0);
+    EXPECT(hr_of(raw(queue, 18)) == S_OK && queue_mock->calls[18] == 1);
+
+    // A queue made after the sink was set reaches the same sink, with its own real queue.
+    void* later = make_queue(device);
+    EXPECT(later && later != queue);
+    state.result = S_OK;
+    EXPECT(hr_of(raw(later, kSlot, 1, word(planes), 0)) == S_OK);
+    EXPECT(state.calls == 3 && state.queue == xs::queue_proxy_real_queue(later) && state.plane_count == 1);
+    EXPECT(state.queue != xs::queue_proxy_real_queue(queue));
+
+    // A sink with a null function, and no sink again: refused, and the test's function is not called.
+    const xs::PresentSink empty{&state, nullptr};
+    EXPECT(xs::set_device_present_sink(device, &empty) && xs::device_present_sink(device) == &empty);
+    EXPECT(hr_of(raw(queue, kSlot, 1, word(planes), 0)) == E_NOTIMPL && state.calls == 3);
+    EXPECT(xs::set_device_present_sink(device, nullptr) && xs::device_present_sink(device) == nullptr);
+    EXPECT(hr_of(raw(queue, kSlot, 1, word(planes), 0)) == E_NOTIMPL && state.calls == 3);
+
+    EXPECT(release(later) == 0 && release(queue) == 0 && release(device) == 0 && mock->refs == 0);
+    std::printf("%s: queue slot %u, named by the setting, reaches the device's present sink with the real queue and "
+                "the title's words; without a sink it is refused\n", g_label, kSlot);
     return 0;
 }
 
@@ -1245,11 +1476,14 @@ int main(int argc, char** argv) {
     if (argc == 2) {
         if (std::strcmp(argv[1], "--env-slots") == 0) return run_env_slots(true);
         if (std::strcmp(argv[1], "--env-slots-invalid") == 0) return run_env_slots(false);
+        if (std::strcmp(argv[1], "--present-slot") == 0) return run_present_slot(true);
+        if (std::strcmp(argv[1], "--present-slot-invalid") == 0) return run_present_slot(false);
         return run_fault_mode(argv[1]);
     }
     if (argc != 1) return 2;
     if (check_tail(true) || check_levels() || check_fence1() || check_create_failures() || check_open_shared() ||
-        check_alloc_failures() || check_allocators() || check_xbox_slots() || check_console_command_list())
+        check_alloc_failures() || check_allocators() || check_xbox_slots() || check_frame_sink() ||
+        check_console_command_list())
         return 1;
     std::printf("xs_proxy_mock_test: PASS (%d allocations refused on purpose)\n", g_failed_news);
     return 0;

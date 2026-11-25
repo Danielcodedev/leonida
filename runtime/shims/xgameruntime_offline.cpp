@@ -41,6 +41,9 @@
 #include <XAsyncProvider.h>
 #include <XTaskQueue.h>
 
+#include "../core/config.h"
+#include "../core/log.h"
+
 namespace rt::shims {
 void* xgameruntime_user_new_handle();   // xgameruntime_user.cpp
 }
@@ -84,7 +87,7 @@ HRESULT answer(ClassObject* object, const GUID* begin, const GUID* end, REFIID i
 template <const char* Class, int Slot> HRESULT STDMETHODCALLTYPE unknown_slot(void*) {
     static std::atomic<bool> s_logged{false};
     if (!s_logged.exchange(true))
-        std::fprintf(stderr, "[rt] xgameruntime: %s slot %d (unknown in the docs) called; E_NOTIMPL\n", Class, Slot);
+        RT_LOG_WARN("xgameruntime: %s slot %d (unknown in the docs) called; E_NOTIMPL\n", Class, Slot);
     return E_NOTIMPL;
 }
 
@@ -94,7 +97,7 @@ template <const char* Class, int Slot> HRESULT STDMETHODCALLTYPE unknown_slot(vo
 template <const char* Class, int Slot> HRESULT STDMETHODCALLTYPE offline_failure(void*) {
     static std::atomic<bool> s_logged{false};
     if (!s_logged.exchange(true))
-        std::fprintf(stderr, "[rt] xgameruntime: %s slot %d is not available offline (E_FAIL)\n", Class, Slot);
+        RT_LOG_WARN("xgameruntime: %s slot %d is not available offline (E_FAIL)\n", Class, Slot);
     return E_FAIL;
 }
 
@@ -105,11 +108,7 @@ constexpr GUID kEventClass = {0xbbfbdcc7, 0xbfe7, 0x409b, {0xa5, 0xca, 0xed, 0xf
 std::atomic<long> g_events{0};
 
 bool log_every_event() {
-    static const bool on = [] {
-        char value[4] = {};
-        size_t length = 0;
-        return getenv_s(&length, value, "LEONIDA_LOG_GAME_EVENTS") == 0 && length == 2 && value[0] == '1';
-    }();
+    static const bool on = rt::config::get("system.log_game_events").text == "1";
     return on;
 }
 
@@ -120,11 +119,11 @@ HRESULT STDMETHODCALLTYPE event_write(void*, XUserHandle, const char*, const cha
     if (!name) return E_INVALIDARG;
     const long n = g_events.fetch_add(1);
     if (log_every_event())
-        std::fprintf(stderr, "[rt] game event %s dimensions=%s measurements=%s\n", name, dimensions ? dimensions : "",
+        RT_LOG_DEBUG("game event %s dimensions=%s measurements=%s\n", name, dimensions ? dimensions : "",
                      measurements ? measurements : "");
     else if (n == 0)
-        std::fprintf(stderr, "[rt] xgameruntime: game events are dropped offline (first: %s; "
-                             "LEONIDA_LOG_GAME_EVENTS=1 logs them)\n", name);
+        RT_LOG_INFO("xgameruntime: game events are dropped offline (first: %s; "
+                    "LEONIDA_LOG_GAME_EVENTS=1 logs them)\n", name);
     return S_OK;
 }
 
@@ -192,9 +191,9 @@ HRESULT STDMETHODCALLTYPE ui_message_dialog_async(void*, XAsyncBlock* async, con
     const auto button = static_cast<uint32_t>(default_button);
     if (button > 2) return E_INVALIDARG;
     const char* labels[] = {first, second, third};
-    std::fprintf(stderr, "[rt] game dialog: \"%s\": %s [buttons: %s%s%s%s%s; answered: %s]\n", title ? title : "",
-                 content ? content : "", first ? first : "", second ? " / " : "", second ? second : "",
-                 third ? " / " : "", third ? third : "", labels[button] ? labels[button] : "(default)");
+    RT_LOG_INFO("game dialog: \"%s\": %s [buttons: %s%s%s%s%s; answered: %s]\n", title ? title : "",
+                content ? content : "", first ? first : "", second ? " / " : "", second ? second : "",
+                third ? " / " : "", third ? third : "", labels[button] ? labels[button] : "(default)");
     return XAsyncBegin(async, reinterpret_cast<void*>(static_cast<uintptr_t>(button)), &kDialogIdentity,
                        "XGameUiShowMessageDialogAsync", dialog_provider);
 }
@@ -208,7 +207,7 @@ HRESULT STDMETHODCALLTYPE ui_message_dialog_result(void*, XAsyncBlock* async, XG
 // 14: HRESULT XGameUiShowErrorDialogAsync(XAsyncBlock* async, HRESULT errorCode, const char* context)
 HRESULT STDMETHODCALLTYPE ui_error_dialog_async(void*, XAsyncBlock* async, HRESULT code, const char* context) {
     if (!async) return E_POINTER;
-    std::fprintf(stderr, "[rt] game error dialog: HRESULT 0x%08lX%s%s [dismissed]\n", static_cast<unsigned long>(code),
+    RT_LOG_ERROR("game error dialog: HRESULT 0x%08lX%s%s [dismissed]\n", static_cast<unsigned long>(code),
                  context ? " context " : "", context ? context : "");
     return XAsyncBegin(async, nullptr, &kErrorDialogIdentity, "XGameUiShowErrorDialogAsync", error_dialog_provider);
 }
@@ -327,7 +326,7 @@ bool STDMETHODCALLTYPE streaming_unregister(void*) { return true; }
 template <int Slot> HRESULT STDMETHODCALLTYPE client_not_connected(void*) {
     static std::atomic<bool> s_logged{false};
     if (!s_logged.exchange(true))
-        std::fprintf(stderr, "[rt] xgameruntime: XGameStreamingImpl slot %d: no streaming client offline\n", Slot);
+        RT_LOG_WARN("xgameruntime: XGameStreamingImpl slot %d: no streaming client offline\n", Slot);
     return E_GAMESTREAMING_NOT_INITIALIZED;
 }
 static_assert((static_cast<uint32_t>(E_GAMESTREAMING_NOT_INITIALIZED) & 0xFF) == 0, "reads as false in al");
@@ -397,11 +396,7 @@ struct XDisplayHdrModeInfo {
 };
 
 bool hdr_requested() {
-    static const bool on = [] {
-        char value[4] = {};
-        size_t length = 0;
-        return getenv_s(&length, value, "LEONIDA_HDR") == 0 && length == 2 && value[0] == '1';
-    }();
+    static const bool on = rt::config::get("system.hdr").text == "1";
     return on;
 }
 
@@ -413,8 +408,8 @@ uint32_t STDMETHODCALLTYPE display_try_enable_hdr(void*, XDisplayHdrModePreferen
     if (info) *info = on ? XDisplayHdrModeInfo{0.01f, 1000.0f, 1000.0f} : XDisplayHdrModeInfo{};
     static std::atomic<bool> s_logged{false};
     if (!s_logged.exchange(true))
-        std::fprintf(stderr, "[rt] xgameruntime: XDisplayTryEnableHdrMode: HDR %s\n",
-                     on ? "enabled (LEONIDA_HDR=1)" : "disabled (SDR output; LEONIDA_HDR=1 asks for HDR)");
+        RT_LOG_INFO("xgameruntime: XDisplayTryEnableHdrMode: HDR %s\n",
+                    on ? "enabled (LEONIDA_HDR=1)" : "disabled (SDR output; LEONIDA_HDR=1 asks for HDR)");
     return static_cast<uint32_t>(on ? XDisplayHdrModeResult::Enabled : XDisplayHdrModeResult::Disabled);
 }
 

@@ -12,6 +12,8 @@
 #include <string>
 #include <vector>
 
+#include "../core/config.h"
+#include "../core/log.h"
 #include "shims.h"
 #include "startup_trace.h"
 
@@ -193,8 +195,7 @@ extern "C" uint64_t rt_unimplemented(const char* what, const CallInfo* info) {
                                                        ",\"caller\":" + startup_trace::quote(module_offset(info->ret)));
 
     if (policy == UnimplementedPolicy::Stop) {
-        std::fprintf(stderr,
-                     "[rt] STOP: unimplemented import %s called\n"
+        RT_LOG_ERROR("STOP: unimplemented import %s called\n"
                      "[rt]   caller   %s\n"
                      "[rt]   rcx=0x%llx rdx=0x%llx r8=0x%llx r9=0x%llx\n"
                      "[rt]   return class: %s (LEONIDA_UNIMPLEMENTED=fail returns %s)\n",
@@ -203,21 +204,21 @@ extern "C" uint64_t rt_unimplemented(const char* what, const CallInfo* info) {
                      static_cast<unsigned long long>(info->r9), cls == ReturnClass::HResult ? "hresult" : "other",
                      cls == ReturnClass::HResult ? "E_NOTIMPL" : "0");
         if (IsDebuggerPresent()) {
-            std::fprintf(stderr, "[rt]   debugger attached: breaking; continuing returns the `fail` value\n");
+            RT_LOG_ERROR("  debugger attached: breaking; continuing returns the `fail` value\n");
             std::fflush(stderr);
             __debugbreak();
             return fail_value;
         }
-        std::fprintf(stderr, "[rt]   no debugger attached: terminating the process (exit code %d)\n", kStopExitCode);
+        RT_LOG_ERROR("  no debugger attached: terminating the process (exit code %d)\n", kStopExitCode);
         std::fflush(stderr);
         TerminateProcess(GetCurrentProcess(), kStopExitCode);
         return 0;  // not reached
     }
     if (first)
-        std::fprintf(stderr, "[rt] unimplemented: %s%s\n", what,
-                     policy == UnimplementedPolicy::Fail
-                         ? (cls == ReturnClass::HResult ? " (returns E_NOTIMPL)" : " (returns 0)")
-                         : "");
+        RT_LOG_WARN("unimplemented: %s%s\n", what,
+                    policy == UnimplementedPolicy::Fail
+                        ? (cls == ReturnClass::HResult ? " (returns E_NOTIMPL)" : " (returns 0)")
+                        : "");
     return policy == UnimplementedPolicy::Fail ? fail_value : 0;
 }
 
@@ -286,8 +287,8 @@ void* make_common_stub() {
     rf->UnwindData = kUnwindOffset;
     // Without the table the stub still works; only a stack walk through it (a debugger, an exception) stops there.
     if (!RtlAddFunctionTable(rf, 1, reinterpret_cast<DWORD64>(region)))
-        std::fprintf(stderr, "[rt] RtlAddFunctionTable failed for the unimplemented-import stub (error %lu): "
-                             "stack walks cannot pass through it\n", GetLastError());
+        RT_LOG_ERROR("RtlAddFunctionTable failed for the unimplemented-import stub (error %lu): "
+                     "stack walks cannot pass through it\n", GetLastError());
     FlushInstructionCache(GetCurrentProcess(), region, kRegionSize);
     return region;
 }
@@ -308,11 +309,10 @@ UnimplementedPolicy parse_unimplemented_policy(const char* text, bool* valid) {
 UnimplementedPolicy unimplemented_policy() {
     int p = g_policy.load();
     if (p < 0) {
-        char buf[32] = {};
-        const DWORD n = GetEnvironmentVariableA("LEONIDA_UNIMPLEMENTED", buf, sizeof buf);
+        const std::string text = rt::config::get("loader.unimplemented").text;
         bool valid = true;
-        const UnimplementedPolicy parsed = parse_unimplemented_policy(n < sizeof buf ? buf : "?", &valid);
-        if (!valid) std::fprintf(stderr, "[rt] LEONIDA_UNIMPLEMENTED: expected log, fail or stop; using log\n");
+        const UnimplementedPolicy parsed = parse_unimplemented_policy(text.c_str(), &valid);
+        if (!valid) RT_LOG_WARN("LEONIDA_UNIMPLEMENTED: expected log, fail or stop; using log\n");
         int expected = -1;
         g_policy.compare_exchange_strong(expected, static_cast<int>(parsed));
         p = g_policy.load();
