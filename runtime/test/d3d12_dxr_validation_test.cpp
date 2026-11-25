@@ -93,6 +93,30 @@ int run_suite(ID3D12Device* base_dev, const char* name, bool check_strict_valida
         std::printf("%s: raytracing not supported (tier=%d), skipping\n", name, static_cast<int>(o5.RaytracingTier));
         return 77;
     }
+    // The layer reports no raytracing tier and builds XDXR records, or KHR structures with LEONIDA_RT_AS=khr.
+    // The KHR builds need VK_KHR_acceleration_structure, VK_KHR_deferred_host_operations and VK_KHR_ray_query. On
+    // a GPU without one of them (a GTX 1070 Ti with NVIDIA 582.66 has no VK_KHR_ray_query) the layer then has no
+    // acceleration structures at all: it answers a zero prebuild and refuses a buffer in the
+    // acceleration-structure state, so the buffers below cannot be made. Ask before making them.
+    if (check_strict_validation && o5.RaytracingTier == D3D12_RAYTRACING_TIER_NOT_SUPPORTED) {
+        D3D12_RAYTRACING_GEOMETRY_DESC probe_tri{};
+        probe_tri.Type = D3D12_RAYTRACING_GEOMETRY_TYPE_TRIANGLES;
+        probe_tri.Flags = D3D12_RAYTRACING_GEOMETRY_FLAG_OPAQUE;
+        probe_tri.Triangles.VertexFormat = DXGI_FORMAT_R32G32B32_FLOAT;
+        probe_tri.Triangles.VertexCount = 3;
+        probe_tri.Triangles.VertexBuffer.StrideInBytes = 12;
+        D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS probe_in{};
+        probe_in.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL;
+        probe_in.DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY;
+        probe_in.NumDescs = 1;
+        probe_in.pGeometryDescs = &probe_tri;
+        D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO probe_info{};
+        dev->GetRaytracingAccelerationStructurePrebuildInfo(&probe_in, &probe_info);
+        if (is_zero_prebuild(probe_info)) {
+            std::printf("%s: neither XDXR nor KHR acceleration structures supported, skipping\n", name);
+            return 77;
+        }
+    }
 
     Ref<ID3D12Resource> vb, inst_buf, scratch, blas_buf, tlas_buf, src_as, post_buf;
     if (!make_buffer(dev.p, 4096, D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_FLAG_NONE,
