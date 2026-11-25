@@ -49,6 +49,7 @@
 #include <thread>
 #include <vector>
 
+#include "../core/config.h"
 #include "gameinput.h"
 #include "gameinput_abi.h"
 #include "shims.h"
@@ -131,28 +132,30 @@ const rt::gameinput::HapticApi& haptics() { return *g_haptic_api.load(); }
 
 // ---- configuration ----------------------------------------------------------------------------------------------
 
-std::string env(const char* name) {
-    char buf[64];
-    const DWORD n = GetEnvironmentVariableA(name, buf, sizeof buf);
-    if (n == 0 || n >= sizeof buf) return {};
-    std::string s(buf, n);
+// A setting of the table (its variable, else leonida.toml), lower-cased; empty when nothing sets it. A value of 64
+// characters or more is ignored, as before the settings moved to the table. The messages below name the variable
+// also when the value came from the file.
+std::string env(rt::config::Name setting) {
+    const rt::config::Value value = rt::config::get(setting);
+    if (!value.is_set() || value.text.size() >= 64) return {};
+    std::string s = value.text;
     for (auto& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
     return s;
 }
 
 rt::gameinput::Config read_config() {
     rt::gameinput::Config c;
-    const std::string t = env("LEONIDA_DS_TRIGGERS");
+    const std::string t = env("input.ds_triggers");
     if (t == "off" || t == "0") c.ds_triggers = rt::gameinput::DsTriggerMode::Off;
     else if (t == "resistance") c.ds_triggers = rt::gameinput::DsTriggerMode::Resistance;
     else if (!t.empty() && t != "rumble") std::fprintf(stderr, "[rt] gameinput: LEONIDA_DS_TRIGGERS=%s unknown, using rumble\n", t.c_str());
-    if (const std::string g = env("LEONIDA_DS_TRIGGER_GAIN"); !g.empty())
+    if (const std::string g = env("input.ds_trigger_gain"); !g.empty())
         c.ds_trigger_gain = std::clamp(static_cast<float>(std::atof(g.c_str())), 0.0f, 4.0f);
-    if (const std::string g = env("LEONIDA_MOUSE_SENSITIVITY"); !g.empty())
+    if (const std::string g = env("input.mouse_sensitivity"); !g.empty())
         c.mouse_sensitivity = std::clamp(static_cast<float>(std::atof(g.c_str())), 0.1f, 10.0f);
-    if (const std::string f = env("LEONIDA_DS_TRIGGER_FREQ"); !f.empty())
+    if (const std::string f = env("input.ds_trigger_freq"); !f.empty())
         c.ds_trigger_frequency = static_cast<uint8_t>(std::clamp(std::atoi(f.c_str()), 1, 255));
-    if (const std::string l = env("LEONIDA_DS_LIGHTBAR"); !l.empty()) {
+    if (const std::string l = env("input.ds_lightbar"); !l.empty()) {
         if (l == "off") {
             c.lightbar_set = true;
         } else if (l.size() == 6 && l.find_first_not_of("0123456789abcdef") == std::string::npos) {
@@ -165,16 +168,16 @@ rt::gameinput::Config read_config() {
             std::fprintf(stderr, "[rt] gameinput: LEONIDA_DS_LIGHTBAR=%s is not RRGGBB or off, ignored\n", l.c_str());
         }
     }
-    if (env("LEONIDA_RUMBLE") == "0") c.rumble = false;
-    if (env("LEONIDA_GAMEINPUT_THREAD") == "0") c.background_thread = false;
-    const std::string k = env("LEONIDA_KEYBOARD_PAD");
+    if (env("input.rumble") == "0") c.rumble = false;
+    if (env("input.thread") == "0") c.background_thread = false;
+    const std::string k = env("input.keyboard_pad");
     if (k == "1" || k == "on" || k == "focus") c.keyboard_pad = rt::gameinput::KeyboardPadMode::Focused;
     else if (k == "always") c.keyboard_pad = rt::gameinput::KeyboardPadMode::Always;
     else if (!k.empty() && k != "0" && k != "off")
         std::fprintf(stderr, "[rt] gameinput: LEONIDA_KEYBOARD_PAD=%s unknown (1, always or off), keyboard pad off\n",
                      k.c_str());
     using leonida::InputFamily;
-    const std::string p = env("LEONIDA_PROMPTS");
+    const std::string p = env("input.prompts");
     if (p == "xbox") c.prompts = InputFamily::Xbox;
     else if (p == "playstation" || p == "ps5") c.prompts = InputFamily::PlayStation5;
     else if (p == "ps4") c.prompts = InputFamily::PlayStation4;
@@ -184,7 +187,7 @@ rt::gameinput::Config read_config() {
     else if (!p.empty() && p != "auto")
         std::fprintf(stderr, "[rt] gameinput: LEONIDA_PROMPTS=%s unknown (auto, xbox, playstation, ps5, ps4, ps3, "
                              "nintendo or keyboard), following the devices\n", p.c_str());
-    if (const std::string m = env("LEONIDA_PROMPTS_SWITCH_MS"); !m.empty())
+    if (const std::string m = env("input.prompts_switch_ms"); !m.empty())
         c.prompts_switch_ms = static_cast<uint32_t>(std::clamp(std::atoi(m.c_str()), 0, 2000));
     return c;
 }
