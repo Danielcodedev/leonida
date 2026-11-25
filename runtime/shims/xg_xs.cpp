@@ -32,6 +32,7 @@
 #include <cstdio>
 #include <utility>
 
+#include "../core/log.h"
 #include "shims.h"
 
 namespace {
@@ -45,8 +46,8 @@ void warn_once(std::atomic<bool>& warned, const char* what, int slot, const void
     char name[64];
     if (slot < 0) std::snprintf(name, sizeof(name), "%s", what);
     else std::snprintf(name, sizeof(name), "%s%d", what, slot);
-    std::fprintf(stderr, "[rt] xg_xs: %s: no console texture layout on the PC; E_NOTIMPL (caller %s, logged once)\n",
-                 name, rt::shims::module_offset(reinterpret_cast<uint64_t>(caller)).c_str());
+    RT_LOG_WARN("xg_xs: %s: no console texture layout on the PC; E_NOTIMPL (caller %s, logged once)\n",
+                name, rt::shims::module_offset(reinterpret_cast<uint64_t>(caller)).c_str());
 }
 
 ULONG __stdcall computer_add_ref(void*) { return 1; }
