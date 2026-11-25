@@ -37,6 +37,8 @@
 #include <XAsyncProvider.h>
 #include <XTaskQueue.h>
 
+#include "../core/log.h"
+
 namespace {
 
 // ---- Public GDK types (XStore.h, as the GDK reference documents them) ----
@@ -121,7 +123,7 @@ template <class T> void close_handle(std::unordered_set<const void*>& set, T* h)
 template <int Slot> HRESULT STDMETHODCALLTYPE offline_failure(void*) {
     static std::atomic<bool> s_logged{false};
     if (!s_logged.exchange(true))
-        std::fprintf(stderr, "[rt] xgameruntime: XStoreImpl slot %d is not available offline (E_FAIL)\n", Slot);
+        RT_LOG_WARN("xgameruntime: XStoreImpl slot %d is not available offline (E_FAIL)\n", Slot);
     return E_FAIL;
 }
 
@@ -129,7 +131,7 @@ template <int Slot> HRESULT STDMETHODCALLTYPE offline_failure(void*) {
 template <int Slot> HRESULT STDMETHODCALLTYPE unknown_slot(void*) {
     static std::atomic<bool> s_logged{false};
     if (!s_logged.exchange(true))
-        std::fprintf(stderr, "[rt] xgameruntime: XStoreImpl slot %d (no documented signature) called; E_NOTIMPL\n", Slot);
+        RT_LOG_WARN("xgameruntime: XStoreImpl slot %d (no documented signature) called; E_NOTIMPL\n", Slot);
     return E_NOTIMPL;
 }
 
@@ -194,7 +196,7 @@ HRESULT STDMETHODCALLTYPE store_create_context(void*, XUserHandle, XStoreContext
     *out = new_handle<XStoreContext>(g_contexts);
     static std::atomic<bool> s_logged{false};
     if (!s_logged.exchange(true))
-        std::fprintf(stderr, "[rt] xgameruntime: XStore offline: the game license is active, no add-ons, no updates\n");
+        RT_LOG_INFO("xgameruntime: XStore offline: the game license is active, no add-ons, no updates\n");
     return S_OK;
 }
 
