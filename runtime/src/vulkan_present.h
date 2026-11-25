@@ -27,6 +27,7 @@
 
 #include "vulkan_backend.h"
 #include "vulkan_present_compose.h"
+#include "../core/log.h"
 
 // Use the original EXT spellings. They are aliases of the promoted KHR types and are available in older headers.
 #if defined(VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME) && defined(VK_EXT_SURFACE_MAINTENANCE_1_EXTENSION_NAME)
@@ -198,14 +199,14 @@ public:
             capture_ = true;  // the swapchain needs TRANSFER_SRC, and every frame copies into a staging buffer
             capture_every_ = std::max(1, capture.every);
             capture_limit_ = std::max(1, capture.limit);
-            std::fprintf(stderr, "[rt] present: capture on: every %d presented frame(s), at most %d, into %s\n",
-                         capture_every_, capture_limit_, detail::path_text(capture_dir_).c_str());
+            RT_LOG_INFO("present: capture on: every %d presented frame(s), at most %d, into %s\n",
+                        capture_every_, capture_limit_, detail::path_text(capture_dir_).c_str());
         }
         ok_ = recreate(true, false);
         if (!ok_ && capture_to_disk_) {
             // The surface refused a TRANSFER_SRC swapchain, or the staging buffer could not be made: present
             // without the capture rather than not at all.
-            std::fprintf(stderr, "[rt] present: capture is unavailable on this surface; presenting without it\n");
+            RT_LOG_WARN("present: capture is unavailable on this surface; presenting without it\n");
             capture_to_disk_ = false;
             capture_ = false;
             capture_dir_.clear();
@@ -433,8 +434,8 @@ private:
             }
             if (!logged) {
                 logged = true;
-                std::fprintf(stderr, "[rt] d3d12: %zu Presents are queued behind held work; this one waits for it\n",
-                             max_deferred_presents);
+                RT_LOG_WARN("d3d12: %zu Presents are queued behind held work; this one waits for it\n",
+                            max_deferred_presents);
             }
             if (should_abort()) return;
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
@@ -463,7 +464,7 @@ private:
                                            p.has_rect ? &p.rect : nullptr, p.srgb, p.tear,
                                            p.has_planes ? &p.planes : nullptr);
         if (result != VK_SUCCESS)
-            std::fprintf(stderr, "[rt] d3d12: a Present held behind queued work failed when it was released (%d)\n",
+            RT_LOG_ERROR("d3d12: a Present held behind queued work failed when it was released (%d)\n",
                          int(result));
     }
 
@@ -1130,7 +1131,7 @@ private:
         const std::filesystem::path path = capture_dir_ / name;
         std::ofstream file(path, std::ios::binary | std::ios::trunc);
         if (!file) {
-            std::fprintf(stderr, "[rt] present: cannot write %s\n", detail::path_text(path).c_str());
+            RT_LOG_ERROR("present: cannot write %s\n", detail::path_text(path).c_str());
             return;
         }
         file << "P6\n" << extent.width << ' ' << extent.height << "\n255\n";
@@ -1144,7 +1145,7 @@ private:
                   << ") extent " << extent.width << 'x' << extent.height << " mean rgb " << std::fixed
                   << std::setprecision(2) << mean[0] << ' ' << mean[1] << ' ' << mean[2] << '\n';
         ++capture_written_;
-        std::fprintf(stderr, "[rt] present: capture %s (%ux%u, mean rgb %.2f %.2f %.2f)\n", name, extent.width,
+        RT_LOG_DEBUG("present: capture %s (%ux%u, mean rgb %.2f %.2f %.2f)\n", name, extent.width,
                      extent.height, mean[0], mean[1], mean[2]);
     }
 
@@ -1227,8 +1228,8 @@ private:
             }
             if (!found && !warned_hdr_) {
                 warned_hdr_ = true;
-                std::fprintf(stderr, "[rt] present: the surface has no HDR10 (ST.2084) format; HDR10 planes are converted to "
-                                     "SDR by tone mapping\n");
+                RT_LOG_WARN("present: the surface has no HDR10 (ST.2084) format; HDR10 planes are converted to "
+                            "SDR by tone mapping\n");
             }
         }
         for (const VkFormat wanted : srgb ? std::array<VkFormat, 2>{VK_FORMAT_B8G8R8A8_SRGB, VK_FORMAT_R8G8B8A8_SRGB}
@@ -1243,7 +1244,8 @@ private:
             if (found) break;
         }
         if (!found && srgb) {
-            if (!warned_srgb_) std::fprintf(stderr, "[rt] present: the surface has no sRGB 8-bit format; an sRGB back buffer is shown darker\n");
+            if (!warned_srgb_)
+                RT_LOG_WARN("present: the surface has no sRGB 8-bit format; an sRGB back buffer is shown darker\n");
             warned_srgb_ = true;
             for (const auto& f : formats)
                 if ((f.format == VK_FORMAT_B8G8R8A8_UNORM || f.format == VK_FORMAT_R8G8B8A8_UNORM) &&
