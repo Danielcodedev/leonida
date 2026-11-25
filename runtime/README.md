@@ -22,6 +22,25 @@ cmake -S runtime -B runtime/build
 cmake --build runtime/build --config RelWithDebInfo
 ```
 
+`runtime/CMakePresets.json` names three builds. They use Ninja, so run them from an x64 Native Tools prompt, inside
+`runtime/`:
+
+| Preset | Build type | `LEONIDA_DIAGNOSTICS` | Folder |
+|---|---|---|---|
+| `dev` | `Debug` | on | `runtime/build-dev` |
+| `release` | `RelWithDebInfo` | off | `runtime/build` |
+| `diag` | `RelWithDebInfo` | on | `runtime/build-diag` |
+
+```powershell
+cmake --preset diag
+cmake --build --preset diag
+ctest --preset diag
+```
+
+`LEONIDA_DIAGNOSTICS=ON` compiles every target with `LEONIDA_DIAGNOSTICS` defined; code that only helps to find a
+fault belongs behind it. `release` shares `runtime/build` with the commands above: a folder configured with another
+generator has to be removed before the preset can use it.
+
 Requirements: Windows x64, Visual Studio 2022 with the C++ desktop workload. The GPU tools need the
 Vulkan SDK; the runtime and CPU tests do not. The loader is x64-only and the PE mapper rejects any
 other machine.

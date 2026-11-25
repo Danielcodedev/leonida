@@ -16,6 +16,14 @@ if(NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
   message(FATAL_ERROR "gta6rt must be built for x64 (run from an x64 Native Tools prompt or vcvars64.bat)")
 endif()
 
+# The diagnostics build (the `diag` preset in CMakePresets.json): every target is compiled with LEONIDA_DIAGNOSTICS
+# defined. Code that only helps to find a fault (debug and trace logging, captures, stack dumps) goes behind it, so
+# a release build neither carries nor runs it.
+option(LEONIDA_DIAGNOSTICS "Compile in the diagnostics a release build leaves out" OFF)
+if(LEONIDA_DIAGNOSTICS)
+  add_compile_definitions(LEONIDA_DIAGNOSTICS=1)
+endif()
+
 # Portable root-signature model + packer to user SGPRs (no d3d12.h, no windows.h), and the host CPU preflight of
 # --init/--run (src/host_cpu.h). Built on every OS, so their tests run in the Linux and macOS jobs as well as with the
 # Windows runtime.
@@ -517,6 +525,8 @@ endif()
 include(CTest)
 # LEONIDA_TRANSLATOR_DEPS: what the rules that run test/shaders/build.py depend on besides their .asm files.
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/translator_deps.cmake")
+# leonida_add_d3d12_xs_stub(): the import stub the stand-in titles link.
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/fixtures.cmake")
 if(BUILD_TESTING)
   add_executable(gfx10_tiling_test test/gfx10_tiling_test.cpp)
   add_test(NAME gfx10_tiling COMMAND gfx10_tiling_test)
@@ -3098,15 +3108,7 @@ if(TARGET Vulkan::Headers)
       # device it gets, mapped and run by `gta6rt --run` with LEONIDA_D3D12=vulkan: the loader, the game thread, the
       # proxies and the Vulkan device in one process. check_tiny_frame.py reads the verdict, the binding and the
       # call order from outside; d3d12_com_test is its probe for "no usable Vulkan device" (exit code 77).
-      add_library(d3d12_xs_stub SHARED test/fixtures/d3d12_xs_stub.cpp test/fixtures/d3d12_xs_stub.def)
-      target_compile_definitions(d3d12_xs_stub PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
-      target_compile_options(d3d12_xs_stub PRIVATE /W4 /permissive- /utf-8)
-      set_target_properties(d3d12_xs_stub PROPERTIES
-        OUTPUT_NAME d3d12_xs
-        PREFIX ""
-        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/fixtures/stubs/$<CONFIG>"
-        ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/fixtures/stubs/$<CONFIG>"
-      )
+      leonida_add_d3d12_xs_stub()
       add_executable(tiny_frame test/fixtures/tiny_frame.cpp)
       target_link_libraries(tiny_frame PRIVATE d3d12_xs_stub)
       target_compile_definitions(tiny_frame PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
@@ -3138,18 +3140,8 @@ if(TARGET Vulkan::Headers)
            "Build tiny_guest_draw.exe and run the M1.5 draw through gta6rt --run (needs a Vulkan GPU)" OFF)
     option(LEONIDA_GUEST_SCENE "Build the headless 600-frame synthetic guest test (requires static SDL3)" OFF)
     if(LEONIDA_TEST_GUEST_DRAW OR LEONIDA_GUEST_SCENE)
-      # Share the import stub with the tiny_frame clear/readback guest from PR #3488.
-      if(NOT TARGET d3d12_xs_stub)
-        add_library(d3d12_xs_stub SHARED test/fixtures/d3d12_xs_stub.cpp test/fixtures/d3d12_xs_stub.def)
-        target_compile_definitions(d3d12_xs_stub PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
-        target_compile_options(d3d12_xs_stub PRIVATE /W4 /permissive- /utf-8)
-        set_target_properties(d3d12_xs_stub PROPERTIES
-          OUTPUT_NAME d3d12_xs
-          PREFIX ""
-          RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/fixtures/stubs/$<CONFIG>"
-          ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/fixtures/stubs/$<CONFIG>"
-        )
-      endif()
+      # The import stub is shared with the tiny_frame clear/readback guest.
+      leonida_add_d3d12_xs_stub()
       add_executable(tiny_guest_draw test/d3d12_translated_draw_test.cpp)
       target_link_libraries(tiny_guest_draw PRIVATE d3d12_xs_stub Vulkan::Headers)
       target_compile_definitions(tiny_guest_draw PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX LEONIDA_M15_GUEST)
