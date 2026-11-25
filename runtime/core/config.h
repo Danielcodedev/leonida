@@ -64,6 +64,7 @@ inline constexpr Setting kSettings[] = {
     {"d3d12.wait_event_slot", "LEONIDA_XS_WAIT_EVENT_SLOT", "80"},
     {"d3d12.queue_x_slot", "LEONIDA_XS_QUEUE_X_SLOT", "48"},
     {"d3d12.list_x_slot", "LEONIDA_XS_LIST_X_SLOT", "73"},
+    {"d3d12.present_x_slot", "LEONIDA_XS_PRESENT_X_SLOT", ""},
 
     {"vulkan.device", "LEONIDA_VK_DEVICE", ""},
     {"vulkan.validation", "LEONIDA_VK_VALIDATION", "0"},

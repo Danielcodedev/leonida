@@ -80,6 +80,8 @@ struct DeviceProxy {
     std::atomic<std::uint64_t> frame_next_token{1};
     // Takes the three frame calls over when set (set_device_frame_event_sink); the fields above stay unused then.
     std::atomic<const FrameEventSink*> frame_sink{nullptr};
+    // Where a PresentX on one of this device's queues goes (set_device_present_sink); null: the call is refused.
+    std::atomic<const PresentSink*> present_sink{nullptr};
 };
 
 constexpr unsigned kHeapSlots = 11;  // IUnknown + ID3D12Object + DeviceChild + Pageable + GetDesc + 2 handles
@@ -636,7 +638,7 @@ HRESULT create_heap_proxy(ID3D12DescriptorHeap* real, DeviceProxy* device, REFII
 // the public chain in PC order, exactly like the device proxy, and a slot past the PC vtable is logged and refused
 // with E_NOTIMPL. PresentX, SuspendX and ResumeX are queue methods past the public chain
 // (docs/d3d12_command_objects.md §5.3). Their slots are not known and nothing is guessed: the first run of the
-// executable names them in the log.
+// executable names them in the log. PresentX alone has a route, at the slot a setting names (present_x_slot below).
 //
 // Slot numbers are those of the Windows SDK 10.0.26100 d3d12.h: ID3D12CommandQueue has 19, ID3D12Fence 11 and
 // ID3D12Fence1 12. That the console keeps these public slots, and keeps device slots 8/32/36/75, is an assumption
@@ -1197,6 +1199,51 @@ LONG CALLBACK table_overrun_handler(EXCEPTION_POINTERS* info) {
     return EXCEPTION_CONTINUE_SEARCH;  // diagnostics only: the fault goes on to the title's handlers or the crash
 }
 
+// PresentX on the queue (PresentSink in d3d12_xs_device.h). Its slot is the one d3d12.present_x_slot
+// (LEONIDA_XS_PRESENT_X_SLOT) names, read once: a slot of the refused tail, or 0 when the setting names none or its
+// value is not such a slot (logged once). No default is taken from the public numbers: they are other titles'.
+unsigned present_x_slot() {
+    static const unsigned slot = [] {
+        const rt::config::Name setting("d3d12.present_x_slot");
+        const char* name = setting.setting().variable;
+        const rt::config::Value configured = rt::config::get(setting);
+        if (!configured.is_set()) return 0u;
+        const std::string& value = configured.text;
+        errno = 0;
+        char* end = nullptr;
+        const unsigned long parsed = value.size() < 32 ? std::strtoul(value.c_str(), &end, 0) : 0;
+        if (value.size() >= 32 || errno != 0 || end == value.c_str() || *end != '\0' ||
+            parsed < kQueuePublicSlots || parsed >= kQueueSlots) {
+            RT_LOG_WARN("d3d12_xs: %s=%.40s is not a queue slot in %u..%u; no slot is taken for PresentX\n", name,
+                        value.c_str(), kQueuePublicSlots, kQueueSlots - 1);
+            return 0u;
+        }
+        RT_LOG_INFO("d3d12_xs: Xbox queue slot: PresentX=%lu\n", parsed);
+        return static_cast<unsigned>(parsed);
+    }();
+    return slot;
+}
+
+// A call on the PresentX slot: PresentX(plane count, planes, parameters). It goes to the present sink of the queue's
+// device with the real queue behind the proxy; without a sink it is refused like the rest of the tail, with a line
+// that says why.
+HRESULT queue_present_x(ChildProxy* self, unsigned slot, std::uint64_t plane_count, std::uint64_t planes,
+                        std::uint64_t params) {
+    const PresentSink* sink = self->device ? self->device->present_sink.load(std::memory_order_acquire) : nullptr;
+    if (!sink || !sink->present_x) {
+        static std::atomic<bool> logged{false};
+        if (first_call(logged))
+            RT_LOG_WARN("d3d12_xs: queue slot %u is taken for PresentX and the device has no present sink; "
+                        "returning E_NOTIMPL\n", slot);
+        d3d12_trace::record(child_trace_name<ChildKind::queue>(slot), "unsupported");
+        return E_NOTIMPL;
+    }
+    d3d12_trace::record(child_trace_name<ChildKind::queue>(slot));  // "called": the sink's result is the title's
+    return sink->present_x(sink->context, reinterpret_cast<ID3D12CommandQueue*>(self->real),
+                           static_cast<std::uint32_t>(plane_count), reinterpret_cast<const void*>(planes),
+                           reinterpret_cast<const void*>(params));
+}
+
 template <ChildKind K, unsigned Slot>
 std::uint64_t WINAPI child_slot(ChildProxy* self, std::uint64_t a1, std::uint64_t a2, std::uint64_t a3,
                                 std::uint64_t a4, std::uint64_t a5, std::uint64_t a6, std::uint64_t a7,
@@ -1216,6 +1263,11 @@ std::uint64_t WINAPI child_slot(ChildProxy* self, std::uint64_t a1, std::uint64_
                                              reinterpret_cast<void**>(a2)));
     } else {
         note_child_slot<K>(Slot);
+        // The slot a setting names for PresentX, before the tail is refused. Only a tail slot of the queue table can
+        // be that slot, so the public chain, the fences and the allocators never ask.
+        if constexpr (K == ChildKind::queue && Slot >= kQueuePublicSlots) {
+            if (Slot == present_x_slot()) return hr_to_u64(queue_present_x(self, Slot, a1, a2, a3));
+        }
         if (Slot >= self->slot_count) {
             bool expected = false;
             if (ChildStats<K>::beyond_warned[Slot].compare_exchange_strong(expected, true,
@@ -2069,6 +2121,24 @@ const FrameEventSink* device_frame_event_sink(const void* device) {
     if (!is_device_proxy(device)) return nullptr;
     return static_cast<const DeviceProxy*>(device)->frame_sink.load(std::memory_order_acquire);
 }
+
+bool set_device_present_sink(void* device, const PresentSink* sink) {
+    auto* proxy = static_cast<DeviceProxy*>(device_proxy_primary(device));
+    if (!proxy) {
+        // Not setting one silently would leave every PresentX of the device's queues refused.
+        RT_LOG_ERROR("d3d12_xs: set_device_present_sink: %p is not a device proxy; no sink set\n", device);
+        return false;
+    }
+    proxy->present_sink.store(sink, std::memory_order_release);
+    return true;
+}
+
+const PresentSink* device_present_sink(const void* device) {
+    if (!is_device_proxy(device)) return nullptr;
+    return static_cast<const DeviceProxy*>(device)->present_sink.load(std::memory_order_acquire);
+}
+
+unsigned queue_present_x_slot() { return present_x_slot(); }
 
 bool is_heap_proxy(const void* heap) {
     return heap && *reinterpret_cast<void* const*>(heap) == reinterpret_cast<void*>(get_heap_vtable());

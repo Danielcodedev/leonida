@@ -98,6 +98,10 @@
 # LEONIDA_XS_LIST_X_SLOT: CreateCommandListX.
 # list_x_slot = 73
 
+# LEONIDA_XS_PRESENT_X_SLOT: the slot of PresentX on the Xbox command queue, 19 to 127 (runtime/README.md). Not set:
+# no slot is taken for it, and the call is refused with a log line that names the slot the title called.
+# present_x_slot = ''
+
 [vulkan]
 # The Vulkan backend (docs/d3d12_vulkan.md).
 

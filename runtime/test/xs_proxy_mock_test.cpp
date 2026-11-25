@@ -1069,6 +1069,113 @@ int run_env_slots(bool valid) {
     return 0;
 }
 
+// ---- 8a. PresentX on the queue: the slot a setting names and the present sink (one process each, read once) ----
+//
+// No slot is taken for PresentX by default, so each case sets the variable before the first queue call past the
+// public chain. The sink is a function of this test: it records what it gets and returns what the test tells it to.
+struct PresentState {
+    unsigned calls;
+    ID3D12CommandQueue* queue;
+    std::uint32_t plane_count;
+    const void* planes;
+    const void* params;
+    HRESULT result;
+};
+
+HRESULT sink_present_x(void* context, ID3D12CommandQueue* queue, std::uint32_t plane_count, const void* planes,
+                       const void* params) {
+    auto* state = static_cast<PresentState*>(context);
+    ++state->calls;
+    state->queue = queue;
+    state->plane_count = plane_count;
+    state->planes = planes;
+    state->params = params;
+    return state->result;
+}
+
+int run_present_slot(bool valid) {
+    constexpr unsigned kSlot = 32;
+    // 18 is GetDesc, the last public slot: not a slot of the refused tail, so the setting is ignored.
+    EXPECT(SetEnvironmentVariableA("LEONIDA_XS_PRESENT_X_SLOT", valid ? "32" : "18") != FALSE);
+
+    Mock* mock = nullptr;
+    void* device = make_device(mock, 9, true);
+    EXPECT(device && xs::device_present_sink(device) == nullptr);
+    void* queue = make_queue(device);  // made before a sink is set
+    EXPECT(queue);
+    Mock* const queue_mock = reinterpret_cast<Mock*>(xs::queue_proxy_real_queue(queue));
+    xs::reset_device_proxy_stats();
+
+    PresentState state{};
+    const xs::PresentSink sink{&state, &sink_present_x};
+    const std::uint64_t planes[2] = {}, params[1] = {};
+
+    if (!valid) {
+        // No slot is taken: with a sink set, the whole tail is still refused and the sink is never called.
+        EXPECT(xs::queue_present_x_slot() == 0);
+        EXPECT(xs::set_device_present_sink(device, &sink));
+        for (unsigned slot = 19; slot < xs::queue_proxy_table_size(); ++slot)
+            EXPECT(hr_of(raw(queue, slot, 1, word(planes), word(params))) == E_NOTIMPL &&
+                   queue_mock->calls[slot] == 0);
+        EXPECT(state.calls == 0);
+        // GetDesc (18) keeps its PC method.
+        EXPECT(hr_of(raw(queue, 18)) == S_OK && queue_mock->calls[18] == 1);
+        EXPECT(xs::set_device_present_sink(device, nullptr));
+        EXPECT(release(queue) == 0 && release(device) == 0 && mock->refs == 0);
+        std::printf("%s: a PresentX slot outside 19..127 is ignored: no slot is taken and the tail is refused\n",
+                    g_label);
+        return 0;
+    }
+
+    EXPECT(xs::queue_present_x_slot() == kSlot);
+    // No sink yet: the call is refused and the real queue is not called.
+    EXPECT(hr_of(raw(queue, kSlot, 1, word(planes), word(params))) == E_NOTIMPL && queue_mock->calls[kSlot] == 0);
+
+    // Only a device proxy takes a sink: the PC device behind it is refused, and so is a null pointer.
+    EXPECT(!xs::set_device_present_sink(mock, &sink) && !xs::set_device_present_sink(nullptr, &sink));
+    EXPECT(xs::set_device_present_sink(device, &sink) && xs::device_present_sink(device) == &sink);
+
+    // PresentX(plane count, planes, parameters): the sink gets the real queue behind the proxy and the three words.
+    // The count is a UINT, so only the low half of its word arrives.
+    state.result = S_OK;
+    EXPECT(hr_of(raw(queue, kSlot, 0xdeadbeef00000002ull, word(planes), word(params))) == S_OK);
+    EXPECT(state.calls == 1 && state.queue == xs::queue_proxy_real_queue(queue) && state.plane_count == 2);
+    EXPECT(state.planes == planes && state.params == params);
+    // The sink's result is the title's, a failure too; null planes and parameters are passed on as they are.
+    const HRESULT refused = static_cast<HRESULT>(0x887A0004);  // DXGI_ERROR_UNSUPPORTED
+    state.result = refused;
+    EXPECT(hr_of(raw(queue, kSlot, 0, 0, 0)) == refused);
+    EXPECT(state.calls == 2 && state.plane_count == 0 && !state.planes && !state.params);
+    EXPECT(queue_mock->calls[kSlot] == 0 && xs::queue_slot_hits(kSlot) == 3 &&
+           xs::queue_slot_first_call_seen(kSlot));
+
+    // Only the named slot is PresentX: 30, the other public number, is refused like the rest of the tail, and
+    // GetDesc (18) keeps its PC method.
+    EXPECT(hr_of(raw(queue, 30, 1, word(planes), word(params))) == E_NOTIMPL && state.calls == 2);
+    EXPECT(queue_mock->calls[30] == 0);
+    EXPECT(hr_of(raw(queue, 18)) == S_OK && queue_mock->calls[18] == 1);
+
+    // A queue made after the sink was set reaches the same sink, with its own real queue.
+    void* later = make_queue(device);
+    EXPECT(later && later != queue);
+    state.result = S_OK;
+    EXPECT(hr_of(raw(later, kSlot, 1, word(planes), 0)) == S_OK);
+    EXPECT(state.calls == 3 && state.queue == xs::queue_proxy_real_queue(later) && state.plane_count == 1);
+    EXPECT(state.queue != xs::queue_proxy_real_queue(queue));
+
+    // A sink with a null function, and no sink again: refused, and the test's function is not called.
+    const xs::PresentSink empty{&state, nullptr};
+    EXPECT(xs::set_device_present_sink(device, &empty) && xs::device_present_sink(device) == &empty);
+    EXPECT(hr_of(raw(queue, kSlot, 1, word(planes), 0)) == E_NOTIMPL && state.calls == 3);
+    EXPECT(xs::set_device_present_sink(device, nullptr) && xs::device_present_sink(device) == nullptr);
+    EXPECT(hr_of(raw(queue, kSlot, 1, word(planes), 0)) == E_NOTIMPL && state.calls == 3);
+
+    EXPECT(release(later) == 0 && release(queue) == 0 && release(device) == 0 && mock->refs == 0);
+    std::printf("%s: queue slot %u, named by the setting, reaches the device's present sink with the real queue and "
+                "the title's words; without a sink it is refused\n", g_label, kSlot);
+    return 0;
+}
+
 // ---- 9. The refused tail and the guard region ----
 
 int check_tail(bool want_guarded) {
@@ -1369,6 +1476,8 @@ int main(int argc, char** argv) {
     if (argc == 2) {
         if (std::strcmp(argv[1], "--env-slots") == 0) return run_env_slots(true);
         if (std::strcmp(argv[1], "--env-slots-invalid") == 0) return run_env_slots(false);
+        if (std::strcmp(argv[1], "--present-slot") == 0) return run_present_slot(true);
+        if (std::strcmp(argv[1], "--present-slot-invalid") == 0) return run_present_slot(false);
         return run_fault_mode(argv[1]);
     }
     if (argc != 1) return 2;

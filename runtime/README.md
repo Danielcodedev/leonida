@@ -492,8 +492,13 @@ blocks the import-driven work:
   console-only pipeline call, and the rest is open (`docs/d3d12_vulkan.md`, question 2).
 - The command-queue and fence extensions: the proxies forward the public slots, and the console's own methods past
   them (`PresentX`, `SuspendX`, `ResumeX`) have unknown slots, so they are refused with a log.
-  `PresentX` and the frame events themselves are implemented (`shims/xbox_present.*`, `xbox_present_test`) but
-  nothing reaches them yet: their queue and device slots are unmeasured.
+  `PresentX` and the frame events themselves are implemented (`shims/xbox_present.*`, `xbox_present_test`), and the
+  proxies have a place to hang them: a frame-event sink on device slots 78/79/80 and a present sink on the queue
+  (`shims/d3d12_xs_device.h`). `gta6rt` sets neither sink yet, so the frame calls still get the proxy's own answers
+  and a `PresentX` is still refused. The `PresentX` slot is not measured for this title (public code gives 30 for
+  an older runtime layout and 32 for a newer one), so no slot is taken for it by default:
+  `LEONIDA_XS_PRESENT_X_SLOT` (`d3d12.present_x_slot` in `leonida.toml`) names it, a queue slot from 19 to 127. A
+  value outside that range is logged once and ignored. The setting is read once per run.
 - Most of the `xgameruntime` surface: an offline shim covers `XGameRuntimeInitialize`, device/console queries,
   `XTaskQueue` and `XAsync`, and `QueryApiImpl` serves `XThreadingImpl`, `XErrorImpl`, `XNetworkingImpl`,
   `XPersistentLocalStorageImpl` and `XSystemImpl` (see `xgameruntime_test`); any other class is refused with a log.

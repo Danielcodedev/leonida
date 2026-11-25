@@ -39,8 +39,9 @@
 // in PC order, and a slot past it, up to the end of the proxy's table (128 queue, 64 fence slots), is logged with its
 // first four argument words and refused with E_NOTIMPL. A slot past the table faults on the vtable read inside a
 // reserved, never-committed region, and the fault is logged with the slot. That is where the console's queue methods
-// (PresentX, SuspendX, ResumeX) will show up; their slots are not known and are not guessed, and that the console
-// keeps the public slots is an assumption (docs/d3d12_command_objects.md §5.2). Heap, queue and fence proxies are
+// (PresentX, SuspendX, ResumeX) will show up; their slots are not known and are not guessed (PresentX is routed only
+// at a slot a setting names, see PresentSink below), and that the console keeps the public slots is an assumption
+// (docs/d3d12_command_objects.md §5.2). Heap, queue and fence proxies are
 // unwrapped wherever a device or queue method hands them to the real runtime: queue Signal/Wait (14/15), device
 // CreateSharedHandle (31), MakeResident/Evict (34/35), SetEventOnMultipleFenceCompletion (45), SetResidencyPriority
 // (46) and EnqueueMakeResident (50). Command lists are not wrapped, so ExecuteCommandLists passes them through and a
@@ -104,6 +105,29 @@ struct FrameEventSink {
 bool set_device_frame_event_sink(void* device, const FrameEventSink* sink);
 // The sink set on a device proxy, or null. Test helper.
 const FrameEventSink* device_frame_event_sink(const void* device);
+
+// PresentX on the command queue. It is a queue method past the public chain and its slot is not measured for this
+// title (public code gives 30 for an older runtime layout and 32 for a newer one, shims/xbox_present.h), so no slot
+// is taken for it unless a setting names one: d3d12.present_x_slot (LEONIDA_XS_PRESENT_X_SLOT), a slot of the queue
+// proxy's refused tail (19..127; anything else is logged once and ignored). The setting is read once, on the first
+// queue call past the public chain or the first queue_present_x_slot().
+// A call on that slot goes to the present sink of the queue's device, also for a queue made before the sink was set:
+// the sink gets the real queue behind the proxy and the title's three words (plane count, planes, parameters), and
+// its result is the title's. The two structures are not read here; their layouts are in shims/xbox_present.h. With
+// the slot set and no sink (or a sink with a null function) the call is refused with E_NOTIMPL and logged once.
+// The sink is not copied; the lifetime rule is the frame-event sink's.
+struct PresentSink {
+    void* context;
+    HRESULT (*present_x)(void* context, ID3D12CommandQueue* queue, std::uint32_t plane_count, const void* planes,
+                         const void* params);
+};
+// `device` is the proxy or its DXGI pointer; a null `sink` takes the sink away. False, with a line on stderr, when
+// `device` is neither: nothing is set then.
+bool set_device_present_sink(void* device, const PresentSink* sink);
+// The present sink set on a device proxy, or null. Test helper.
+const PresentSink* device_present_sink(const void* device);
+// The queue slot taken for PresentX, or 0 when the setting names none.
+unsigned queue_present_x_slot();
 
 // True when `heap` is a descriptor-heap proxy created by device slot 14.
 bool is_heap_proxy(const void* heap);

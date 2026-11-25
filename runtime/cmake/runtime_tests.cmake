@@ -509,6 +509,9 @@ if(TARGET xs_proxy_mock_test)
   # The routes are read once per process, so each override case is its own test.
   add_test(NAME xs_proxy_mock_env_slots COMMAND xs_proxy_mock_test --env-slots)
   add_test(NAME xs_proxy_mock_env_slots_invalid COMMAND xs_proxy_mock_test --env-slots-invalid)
+  # PresentX on the queue: the slot is read once per process, so the named slot and the ignored value are two tests.
+  add_test(NAME xs_proxy_mock_present_slot COMMAND xs_proxy_mock_test --present-slot)
+  add_test(NAME xs_proxy_mock_present_slot_invalid COMMAND xs_proxy_mock_test --present-slot-invalid)
 endif()
 if(TARGET root_sig_test)
   add_test(NAME root_sig COMMAND root_sig_test)
