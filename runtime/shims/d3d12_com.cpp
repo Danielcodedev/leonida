@@ -5,6 +5,7 @@
 #include "d3d12_fence_waiter.h"
 #include "d3d12_trace.h"
 #include "d3d12_xs_device.h"
+#include "../core/log.h"
 #include "../src/gfx10_descriptors.h"
 
 #include <algorithm>
@@ -67,7 +68,7 @@ void stub(const char* method) {
     static std::mutex mutex;
     static std::set<std::string> seen;
     std::lock_guard lock(mutex);
-    if (seen.insert(method).second) std::fprintf(stderr, "[rt] d3d12: unimplemented %s\n", method);
+    if (seen.insert(method).second) RT_LOG_WARN("d3d12: unimplemented %s\n", method);
 }
 
 namespace {
@@ -77,7 +78,7 @@ void note_once(const char* what) {
     static std::mutex mutex;
     static std::set<std::string> seen;
     std::lock_guard lock(mutex);
-    if (seen.insert(what).second) std::fprintf(stderr, "[rt] d3d12: %s\n", what);
+    if (seen.insert(what).second) RT_LOG_WARN("d3d12: %s\n", what);
 }
 
 const char* name(leonida::ReplayResult result) {
@@ -1510,7 +1511,7 @@ public:
 private:
     bool claim_locked(UINT64 value, bool queue) {
         if (value <= highest_) {
-            std::fprintf(stderr, "[rt] d3d12: fence signal %llu is not above %llu; Vulkan timelines cannot go back\n",
+            RT_LOG_ERROR("d3d12: fence signal %llu is not above %llu; Vulkan timelines cannot go back\n",
                          static_cast<unsigned long long>(value), static_cast<unsigned long long>(highest_));
             return false;
         }
@@ -1606,15 +1607,13 @@ public:
         for (UINT i = 0; i < count; ++i) {
             const GraphicsCommandList* list = GraphicsCommandList::from(lists[i]);
             if (!list || list->type() == D3D12_COMMAND_LIST_TYPE_BUNDLE) {
-                std::fprintf(stderr, "[rt] d3d12: ExecuteCommandLists: list %u is not a direct command list\n", i);
+                RT_LOG_ERROR("d3d12: ExecuteCommandLists: list %u is not a direct command list\n", i);
                 last_result_ = leonida::ReplayResult::unsupported;
                 d3d12_trace::record(method, "failed");
                 return;
             }
             if (list->attached_device() != attached_device()) {
-                std::fprintf(stderr,
-                             "[rt] d3d12: ExecuteCommandLists: list %u belongs to a different device; refusing batch\n",
-                             i);
+                RT_LOG_ERROR("d3d12: ExecuteCommandLists: list %u belongs to a different device; refusing batch\n", i);
                 last_result_ = leonida::ReplayResult::unsupported;
                 d3d12_trace::record(method, "failed");
                 return;
@@ -1623,7 +1622,7 @@ public:
             // message 836): a DIRECT list's draws would otherwise be recorded for a COPY queue's transfer-only
             // Vulkan family. The whole batch is refused, as for the other checks here.
             if (list->type() != desc_.Type) {
-                std::fprintf(stderr, "[rt] d3d12: ExecuteCommandLists: list %u has type %d, the queue type %d\n", i,
+                RT_LOG_ERROR("d3d12: ExecuteCommandLists: list %u has type %d, the queue type %d\n", i,
                              int(list->type()), int(desc_.Type));
                 last_result_ = leonida::ReplayResult::unsupported;
                 d3d12_trace::record(method, "failed");
@@ -1631,7 +1630,7 @@ public:
             }
             // A list whose recording failed (Close returned E_INVALIDARG) must not replay its earlier commands.
             if (list->invalid()) {
-                std::fprintf(stderr, "[rt] d3d12: ExecuteCommandLists: list %u is invalid; refusing batch\n", i);
+                RT_LOG_ERROR("d3d12: ExecuteCommandLists: list %u is invalid; refusing batch\n", i);
                 last_result_ = leonida::ReplayResult::unsupported;
                 d3d12_trace::record(method, "failed");
                 return;
@@ -1647,8 +1646,7 @@ public:
         last_result_ = queue_.execute(recorded, [&graphics] { return pin_lists(graphics); });
         d3d12_trace::record(method, last_result_ == leonida::ReplayResult::success ? "ok" : "failed");
         if (last_result_ != leonida::ReplayResult::success)
-            std::fprintf(stderr, "[rt] d3d12: ExecuteCommandLists failed: %s; nothing was submitted\n",
-                         name(last_result_));
+            RT_LOG_ERROR("d3d12: ExecuteCommandLists failed: %s; nothing was submitted\n", name(last_result_));
     }
 
     // A copy list's timestamps go to COPY_QUEUE_TIMESTAMP heaps and every other list's to TIMESTAMP heaps.
