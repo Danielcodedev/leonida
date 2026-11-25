@@ -78,6 +78,8 @@ struct DeviceProxy {
     std::atomic<std::uint32_t> frame_latency{1};
     std::atomic<bool> frame_event_scheduled{false};
     std::atomic<std::uint64_t> frame_next_token{1};
+    // Takes the three frame calls over when set (set_device_frame_event_sink); the fields above stay unused then.
+    std::atomic<const FrameEventSink*> frame_sink{nullptr};
 };
 
 constexpr unsigned kHeapSlots = 11;  // IUnknown + ID3D12Object + DeviceChild + Pageable + GetDesc + 2 handles
@@ -1379,6 +1381,12 @@ HRESULT proxy_create_command_queue(DeviceProxy* self, const D3D12_COMMAND_QUEUE_
 // 60 Hz), and latency is the allowed frames in flight. S_OK even for 0: a boot must not abort here, and nothing paces.
 HRESULT proxy_set_frame_interval_x(DeviceProxy* self, std::uint64_t output, std::uint64_t interval_us,
                                    std::uint64_t latency, std::uint64_t flags) {
+    // A sink (set_device_frame_event_sink) takes the call over, with the title's words and its own result.
+    if (const FrameEventSink* sink = self->frame_sink.load(std::memory_order_acquire);
+        sink && sink->set_frame_interval)
+        return sink->set_frame_interval(sink->context, reinterpret_cast<void*>(output),
+                                        static_cast<std::uint32_t>(interval_us),
+                                        static_cast<std::uint32_t>(latency), static_cast<std::uint32_t>(flags));
     (void)output;
     (void)flags;
     self->frame_interval_us.store(static_cast<std::uint32_t>(interval_us), std::memory_order_relaxed);
@@ -1389,6 +1397,10 @@ HRESULT proxy_set_frame_interval_x(DeviceProxy* self, std::uint64_t output, std:
 // Xbox device slot 79 (public HLE): ScheduleFrameEventX(event, offset_us, pEvent, flags); our pacer has only the origin.
 HRESULT proxy_schedule_frame_event_x(DeviceProxy* self, std::uint64_t event, std::uint64_t offset_us,
                                      std::uint64_t flags) {
+    if (const FrameEventSink* sink = self->frame_sink.load(std::memory_order_acquire);
+        sink && sink->schedule_frame_event)
+        return sink->schedule_frame_event(sink->context, static_cast<std::uint32_t>(event),
+                                          static_cast<std::uint32_t>(offset_us), static_cast<std::uint32_t>(flags));
     (void)event;
     (void)offset_us;
     (void)flags;
@@ -1401,11 +1413,17 @@ HRESULT proxy_schedule_frame_event_x(DeviceProxy* self, std::uint64_t event, std
 // a zero wait cannot stall the title. A null token pointer is E_POINTER, as a _Out_ parameter.
 HRESULT proxy_wait_frame_event_x(DeviceProxy* self, std::uint64_t event, std::uint64_t timeout_ms,
                                  std::uint64_t flags, std::uint64_t token_word) {
+    auto* token = reinterpret_cast<std::uint64_t*>(token_word);
+    if (!token) return E_POINTER;
+    // With a sink the wait is the sink's: it may block, and its result and token are the title's.
+    if (const FrameEventSink* sink = self->frame_sink.load(std::memory_order_acquire);
+        sink && sink->wait_frame_event)
+        return sink->wait_frame_event(sink->context, static_cast<std::uint32_t>(event),
+                                      static_cast<std::uint32_t>(timeout_ms), static_cast<std::uint32_t>(flags),
+                                      token);
     (void)event;
     (void)timeout_ms;
     (void)flags;
-    auto* token = reinterpret_cast<std::uint64_t*>(token_word);
-    if (!token) return E_POINTER;
     std::uint64_t value = self->frame_next_token.fetch_add(1, std::memory_order_relaxed);
     if (value == 0) value = self->frame_next_token.fetch_add(1, std::memory_order_relaxed);  // skip the null token
     *token = value;
@@ -2034,6 +2052,22 @@ bool set_device_adapter_provider(void* device, DxgiAdapterProvider provider) {
     }
     proxy->adapter_provider = provider;
     return true;
+}
+
+bool set_device_frame_event_sink(void* device, const FrameEventSink* sink) {
+    auto* proxy = static_cast<DeviceProxy*>(device_proxy_primary(device));
+    if (!proxy) {
+        // Not setting one silently would leave the frame calls with the proxy's own answers, unpaced.
+        RT_LOG_ERROR("d3d12_xs: set_device_frame_event_sink: %p is not a device proxy; no sink set\n", device);
+        return false;
+    }
+    proxy->frame_sink.store(sink, std::memory_order_release);
+    return true;
+}
+
+const FrameEventSink* device_frame_event_sink(const void* device) {
+    if (!is_device_proxy(device)) return nullptr;
+    return static_cast<const DeviceProxy*>(device)->frame_sink.load(std::memory_order_acquire);
 }
 
 bool is_heap_proxy(const void* heap) {
