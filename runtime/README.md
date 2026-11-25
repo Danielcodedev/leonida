@@ -191,10 +191,8 @@ vulkan.validation             file         LEONIDA_VK_VALIDATION             1
 vulkan.arena_mb               default      LEONIDA_ARENA_MB                  256
 ```
 
-State of the move: the table, the file reader and `gta6rt config` are in place, and the places that read a setting
-are being moved to the table one file at a time. A reader that has not been moved yet still takes its value from
-the environment variable alone, so for it a value in the file has no effect although `gta6rt config` lists it.
-This paragraph goes when the last reader has moved.
+Only `gta6rt` loads a settings file. The test programs and tools load none, so for them a setting comes from its
+environment variable or is the default.
 
 ## PE loader
 
