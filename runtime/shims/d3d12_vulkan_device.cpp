@@ -15,6 +15,7 @@
 #include "d3d12_trace.h"
 #include "d3d12_xs_device.h"
 #include "dxgi_com.h"
+#include "../core/config.h"
 #include "../src/arena_size.h"
 #include "../src/gfx10_descriptors.h"
 #include "../src/depth24_fragment.h"
@@ -91,33 +92,38 @@ void log_once(const char* what, int value) {
 // number from 1 to 16: 16). LEONIDA_VK_GRAPHICS_FAMILY_ONLY=1: COMPUTE and COPY queues use the graphics family, as on
 // a GPU without async compute or transfer families. The game's device ignores both (QueueTestSettings::ignore).
 
-// The setting's value, or false when it is unset; set but ignored, it says so.
-bool queue_test_setting(const char* name, char* text, size_t size, rt::d3d12::QueueTestSettings settings) {
-    size_t length = 0;
-    if (getenv_s(&length, text, size, name) != 0 || length <= 1) return false;
-    if (settings == rt::d3d12::QueueTestSettings::apply) return true;
+// The setting's value in *text, or false when nothing sets it (its variable, else leonida.toml); set but ignored, it
+// says so, naming the variable also when the value came from the file. `size` is the size of the buffer the variable
+// was read into before the settings moved to the table: a value of that many characters or more counts as unset.
+bool queue_test_setting(rt::config::Name setting, std::string* text, size_t size,
+                        rt::d3d12::QueueTestSettings settings) {
+    const rt::config::Value value = rt::config::get(setting);
+    if (!value.is_set() || value.text.size() >= size) return false;
+    if (settings == rt::d3d12::QueueTestSettings::apply) {
+        *text = value.text;
+        return true;
+    }
     std::fprintf(stderr, "[rt] d3d12: %s is a test setting; the game's device ignores it (all its Vulkan queues)\n",
-                 name);
+                 setting.setting().variable);
     return false;
 }
 
 bool graphics_family_only(rt::d3d12::QueueTestSettings settings) {
-    char text[8] = {};
-    const bool on = queue_test_setting("LEONIDA_VK_GRAPHICS_FAMILY_ONLY", text, sizeof(text), settings) &&
-                    text[0] != '0';
+    std::string text;
+    const bool on = queue_test_setting("vulkan.graphics_family_only", &text, 8, settings) && text[0] != '0';
     if (on) std::fprintf(stderr, "[rt] d3d12: LEONIDA_VK_GRAPHICS_FAMILY_ONLY: every D3D12 queue in the graphics family\n");
     return on;
 }
 
 std::uint32_t max_queues_per_family(rt::d3d12::QueueTestSettings settings) {
     constexpr std::uint32_t most = 16;
-    char text[16] = {};
-    if (!queue_test_setting("LEONIDA_VK_MAX_QUEUES_PER_FAMILY", text, sizeof(text), settings)) return most;
+    std::string text;
+    if (!queue_test_setting("vulkan.max_queues_per_family", &text, 16, settings)) return most;
     char* end = nullptr;
-    const unsigned long value = std::strtoul(text, &end, 10);
-    if (end == text || *end || value < 1 || value > most) {
+    const unsigned long value = std::strtoul(text.c_str(), &end, 10);
+    if (end == text.c_str() || *end || value < 1 || value > most) {
         std::fprintf(stderr, "[rt] d3d12: LEONIDA_VK_MAX_QUEUES_PER_FAMILY=%s is not a number from 1 to %u: ignored\n",
-                     text, most);
+                     text.c_str(), most);
         return most;
     }
     std::fprintf(stderr, "[rt] d3d12: LEONIDA_VK_MAX_QUEUES_PER_FAMILY: at most %lu Vulkan queue(s) per family\n",
@@ -5052,9 +5058,10 @@ public:
             state_.probe_uint_backed_uav(VK_FORMAT_B8G8R8A8_SRGB, VK_FORMAT_B8G8R8A8_UNORM);
         memory_properties(info.physical, &state_.memory);
         {
-            char text[4] = {};
-            size_t length = 0;
-            const bool sysmem = getenv_s(&length, text, "LEONIDA_UPLOAD_SYSMEM") == 0 && length > 1 && text[0] != '0';
+            // vulkan.upload_sysmem (LEONIDA_UPLOAD_SYSMEM): on for a value that does not start with 0. A value of 4
+            // characters or more is ignored, as before the setting moved to the table.
+            const std::string text = rt::config::get("vulkan.upload_sysmem").text;
+            const bool sysmem = !text.empty() && text.size() < 4 && text[0] != '0';
             state_.upload_in_vram = leonida::resizable_bar(state_.memory) && !sysmem;
             std::fprintf(stderr, "[rt] d3d12: upload heaps in %s\n",
                          state_.upload_in_vram ? "VRAM (DEVICE_LOCAL | HOST_VISIBLE, Resizable BAR)"
@@ -5367,10 +5374,10 @@ public:
             return state_.bindless ? state_.bindless->set() : VK_NULL_HANDLE;
         });
         {
-            char text[8] = {};
-            size_t length = 0;
-            state_.bindless_legacy_idle = getenv_s(&length, text, "LEONIDA_BINDLESS_IDLE_WAIT") == 0 && length > 1 &&
-                                          text[0] != '0';
+            // vulkan.bindless_idle_wait (LEONIDA_BINDLESS_IDLE_WAIT): on for a value that does not start with 0. A
+            // value of 8 characters or more is ignored, as before the setting moved to the table.
+            const std::string text = rt::config::get("vulkan.bindless_idle_wait").text;
+            state_.bindless_legacy_idle = !text.empty() && text.size() < 8 && text[0] != '0';
         }
         state_.context->set_bindless_commit([this](bool submitted) {
             std::lock_guard lock(state_.descriptor_mutex);
@@ -5385,9 +5392,11 @@ public:
     bool create_arena() {
         auto& vk = state_.context->vk;
         if (!vk.vkGetBufferDeviceAddress) return false;
-        char text[16] = {};
-        size_t length = 0;
-        const bool set = getenv_s(&length, text, "LEONIDA_ARENA_MB") == 0 && length > 1;
+        // vulkan.arena_mb (LEONIDA_ARENA_MB): the text goes to decide_arena_size as written. Nothing set, or a value
+        // of 16 characters or more (ignored, as before the setting moved to the table), gives the default size.
+        const rt::config::Value arena_mb = rt::config::get("vulkan.arena_mb");
+        const bool set = arena_mb.is_set() && arena_mb.text.size() < 16;
+        const char* text = arena_mb.text.c_str();
         const leonida::ArenaLimits limits{state_.info.max_buffer_size, state_.info.max_memory_allocation_size};
         leonida::ArenaSize size = leonida::decide_arena_size(set ? text : nullptr, limits);
         auto& arena = state_.arena;
@@ -5455,9 +5464,10 @@ public:
         arena.size = info.size;
         arena.free[kArenaReserved] = arena.size - kArenaReserved;
         arena.peak_end = kArenaReserved;
-        char log[4] = {};
-        length = 0;
-        arena.log = getenv_s(&length, log, "LEONIDA_ARENA_LOG") == 0 && length > 1 && log[0] != '0';
+        // vulkan.arena_log (LEONIDA_ARENA_LOG): on for a value that does not start with 0. A value of 4
+        // characters or more is ignored, as before the setting moved to the table.
+        const std::string log = rt::config::get("vulkan.arena_log").text;
+        arena.log = !log.empty() && log.size() < 4 && log[0] != '0';
         state_.context->set_heap_base(arena.address);
         state_.context->set_zero_page(arena.buffer, 0, kArenaReserved);
         return true;
@@ -9192,15 +9202,8 @@ std::unique_ptr<WindowPresenter> create_window_presenter(ID3D12Device* device, H
     if (create_surface(info.instance, &surface_info, nullptr, &surface) != VK_SUCCESS) return nullptr;
     // LEONIDA_PRESENT_NO_TEAR=1 keeps the swapchain FIFO-only (ImmediateThresholdPercent then does nothing).
     // Any non-empty value other than "0" turns it off.
-    bool tear_allowed = true;
-    {
-        char* value = nullptr;
-        std::size_t length = 0;
-        if (_dupenv_s(&value, &length, "LEONIDA_PRESENT_NO_TEAR") == 0 && value) {
-            tear_allowed = value[0] == '\0' || std::strcmp(value, "0") == 0;
-            std::free(value);
-        }
-    }
+    const std::string no_tear = rt::config::get("present.no_tear").text;
+    const bool tear_allowed = no_tear.empty() || no_tear == "0";
     auto presenter = std::make_unique<leonida::VulkanPresenter>(*d->state().context, info.get_instance_proc,
                                                                 info.instance, info.physical, info.queue,
                                                                 info.queue_family, surface,  // owns the surface
@@ -9326,9 +9329,10 @@ HRESULT create_vulkan_device_standalone(REFIID riid, void** out, QueueTestSettin
     VkValidationFeaturesEXT validation_features{VK_STRUCTURE_TYPE_VALIDATION_FEATURES_EXT};
     validation_features.enabledValidationFeatureCount = 1;
     validation_features.pEnabledValidationFeatures = &sync_validation;
-    char validation[8] = {};
-    size_t length = 0;
-    if (getenv_s(&length, validation, "LEONIDA_VK_VALIDATION") == 0 && length > 1 && validation[0] != '0') {
+    // vulkan.validation (LEONIDA_VK_VALIDATION): on for a value that does not start with 0. A value of 8 characters
+    // or more is ignored, as before the setting moved to the table.
+    const std::string validation = rt::config::get("vulkan.validation").text;
+    if (!validation.empty() && validation.size() < 8 && validation[0] != '0') {
         // Ask for the layer only when the loader lists it, and say so when it does not: an instance that cannot be
         // made because of a missing layer left the caller with "Vulkan unavailable" and no hint that validation was
         // the cause. Wine does not list the Linux loader's layers to the program and refuses an explicit request for
@@ -9502,10 +9506,7 @@ HRESULT create_vulkan_device_standalone(REFIID riid, void** out, QueueTestSettin
         }
         // The game's translated RT shaders read XDXR BVH4 records, which a VkAccelerationStructureKHR is not
         // (docs/d3d12_vulkan.md 4.8): build those, unless LEONIDA_RT_AS=khr asks for #743's KHR builds instead.
-        char rt_as[8] = {};
-        std::size_t rt_as_length = 0;
-        const bool khr = getenv_s(&rt_as_length, rt_as, "LEONIDA_RT_AS") == 0 && rt_as_length > 1 &&
-                         std::strcmp(rt_as, "khr") == 0;
+        const bool khr = rt::config::get("vulkan.rt_as").text == "khr";
         if (!khr && chosen12.bufferDeviceAddress) {
             info.xdxr_acceleration_structures = true;
             info.ray_tracing = false;  // no KHR extensions: AS resources keep their console VAs
@@ -10031,15 +10032,8 @@ HRESULT create_console_descriptor_heap(ID3D12Device* device, const D3D12_DESCRIP
 
 std::filesystem::path configured_shader_directory(std::string* error, const std::filesystem::path& config) {
     try {
-        constexpr wchar_t env_name[] = L"LEONIDA_SHADERS";
-        if (const DWORD size = ::GetEnvironmentVariableW(env_name, nullptr, 0)) {
-            std::wstring value(size, L'\0');
-            const DWORD length = ::GetEnvironmentVariableW(env_name, value.data(), size);
-            if (length && length < size) {
-                value.resize(length);
-                return std::filesystem::path(value);
-            }
-        }
+        // paths.shaders (LEONIDA_SHADERS, else leonida.toml) wins over shader_path.txt.
+        if (std::filesystem::path shaders = rt::config::path("paths.shaders"); !shaders.empty()) return shaders;
         if (!config.empty()) return shader_directory_from_file(config);
         std::wstring exe(32768, L'\0');
         const DWORD length = ::GetModuleFileNameW(nullptr, exe.data(), static_cast<DWORD>(exe.size()));
