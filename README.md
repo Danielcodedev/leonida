@@ -1,11 +1,11 @@
-﻿<p align="center">
+<p align="center">
   <strong><a href="https://t.me/projectleonidal">Telegram — Leonida Legacy</a></strong>
 </p>
 
 <h1 align="center">
   <br>
   <a>
-  <img src="assets/logo.png" alt="Leonida Legacy" width="200">
+  <img src="https://raw.githubusercontent.com/ShinniUwU/leonida/89b95f3e2215cc7b078618c2878ded1567a3be18/assets/logo.png" alt="Leonida Legacy" width="200">
 </a>
 
   <br>
@@ -13,7 +13,7 @@
   <br>
 </h1>
 
-<h4 align="center">Grand Theft Auto VI (Xbox Series) running natively on Windows, built on your PC from your own copy.
+<h4 align="center">Grand Theft Auto VI (Xbox Series) running natively on Windows, from your own copy.
 </h4>
 
 <p align="center"><i>Continued by <a href="https://github.com/orkan1k">orkan1k</a>.</i></p>
@@ -21,125 +21,82 @@
 > *ItsNotRexed just wanted to play on the PC.*
 
 <p align="center">
-  <a href="#project-status">Status</a> |
-  <a href="#how-to-build">How to build</a> |
-  <a href="#how-it-works">How it works</a> |
-  <a href="#want-to-help">Want to help?</a> |
+  <a href="#status">Status</a> |
+  <a href="#getting-started">Getting started</a> |
+  <a href="docs/fork-notes.md">Fork notes</a> |
   <a href="#contact">Contact</a> |
   <a href="#credits">Credits</a> |
   <a href="#license">License</a>
 </p>
 
-Leonida Legacy is a static recompilation project. The Xbox Series CPU is x86-64 like a PC, so the game's code is loaded
-and run natively, and the console's system software is reimplemented. The console's precompiled RDNA2 GPU programs
-are translated to SPIR-V for Vulkan. The game's models, textures and audio are read from your package. All of this
-happens **on your PC, from your own copy of the game**.
+Leonida Legacy is a compatibility layer. The game's x86-64 code runs unchanged inside our process, and Leonida
+Legacy supplies the console platform underneath it: the loader, the runtime services, a Direct3D 12 back end and a
+shader recompiler that turns the console's GPU code into DXIL on first use. See
+[docs/architecture.md](docs/architecture.md).
+
+It is a fork of [victory-gta6](https://github.com/fxceless/victory-gta6), itself a fork of
+[VIctory](https://github.com/Marvisak/VIctory).
 
 > [!IMPORTANT]
-> This repository **does not contain the game, keys or an executable**, and it does not explain how to get them. You
-> need your own copy, with its files already readable on disk. Nothing here decrypts or works around any protection.
-> Everything the build creates (the generated shaders, extracted assets, the runtime folder and your saves) comes
-> from your game and stays on your PC. Never share those files.
+> This repository **does not contain the game, keys or an executable**. You need your own copy of the game.
+> Everything the tools make from your files (translated shaders, caches, saves, logs) stays outside the repository
+> and on your PC. Never share those files.
 
-## Project status
+## Status
 
-**Early. The game does not boot yet.** Everything that can be done without the game's executable is in place, so
-work on booting can start as soon as one is available to a developer.
+**Not playable yet: 2 to 4 frames per second by default, and shadowed areas are black.** Tested on Windows 11 Pro,
+AMD Ryzen 7 7800X3D, NVIDIA RTX 3080 12 GB, 32 GB RAM, Series X profile. The world frame rates below were measured
+by victory-gta6 on an RTX 4070 and have not been measured again on this machine yet.
 
-| What | Status |
-|---|---|
-| Finding and checking your copy (Xbox Series 1.0.2.1) | ✅ Works |
-| Shaders: carve, unpack native RDNA2 code, disassemble | ✅ All 26,503 |
-| Shaders: RDNA2 → SPIR-V translation | ✅ All **26,503** programs translate and pass `spirv-val` (2,236 VS, 12,101 PS, 2,689 CS, 9,282 mesh, 195 geometry); see [docs/design.md](docs/design.md) |
-| Shader translator checked on a real GPU | ⚠️ Manual GPU checks (fetch, textures, exports, ALU). Full build runs `tools/verify_build.py` (`vk_harness`) after the shaders stage |
-| Models (OBJ with real names, UVs, material references) | ✅ Exported. Not all layouts are decoded yet |
-| Texture dictionaries and world texture pools (DDS) | ✅ Exported. Some pool entries (BCPack) are skipped |
-| Audio banks (AWC: Opus, XMA2) | ✅ Exported whole. Decoding to WAV is not done yet |
-| PE loader and import shims | ⚠️ Maps/relocates/binds imports; `gta6rt --self-test` via `tools/verify_build.py`. Real game exe still needed for full coverage |
-| Xbox D3D12 → Vulkan | ⚠️ **In progress:** Vulkan-backed `ID3D12Device` (queues, allocators, command lists, fences, descriptor heaps, draws, dispatches, present) behind the Xbox-ABI proxy — GPU milestones M0–M2 (`d3d12_present_test`, `d3d12_draw_test`, `d3d12_m2_textured_test`). Default is PC D3D12; use `LEONIDA_D3D12=vulkan` for Vulkan. Still open for the full title: traced COM coverage, tessellation/stream-output PSOs, mesh PSOs, present path. See [docs/d3d12_vulkan.md](docs/d3d12_vulkan.md) |
-| Booting, story mode, anything playable | ❌ No (needs the game executable and the D3D12→Vulkan layer) |
+| Stage | State |
+|-------|-------|
+| Boot, menus, start screen | works, 30 fps |
+| Opening cutscene | plays from start to finish, lit |
+| Saves | the game autosaves a checkpoint and loads it again |
+| First gameplay scene | renders characters, textures, sky and the sunlit exterior; HUD, pause menu and pad input work |
+| Light in shadow | missing: ray-traced bounce light and shadows don't run yet, so anything out of direct sun is black |
+| Frame rate in the world | 2-4 fps by default; about 10 fps in the first rooms with the newer switches, all off by default |
 
-## How to build
+Known problems:
 
-The port isn't downloaded ready-made. It's built on your PC from your own copy.
+- The first gameplay room is sometimes not drawn after the cutscene hands over to gameplay.
+- Around 24 GB of memory is in use during play.
+- Many changes are specific to this game and this GPU; some are marked `shortcut:` in the code.
 
-**The easy way:**
+The full measurement log, what each switch does and the debugging options are in
+[docs/fork-notes.md](docs/fork-notes.md).
 
-1. Install the prerequisites below (or double-click **`Install-Prerequisites.bat`** / let **`Build.bat`** install missing tools automatically).
-2. Download this project **with its submodule**: `git clone --recursive https://github.com/ProjectLeonidaL/leonida`. A
-   "Download ZIP" from GitHub leaves out `third_party/rpf9-explorer`. The build fetches it if `git` is installed,
-   and otherwise tells you what to do.
-3. Optional: double-click **`Check-PC.bat`** (or `python -I scripts/pc_readiness.py`; `--lang de` or `ru` from
-   `scripts/i18n/pc_readiness/`) to see whether this PC has the tools, disk space, game package and GPU for the build
-   — without starting a build.
-4. Double-click **`Build.bat`**.
+## Getting started
 
-It finds your copy of the game by itself: it looks in Downloads, Desktop, Documents, Games, your home folder and
-the top of every drive, two folders deep. It recognises the version from a few file sizes, without reading
-anything large. If you have more than one copy it asks which one, and if it finds none it asks you to paste the
-folder. Before starting it checks that everything below is installed and that there is enough free space, and it
-lists anything missing in one go. The result goes to `Documents\Leonida Legacy`. A stopped build continues where it left
-off.
-
-Your game folder is the one that holds `MicrosoftGame.Config` and the `.rpf` archives, as plain files.
-
-**Prerequisites:**
-
-- **Your own copy** of the Xbox Series package, version 1.0.2.1.
-- **Windows 10/11 x64**, with about **350 GB** free for work files. They can go on another drive with `--work`.
-- [Python 3.11+](https://www.python.org/downloads/) (tick "Add python.exe to PATH").
-- [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0).
-- [Vulkan SDK](https://vulkan.lunarg.com/), for `spirv-as` / `spirv-val`.
-- [LLVM 21+](https://github.com/llvm/llvm-project/releases) with `llvm-mc` on PATH, or set `LLVM_MC` to its path.
-- Visual Studio 2022 with **Desktop development with C++**, for the runtime stage.
-
-On Windows, **`Install-Prerequisites.bat`** (or **`Build.bat`**, which runs the same installer quietly) uses **winget** where possible and can build **llvm-mc** with `scripts\build_llvm_mc.ps1`. It never downloads the game. Set **`LEONIDA_SKIP_PREREQ_INSTALL=1`** to skip auto-install. After installs, open a **new terminal** so `PATH` and `VULKAN_SDK` refresh.
-
-**From a terminal**, with the same behaviour and more control:
+Requirements: Windows 10/11 x64, a CPU with AVX2, a Direct3D 12 GPU with shader model 6.6 and mesh shaders, Rust
+(pinned in `rust-toolchain.toml`), and several GiB of free Windows commit at startup (if `crashes.log` reports
+Windows error 1455, close other applications or make the paging file bigger).
 
 ```powershell
-python -I make_game.py --find                          # list the copies found on this PC
-python -I make_game.py --check                         # check your copy, build nothing
-python -I make_game.py --game "D:\path\to\your\package" --out "D:\Games\Leonida Legacy" --work "E:\leonida-legacy-work"
-python -I make_game.py --stages shaders,assets         # only some stages
+cargo xtask install-hooks                # asset-policy check on every commit
+cargo test --workspace                   # needs no game data
+
+cargo build --release -p leonida
+target\release\leonida.exe run --execute # asks for your game folder the first time
 ```
 
-Stages run in order: `check`, `shaders`, `assets`, `runtime`. The shader translation is the longest step: several
-hours on one core for now.
+The first run asks for the folder of your copy of the game (the one with `MicrosoftGame.config` in it) and saves it to
+`leonida.toml`, which git ignores. `leonida config` shows what is set, and `leonida.example.toml` lists the other
+settings.
 
-**Runtime / GPU checks:** a full build (`Build.bat` or all default stages) ends with `tools/verify_build.py`:
-PE self-map, Vulkan device (GPU driver or Lavapipe from your installed Vulkan SDK), and—after the shaders stage—a `vk_harness` draw using SPIR-V in `<work>\shaders\spirv`. Nothing is downloaded during verify.
+Saves, settings and `crashes.log` are kept in `%LOCALAPPDATA%\leonida\data`, derived data in
+`%LOCALAPPDATA%\leonida\cache`.
 
-```powershell
-python -I tools/verify_build.py --work "<out>\work"            # after runtime build
-python -I tools/verify_build.py --work "<out>\work" --require-gpu   # after shaders + runtime
-python -I tools/vulkan_probe.py   # optional SDK / ICD check
-```
+Input: XInput pads. With none connected, the keyboard acts as a pad while the game's window has focus:
 
-## How it works
-
-| Piece | What it does | Where |
-|---|---|---|
-| Version check | Every package file's name, size and SHA-256 for each supported version | `game/`, `make_game.py` |
-| Shader pipeline | Carves DXBC containers from `shaders.rpf` without its encrypted table of contents. Unpacks the `XBCH` → `FSSM` native RDNA2 program, disassembles it with LLVM (`gfx1013`) and translates it to SPIR-V | `tools/shader_carve.py`, `fssm_unpack.py`, `shader_disasm.py`, `rdna2spirv.py` |
-| Asset export | Finds validated resources inside RPF9 archives and the loose `.ttpf` texture pools | `tools/rpf9dump` (on rpf9-explorer's Core) |
-| Runtime | Maps the PE image, resolves imports to shims (GDK, XMem, `d3d12_xs`) | `runtime/` |
-| Research tools | PE/RTTI inspection, raw carving, texture tiling probes, GPU test harnesses | `tools/`, `runtime/test/` |
-| Post-build verify | PE self-map, Vulkan device, optional GPU draw | `tools/verify_build.py`, `tools/vulkan_env.py` |
-
-The translator's runtime contract (user SGPRs, push constants, memory model, bindless images, vertex fetch,
-system values) and all the format notes are in [docs/design.md](docs/design.md).
-
-## Want to help?
-
-The biggest open pieces:
-
-- **Xbox D3D12 → Vulkan**: trace the game's real `d3d12_xs` calls, root-signature→user-SGPR mapping, remaining PSO/present paths (see [docs/d3d12_vulkan.md](docs/d3d12_vulkan.md)).
-- **Audio decoding**: Opus/XMA2 streams in AWC banks to PCM.
-- **Model layouts** the decoder rejects today.
-
-See [CONTRIBUTING.md](CONTRIBUTING.md). Never attach game files, extracted assets or generated shaders to issues or
-pull requests.
+| Keys | Pad |
+|------|-----|
+| W A S D / I J K L | left / right stick |
+| arrows | D-pad |
+| Enter, Backspace, X, Y | A, B, X, Y |
+| Q / E, Z / C | shoulders, triggers |
+| F / H | stick clicks |
+| Esc, Tab | Menu, View |
 
 ## Contact
 
@@ -149,17 +106,22 @@ pull requests.
 
 ## Credits
 
-- [rpf9-explorer](https://github.com/breadbbbb/rpf9-explorer) by breadbbbb: the RPF9 model, texture-pool and AWC
-  decoders used by `tools/rpf9dump` (git submodule).
-- [Mesa](https://gitlab.freedesktop.org/mesa/mesa) (MIT): GFX10 resource-descriptor layout (`tools/gfx10_formats.json`),
-  and the ACO/RADV rules used as reference for 16-bit results and shader system registers.
-- [LLVM](https://llvm.org/): AMDGPU disassembler.
+- **[victory-gta6](https://github.com/fxceless/victory-gta6)** by fxceless is the fork this repository continues
+  under the name Leonida Legacy, with its history kept.
+- **[VIctory](https://github.com/Marvisak/VIctory)** by Marvisak and its contributors is the base of everything
+  here: the loader, the runtime services, the Direct3D 12 back end and the shader recompiler.
+- **[XCL](https://github.com/ivall/xcl)** by ivall and its contributors (GPL-2.0-only) was used as a reference for
+  how the same game behaves under another layer. Fixes inspired by it were written anew in VIctory's code.
+- The guard over every view of a memory page is code by **myokex**
+  ([victory-amd](https://github.com/myokex/victory-amd), commit `c6dc4d8`), which adapts pull request #115 by
+  Spexivus, its correction by joroyt and a part of VIctory #1122 by tightfall. The read-beside fix for kernel reads
+  into title memory is by **Joshua Odom** (commit `10ea38e` of the same fork family).
 - Logo: ["Grand Theft Auto VI" icon by SlyDevil](https://www.steamgriddb.com/icon/122618) on SteamGridDB.
-- [SPIRV-Tools](https://github.com/KhronosGroup/SPIRV-Tools): assembly and validation.
+- The victory-gta6 changes were developed with [Claude Code](https://claude.com/claude-code).
 
 Grand Theft Auto and all related names are trademarks of their owners. This project is not affiliated with or
 endorsed by them.
 
 ## License
 
-GPLv3 (or any later version). See [LICENSE](LICENSE). Third-party code keeps its own license.
+GPL-3.0-or-later, like victory-gta6 and VIctory. See [LICENSE](LICENSE).
