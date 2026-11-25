@@ -21,6 +21,7 @@
 #include <string>
 #include <vector>
 
+#include "../core/log.h"
 #include "shims.h"
 
 namespace rt::shims::library_loader {
@@ -121,7 +122,7 @@ HMODULE owned_handle(const std::string& path) {
         if (p.dll == dll) return reinterpret_cast<HMODULE>(&p);
     pseudos().push_back(Pseudo{});
     pseudos().back().dll = dll;
-    std::fprintf(stderr, "[rt] loader: %s is served by the shims (run-time load)\n", dll.c_str());
+    RT_LOG_INFO("loader: %s is served by the shims (run-time load)\n", dll.c_str());
     return reinterpret_cast<HMODULE>(&pseudos().back());
 }
 
@@ -244,7 +245,7 @@ FARPROC WINAPI get_proc_address(HMODULE module, LPCSTR name) {
             static auto* seen = new std::set<std::string>;
             std::lock_guard lock(*m);
             if (seen->insert(p->dll + "!" + what).second)
-                std::fprintf(stderr, "[rt] loader: GetProcAddress(%s, %s): not served\n", p->dll.c_str(), what.c_str());
+                RT_LOG_WARN("loader: GetProcAddress(%s, %s): not served\n", p->dll.c_str(), what.c_str());
         }
         SetLastError(ERROR_PROC_NOT_FOUND);
         return nullptr;
