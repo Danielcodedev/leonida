@@ -24,6 +24,7 @@ using NTSTATUS = LONG;
 #include <string>
 
 #include "../core/config.h"
+#include "../core/log.h"
 #include "shims.h"
 
 namespace rt::bcrypt_rng {
@@ -85,8 +86,8 @@ BOOL CALLBACK init_bcrypt_once(PINIT_ONCE, PVOID, PVOID*) {
     if (seed_text.size() < 64 && parse_u64(seed_text.c_str(), seed)) {
         g_seeded_mode = true;
         g_prng_state = seed ? seed : 0x9E3779B97F4A7C15ULL;
-        std::fprintf(stderr, "[rt] bcrypt: deterministic LEONIDA_RNG_SEED enabled (0x%llx)\n",
-                     static_cast<unsigned long long>(seed));
+        RT_LOG_INFO("bcrypt: deterministic LEONIDA_RNG_SEED enabled (0x%llx)\n",
+                    static_cast<unsigned long long>(seed));
     }
     return TRUE;
 }

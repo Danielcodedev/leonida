@@ -33,6 +33,7 @@
 #include <XTaskQueue.h>
 
 #include "../core/config.h"
+#include "../core/log.h"
 
 namespace {
 
@@ -70,12 +71,12 @@ const char* gamertag() {
     std::call_once(once, [] {
         const std::string value = rt::config::get("system.gamertag").text;  // "Player" when nothing sets it
         if (value.size() > 15) {
-            std::fprintf(stderr, "[rt] xgameruntime: LEONIDA_GAMERTAG is longer than 15 characters; using \"Player\"\n");
+            RT_LOG_WARN("xgameruntime: LEONIDA_GAMERTAG is longer than 15 characters; using \"Player\"\n");
             return;
         }
         for (const char c : value)
             if (static_cast<unsigned char>(c) < 0x20 || static_cast<unsigned char>(c) > 0x7e) {
-                std::fprintf(stderr, "[rt] xgameruntime: LEONIDA_GAMERTAG is not printable ASCII; using \"Player\"\n");
+                RT_LOG_WARN("xgameruntime: LEONIDA_GAMERTAG is not printable ASCII; using \"Player\"\n");
                 return;
             }
         std::memcpy(tag, value.c_str(), value.size() + 1);
@@ -265,13 +266,13 @@ HRESULT STDMETHODCALLTYPE user_get_state(void*, XUserHandle user, XUserState* st
 template <int Slot> HRESULT STDMETHODCALLTYPE unknown_slot(void*) {
     static std::atomic<bool> s_logged{false};
     if (!s_logged.exchange(true))
-        std::fprintf(stderr, "[rt] xgameruntime: XUserImpl slot %d has no public signature; answering E_NOTIMPL\n", Slot);
+        RT_LOG_WARN("xgameruntime: XUserImpl slot %d has no public signature; answering E_NOTIMPL\n", Slot);
     return E_NOTIMPL;
 }
 template <int Slot> uint64_t STDMETHODCALLTYPE private_slot(void*) {
     static std::atomic<bool> s_logged{false};
     if (!s_logged.exchange(true))
-        std::fprintf(stderr, "[rt] xgameruntime: XUserImpl private slot %d called; answering 0\n", Slot);
+        RT_LOG_WARN("xgameruntime: XUserImpl private slot %d called; answering 0\n", Slot);
     return 0;
 }
 
@@ -281,8 +282,8 @@ template <int Slot> uint64_t STDMETHODCALLTYPE private_slot(void*) {
 template <int Slot, HRESULT Error> HRESULT STDMETHODCALLTYPE offline_failure(void*) {
     static std::atomic<bool> s_logged{false};
     if (!s_logged.exchange(true))
-        std::fprintf(stderr, "[rt] xgameruntime: XUserImpl slot %d is not available offline (HRESULT 0x%08lx)\n", Slot,
-                     static_cast<unsigned long>(Error));
+        RT_LOG_WARN("xgameruntime: XUserImpl slot %d is not available offline (HRESULT 0x%08lx)\n", Slot,
+                    static_cast<unsigned long>(Error));
     return Error;
 }
 

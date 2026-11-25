@@ -3,6 +3,7 @@
 #include "d3d12_trace.h"
 
 #include "../core/config.h"
+#include "../core/log.h"
 #include "../src/vulkan_present.h"
 
 #include <cerrno>
@@ -25,7 +26,7 @@ HRESULT from_pacer(std::int32_t value) { return HRESULT(value); }
 void log_once(bool& done, const char* text) {
     if (done) return;
     done = true;
-    std::fprintf(stderr, "[rt] present: %s\n", text);
+    RT_LOG_WARN("present: %s\n", text);
 }
 
 }  // namespace
@@ -41,13 +42,13 @@ XboxPresentation::XboxPresentation(std::unique_ptr<WindowPresenter> presenter, l
     // the size of the buffer the variable was read into before it moved to the table) is logged once and ignored.
     const std::string eotf = rt::config::get("present.sdr_eotf").text;
     if (eotf.size() >= 32) {
-        std::fprintf(stderr, "[rt] present: LEONIDA_SDR_EOTF is too long to be srgb, gamma22 or 2.2: piecewise sRGB "
-                             "used\n");
+        RT_LOG_WARN("present: LEONIDA_SDR_EOTF is too long to be srgb, gamma22 or 2.2: piecewise sRGB "
+                    "used\n");
     } else if (!_stricmp(eotf.c_str(), "gamma22") || !_stricmp(eotf.c_str(), "2.2")) {
         sdr_eotf_ = leonida::PresentPlanes::SdrEotf::gamma22;
     } else if (_stricmp(eotf.c_str(), "srgb") != 0) {
-        std::fprintf(stderr, "[rt] present: LEONIDA_SDR_EOTF=%s is not srgb, gamma22 or 2.2: piecewise sRGB used\n",
-                     eotf.c_str());
+        RT_LOG_WARN("present: LEONIDA_SDR_EOTF=%s is not srgb, gamma22 or 2.2: piecewise sRGB used\n",
+                    eotf.c_str());
     }
     // LEONIDA_PRESENT_UNCAP (any non-empty value other than "0") takes the frame-rate cap off: a WaitFrameEventX
     // hands a token out at once instead of at the next interval origin, and presents go unsynced (MAILBOX or
@@ -55,8 +56,8 @@ XboxPresentation::XboxPresentation(std::unique_ptr<WindowPresenter> presenter, l
     // apply, so the title keeps its call sequence.
     if (const std::string uncap = rt::config::get("present.uncap").text; !uncap.empty() && uncap != "0") {
         pacer_.set_uncapped(true);
-        std::fprintf(stderr, "[rt] present: LEONIDA_PRESENT_UNCAP is set: frame events return at once and "
-                             "presents do not wait for vblank\n");
+        RT_LOG_INFO("present: LEONIDA_PRESENT_UNCAP is set: frame events return at once and "
+                    "presents do not wait for vblank\n");
     }
     display_white_thread_ = std::thread([this] { display_white_worker(); });
 }

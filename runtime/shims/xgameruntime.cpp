@@ -35,6 +35,7 @@
 #include <XTaskQueue.h>
 
 #include "../core/config.h"
+#include "../core/log.h"
 #include "file_system.h"
 #include "shims.h"
 
@@ -76,9 +77,9 @@ std::atomic<int> g_api_refs{0};
 
 HRESULT api_initialize(const char* which, ULONG gdk_ver, ULONG gs_ver, int mode, const ApiImplOptions* options) {
     if (g_api_refs.fetch_add(1) == 0)
-        std::fprintf(stderr, "[rt] xgameruntime: %s(gdk=%lu, gs=%lu, mode=%#x, options=%s) (offline)\n", which,
-                     gdk_ver, gs_ver, mode & 0xFF,
-                     options ? (options->is_inline ? "inline game config" : "default game config") : "none");
+        RT_LOG_INFO("xgameruntime: %s(gdk=%lu, gs=%lu, mode=%#x, options=%s) (offline)\n", which,
+                    gdk_ver, gs_ver, mode & 0xFF,
+                    options ? (options->is_inline ? "inline game config" : "default game config") : "none");
     return S_OK;
 }
 
@@ -170,7 +171,7 @@ ULONG STDMETHODCALLTYPE object_release(void* self) {
 template <int Slot> uint64_t STDMETHODCALLTYPE private_slot(void*) {
     static std::atomic<bool> s_logged{false};
     if (!s_logged.exchange(true))
-        std::fprintf(stderr, "[rt] xgameruntime: XThreadingImpl private slot %d called; answering 0\n", Slot);
+        RT_LOG_WARN("xgameruntime: XThreadingImpl private slot %d called; answering 0\n", Slot);
     return 0;
 }
 
@@ -180,8 +181,8 @@ template <int Slot> uint64_t STDMETHODCALLTYPE private_slot(void*) {
 HRESULT STDMETHODCALLTYPE begin_alloc_not_provided(void*) {
     static std::atomic<bool> s_logged{false};
     if (!s_logged.exchange(true))
-        std::fprintf(stderr, "[rt] xgameruntime: XThreadingImpl slot 8 (XAsyncBeginAlloc) called; not provided, "
-                             "returning E_NOTIMPL\n");
+        RT_LOG_WARN("xgameruntime: XThreadingImpl slot 8 (XAsyncBeginAlloc) called; not provided, "
+                    "returning E_NOTIMPL\n");
     return E_NOTIMPL;
 }
 
@@ -243,7 +244,7 @@ std::mutex g_error_mutex{};   // guards g_error_callback + g_error_context as on
 HRESULT STDMETHODCALLTYPE error_report(void*, HRESULT hr, const char* message) {
     static std::atomic<int> s_logged{0};
     if (s_logged.fetch_add(1) < 64)
-        std::fprintf(stderr, "[rt] xgameruntime: XErrorReport(0x%08lx, %s)\n", static_cast<unsigned long>(hr),
+        RT_LOG_ERROR("xgameruntime: XErrorReport(0x%08lx, %s)\n", static_cast<unsigned long>(hr),
                      message ? message : "(null)");
     std::lock_guard<std::mutex> lock(g_error_mutex);
     if (XErrorCallback cb = g_error_callback.load()) cb(hr, message, g_error_context.load());
@@ -635,7 +636,7 @@ HRESULT WINAPI QueryApiImpl(const GUID* class_id, REFIID interface_id, void** ou
     print_guid(iid, &interface_id);
     static std::atomic<int> s_logged{0};
     if (s_logged.fetch_add(1) < 256)   // one line per request, bounded
-        std::fprintf(stderr, "[rt] xgameruntime: QueryApiImpl(class %s, interface %s): not provided yet\n", cls, iid);
+        RT_LOG_WARN("xgameruntime: QueryApiImpl(class %s, interface %s): not provided yet\n", cls, iid);
     return kClassNotProvided;
 }
 
@@ -654,7 +655,7 @@ HRESULT WINAPI GetApiVersionImpl(uint64_t* first, uint64_t* second) {
 
 // HRESULT XGameRuntimeInitialize(). Reference counted, as in the GDK: each call needs an XGameRuntimeUninitialize.
 HRESULT __stdcall XGameRuntimeInitialize() {
-    if (g_runtime_refs.fetch_add(1) == 0) std::fprintf(stderr, "[rt] xgameruntime: initialized (offline)\n");
+    if (g_runtime_refs.fetch_add(1) == 0) RT_LOG_INFO("xgameruntime: initialized (offline)\n");
     return S_OK;
 }
 
@@ -996,7 +997,7 @@ const GUID* const kPackageIids[] = {&kPackage1, &kPackage2, &kPackage3, nullptr}
 template <int Slot> HRESULT STDMETHODCALLTYPE package_not_implemented(void*) {
     static std::atomic<bool> s_logged{false};
     if (!s_logged.exchange(true))
-        std::fprintf(stderr, "[rt] xgameruntime: XPackageImpl slot %d not implemented offline (E_NOTIMPL)\n", Slot);
+        RT_LOG_WARN("xgameruntime: XPackageImpl slot %d not implemented offline (E_NOTIMPL)\n", Slot);
     return E_NOTIMPL;
 }
 HRESULT STDMETHODCALLTYPE pkg_identifier(void*, size_t size, char* buffer) {
@@ -1201,7 +1202,7 @@ HRESULT STDMETHODCALLTYPE game_get_title_id(void*, uint32_t* title_id) {
     if (!package_title_id(id)) {
         static std::atomic<bool> s_logged{false};
         if (!s_logged.exchange(true))
-            std::fprintf(stderr, "[rt] xgameruntime: XGameGetXboxTitleId: no <TitleId> in MicrosoftGame.Config\n");
+            RT_LOG_ERROR("xgameruntime: XGameGetXboxTitleId: no <TitleId> in MicrosoftGame.Config\n");
         return E_FAIL;
     }
     *title_id = id;
@@ -1211,8 +1212,8 @@ HRESULT STDMETHODCALLTYPE game_get_title_id(void*, uint32_t* title_id) {
 // void XLaunchNewGame(const char* exePath, const char* args, XUserHandle defaultUser): on the console this ends the
 // title and starts another. Offline there is no other title to start; the call is logged and returns.
 void STDMETHODCALLTYPE game_launch_new(void*, const char* exe_path, const char* args, void*) {
-    std::fprintf(stderr, "[rt] xgameruntime: XLaunchNewGame(\"%s\", \"%s\") ignored offline\n",
-                 exe_path ? exe_path : "", args ? args : "");
+    RT_LOG_WARN("xgameruntime: XLaunchNewGame(\"%s\", \"%s\") ignored offline\n",
+                exe_path ? exe_path : "", args ? args : "");
 }
 
 // HRESULT XLaunchRestartOnCrash(const char* args, uint32_t reserved): asks the console to restart the title after a
@@ -1220,7 +1221,7 @@ void STDMETHODCALLTYPE game_launch_new(void*, const char* exe_path, const char* 
 HRESULT STDMETHODCALLTYPE game_restart_on_crash(void*, const char*, uint32_t) {
     static std::atomic<bool> s_logged{false};
     if (!s_logged.exchange(true))
-        std::fprintf(stderr, "[rt] xgameruntime: XLaunchRestartOnCrash: no restart is registered offline\n");
+        RT_LOG_WARN("xgameruntime: XLaunchRestartOnCrash: no restart is registered offline\n");
     return S_OK;
 }
 

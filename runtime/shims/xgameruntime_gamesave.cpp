@@ -46,6 +46,7 @@
 #include <XTaskQueue.h>
 
 #include "../core/config.h"
+#include "../core/log.h"
 
 namespace {
 
@@ -434,7 +435,7 @@ HRESULT open_provider(XUserHandle user, const char* config_id, XGameSaveProvider
     *out = p;
     static std::atomic<int> s_logged{0};
     if (s_logged.fetch_add(1) == 0)
-        std::fprintf(stderr, "[rt] xgamesave: offline provider for \"%s\" at %ls\n", config_id, user_dir.c_str());
+        RT_LOG_INFO("xgamesave: offline provider for \"%s\" at %ls\n", config_id, user_dir.c_str());
     return S_OK;
 }
 
