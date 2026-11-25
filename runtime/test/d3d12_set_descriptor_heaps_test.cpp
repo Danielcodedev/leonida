@@ -54,6 +54,28 @@ struct DeviceHeaps {
     }
 };
 
+// Sets the flags word of the RTS0 chunk in a serialized root signature: the dword at +20 of the chunk's payload,
+// where rt::rootsig::parse_rts0 reads it. The container hash at bytes 4..19 is left as it was. False when the blob
+// is not a DXBC container with an RTS0 chunk.
+bool set_rts0_flags(std::vector<std::uint8_t>& blob, std::uint32_t flags) {
+    const auto u32_at = [&](std::size_t off, std::uint32_t& v) {
+        if (off > blob.size() || blob.size() - off < 4) return false;
+        std::memcpy(&v, blob.data() + off, 4);
+        return true;
+    };
+    std::uint32_t chunks = 0;
+    if (blob.size() < 32 || std::memcmp(blob.data(), "DXBC", 4) != 0 || !u32_at(28, chunks)) return false;
+    for (std::uint32_t i = 0; i < chunks; ++i) {
+        std::uint32_t off = 0, size = 0;
+        if (!u32_at(32 + 4 * std::size_t(i), off) || !u32_at(std::size_t(off) + 4, size)) return false;
+        if (std::memcmp(blob.data() + off, "RTS0", 4) != 0) continue;
+        if (size < 24 || blob.size() - off - 8 < size) return false;
+        std::memcpy(blob.data() + off + 8 + 20, &flags, 4);
+        return true;
+    }
+    return false;
+}
+
 bool check_single_list_cases(DeviceHeaps& ours, ID3D12DescriptorHeap* foreign_heap, DeviceHeaps* host,
                              const std::string& host_name) {
     struct Case {
@@ -337,8 +359,20 @@ bool check_tracking_lifetime_and_direct_indexing(DeviceHeaps& ours) {
     const auto di_flags = D3D12_ROOT_SIGNATURE_FLAG_CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED |
                           D3D12_ROOT_SIGNATURE_FLAG_SAMPLER_HEAP_DIRECTLY_INDEXED;
     rs_desc.Desc_1_0 = {1, &p, 0, nullptr, di_flags};
-    const auto blob = d3d12test::serialize_root_signature(rs_desc);
-    CHECK(!blob.empty());
+    auto blob = d3d12test::serialize_root_signature(rs_desc);
+    if (blob.empty()) {
+        // An older host serializer does not know the two flags: d3d12.dll build 19041.3636 (Windows 10 22H2)
+        // answers E_INVALIDARG, "Unsupported bit-flag set (root signature flags c00)", as it does for an undefined
+        // bit. The layer parses the blob itself (rt::rootsig::parse_rts0) and does not check the container hash, so
+        // serialize the same signature without the flags and set them in the RTS0 header. What is checked below, that
+        // the layer keeps the flags it is given, does not depend on which serializer wrote them.
+        rs_desc.Desc_1_0.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
+        blob = d3d12test::serialize_root_signature(rs_desc);
+        CHECK(!blob.empty());
+        CHECK(set_rts0_flags(blob, std::uint32_t(di_flags)));
+        std::printf("directly-indexed root signature flags: the host serializer refuses them (older d3d12.dll); set "
+                    "in the RTS0 header instead\n");
+    }
     Ptr<ID3D12RootSignature> root;
     CHECK(SUCCEEDED(ours.device->CreateRootSignature(0, blob.data(), blob.size(), IID_PPV_ARGS(&root.p))));
     const rt::d3d12::RootArgumentLayout* layout = rt::d3d12::root_signature_layout(root.p);
