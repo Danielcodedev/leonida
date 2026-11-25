@@ -47,9 +47,7 @@ impl Config {
     /// Loads configuration from the environment and the config file.
     pub fn load() -> Result<Self> {
         let explicit = std::env::var_os("LEONIDA_CONFIG").map(PathBuf::from);
-        let path = explicit
-            .clone()
-            .unwrap_or_else(|| PathBuf::from("leonida.toml"));
+        let path = file_path();
         let file = if path.is_file() {
             let text = std::fs::read_to_string(&path)
                 .with_context(|| format!("reading {}", path.display()))?;
@@ -103,9 +101,31 @@ impl Config {
     /// The game directory, or a helpful error if it is not configured.
     pub fn require_game_dir(&self) -> Result<&Path> {
         self.game_dir.as_deref().context(
-            "no game directory configured: set LEONIDA_GAME_DIR or [paths].game_dir in \
-             leonida.toml (see leonida.example.toml)",
+            "no game directory configured: run `leonida run` in a terminal to be asked for it, \
+             or set LEONIDA_GAME_DIR or [paths].game_dir in leonida.toml",
         )
+    }
+
+    /// Writes `game_dir` into `[paths]` of the config file, creating the file
+    /// if there is none; its other lines and comments are kept. Returns the
+    /// file's path.
+    pub fn save_game_dir(game_dir: &Path) -> Result<PathBuf> {
+        let path = file_path();
+        let text = match std::fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+            Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
+        };
+        let new = with_game_dir(&text, game_dir)?;
+        let parsed: FileConfig =
+            toml::from_str(&new).with_context(|| format!("updating {}", path.display()))?;
+        anyhow::ensure!(
+            parsed.paths.game_dir.as_deref() == Some(game_dir),
+            "updating {}: the game folder did not read back",
+            path.display()
+        );
+        std::fs::write(&path, new).with_context(|| format!("writing {}", path.display()))?;
+        Ok(path)
     }
 
     /// Returns `<cache>/<sub>`, creating it, after checking the asset policy.
@@ -134,6 +154,58 @@ fn default_dir(name: &str) -> Result<PathBuf> {
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))
         .context("cannot determine a user directory; set LEONIDA_CACHE_DIR and LEONIDA_DATA_DIR")?;
     Ok(base.join("leonida").join(name))
+}
+
+/// The config file: `LEONIDA_CONFIG`, else `./leonida.toml`.
+fn file_path() -> PathBuf {
+    std::env::var_os("LEONIDA_CONFIG").map_or_else(|| PathBuf::from("leonida.toml"), PathBuf::from)
+}
+
+/// `text` with `game_dir` set in its `[paths]` table: a `game_dir` line
+/// there is replaced, else a commented-out one, else the key goes under the
+/// table's header, which is added if missing.
+fn with_game_dir(text: &str, game_dir: &Path) -> Result<String> {
+    let value = game_dir
+        .to_str()
+        .with_context(|| format!("{} is not valid UTF-8", game_dir.display()))?;
+    let line = format!("game_dir = {}", toml::Value::String(value.to_owned()));
+    let newline = if text.contains("\r\n") { "\r\n" } else { "\n" };
+    let mut lines: Vec<String> = text.lines().map(str::to_owned).collect();
+    let key = |l: &str| {
+        l.strip_prefix("game_dir")
+            .is_some_and(|rest| rest.trim_start().starts_with('='))
+    };
+    match lines.iter().position(|l| l.trim() == "[paths]") {
+        Some(header) => {
+            let start = header + 1;
+            let end = lines[start..]
+                .iter()
+                .position(|l| l.trim_start().starts_with('['))
+                .map_or(lines.len(), |i| start + i);
+            let section = &lines[start..end];
+            let at = section.iter().position(|l| key(l.trim_start())).or_else(|| {
+                section.iter().position(|l| {
+                    l.trim_start()
+                        .strip_prefix('#')
+                        .is_some_and(|c| key(c.trim_start()))
+                })
+            });
+            match at {
+                Some(i) => lines[start + i] = line,
+                None => lines.insert(start, line),
+            }
+        }
+        None => {
+            if lines.last().is_some_and(|l| !l.trim().is_empty()) {
+                lines.push(String::new());
+            }
+            lines.push("[paths]".to_owned());
+            lines.push(line);
+        }
+    }
+    let mut out = lines.join(newline);
+    out.push_str(newline);
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -192,7 +264,41 @@ mod tests {
     fn example_config_parses() {
         let text = include_str!("../../../leonida.example.toml");
         let parsed: FileConfig = toml::from_str(text).unwrap();
-        assert!(parsed.paths.game_dir.is_some());
+        assert!(parsed.paths.game_dir.is_none());
+    }
+
+    fn game_dir_of(text: &str) -> Option<PathBuf> {
+        toml::from_str::<FileConfig>(text).unwrap().paths.game_dir
+    }
+
+    #[test]
+    fn game_dir_fills_the_example() {
+        let text = include_str!("../../../leonida.example.toml");
+        let dir = Path::new(r"C:\Games\The Title");
+        let new = with_game_dir(text, dir).unwrap();
+        assert_eq!(game_dir_of(&new).as_deref(), Some(dir));
+        assert_eq!(new.lines().count(), text.lines().count());
+        assert!(new.contains("# Derived data."));
+    }
+
+    #[test]
+    fn game_dir_replaces_a_set_one() {
+        let text = "[paths]\ngame_dir = 'old'\ntest_titles = []\n";
+        let new = with_game_dir(text, Path::new("new")).unwrap();
+        assert_eq!(new, "[paths]\ngame_dir = \"new\"\ntest_titles = []\n");
+    }
+
+    #[test]
+    fn game_dir_starts_an_empty_file() {
+        let new = with_game_dir("", Path::new("D:/game")).unwrap();
+        assert_eq!(game_dir_of(&new).unwrap(), PathBuf::from("D:/game"));
+    }
+
+    #[test]
+    fn game_dir_keeps_crlf() {
+        let text = "[paths]\r\n# game_dir = 'x'\r\n";
+        let new = with_game_dir(text, Path::new("y")).unwrap();
+        assert_eq!(new, "[paths]\r\ngame_dir = \"y\"\r\n");
     }
 
     #[test]

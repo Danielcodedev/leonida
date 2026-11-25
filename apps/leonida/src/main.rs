@@ -11,7 +11,7 @@ mod translate;
 
 use std::path::PathBuf;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 
 #[derive(Parser)]
@@ -94,7 +94,10 @@ enum Command {
     },
     /// Prepare, map and bind a title executable; with --execute, run it.
     Run {
-        exe: PathBuf,
+        /// The title's executable. Default: the one the game folder's
+        /// MicrosoftGame.config names (the folder is asked for once and
+        /// saved to leonida.toml).
+        exe: Option<PathBuf>,
         /// What unimplemented imports do when called.
         #[arg(long, value_enum, default_value_t = Unimplemented::Trap)]
         unimplemented: Unimplemented,
@@ -181,9 +184,87 @@ fn main() -> Result<()> {
             execute,
             console,
             title_args: _,
-        } => run::run(&exe, unimplemented, strict, execute, console),
+        } => {
+            let exe = match exe {
+                Some(exe) => exe,
+                None => default_exe()?,
+            };
+            run::run(&exe, unimplemented, strict, execute, console)
+        }
         Command::Config => show_config(),
     }
+}
+
+/// The executable the game folder's MicrosoftGame.config names. With no
+/// folder configured and a terminal to ask in, the folder is asked for and
+/// saved to the config file.
+fn default_exe() -> Result<PathBuf> {
+    use std::io::IsTerminal;
+    let cfg = leonida_core::Config::load()?;
+    let dir = if let Some(dir) = cfg.game_dir.clone() {
+        dir
+    } else if std::io::stdin().is_terminal() {
+        ask_game_dir()?
+    } else {
+        cfg.require_game_dir()?.to_owned()
+    };
+    let manifest = dir.join("MicrosoftGame.config");
+    let text = std::fs::read_to_string(&manifest)
+        .with_context(|| format!("reading {}", manifest.display()))?;
+    let name = manifest_exe(&text)
+        .with_context(|| format!("{} names no executable", manifest.display()))?;
+    Ok(dir.join(name))
+}
+
+/// Asks for the game folder until one with a MicrosoftGame.config is given,
+/// then saves it.
+fn ask_game_dir() -> Result<PathBuf> {
+    use std::io::{BufRead, Write};
+    println!("No game folder is set. Enter the folder of your copy of the game");
+    println!("(the one with MicrosoftGame.config in it):");
+    loop {
+        print!("> ");
+        std::io::stdout().flush()?;
+        let mut line = String::new();
+        if std::io::stdin().lock().read_line(&mut line)? == 0 {
+            anyhow::bail!("no game folder given");
+        }
+        let dir = PathBuf::from(line.trim().trim_matches('"'));
+        if dir.as_os_str().is_empty() {
+            continue;
+        }
+        if !dir.join("MicrosoftGame.config").is_file() {
+            println!("no MicrosoftGame.config in {}, try again:", dir.display());
+            continue;
+        }
+        if let Err(e) = leonida_core::ensure_outside_repo(&dir) {
+            println!("{e}");
+            continue;
+        }
+        let saved = leonida_core::Config::save_game_dir(&dir)?;
+        println!("game folder saved to {}", saved.display());
+        return Ok(dir);
+    }
+}
+
+/// The `Name` of the manifest's first `<Executable>` element (not
+/// `<ExecutableList>`, which holds them).
+fn manifest_exe(manifest: &str) -> Option<&str> {
+    let mut rest = manifest;
+    while let Some(start) = rest.find("<Executable") {
+        rest = &rest[start + "<Executable".len()..];
+        if !rest.starts_with(char::is_whitespace) {
+            continue;
+        }
+        let tag = &rest[..rest.find('>')?];
+        let (at, _) = tag
+            .match_indices("Name=\"")
+            .find(|(i, _)| tag[..*i].ends_with(char::is_whitespace))?;
+        let value = &tag[at + "Name=\"".len()..];
+        let name = &value[..value.find('"')?];
+        return (!name.is_empty()).then_some(name);
+    }
+    None
 }
 
 fn show_config() -> Result<()> {
@@ -230,4 +311,20 @@ pub(crate) fn default_paths(paths: Vec<PathBuf>) -> Result<Vec<PathBuf>> {
         "no paths given and none configured (see leonida.example.toml)"
     );
     Ok(all)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::manifest_exe;
+
+    #[test]
+    fn manifest_exe_is_the_first_executable() {
+        let text = r#"<Game><ExecutableList><Executable Name="title.exe" Id="Game" OverrideDisplayName="The Title" /><Executable Name="other.exe" /></ExecutableList></Game>"#;
+        assert_eq!(manifest_exe(text), Some("title.exe"));
+        assert_eq!(manifest_exe("<Game></Game>"), None);
+        assert_eq!(manifest_exe(r#"<Executable Name="" />"#), None);
+        assert_eq!(manifest_exe("<Executable
+  OverrideName=\"x\"
+  Name=\"a.exe\"/>"), Some("a.exe"));
+    }
 }

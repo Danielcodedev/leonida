@@ -5,7 +5,8 @@
 
 [paths]
 # Your own dump of the title.     env: LEONIDA_GAME_DIR
-game_dir = 'D:\leonida-data\game'
+# Left unset, `leonida run` asks for it once and writes it here.
+# game_dir = 'D:\leonida-data\game'
 
 # Derived data. Default: %LOCALAPPDATA%\leonida\cache.   env: LEONIDA_CACHE_DIR
 # cache_dir = 'D:\leonida-data\cache'
