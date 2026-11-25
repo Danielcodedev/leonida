@@ -1,8 +1,11 @@
 # ztrx compared with Leonida: gap analysis
 
-Status, 2026-11-25. Leonida side: branch `refactor/layers` at `abdaf16`. ztrx side: a local source snapshot
+Studied 2026-11-25. Leonida side: branch `refactor/layers` at `abdaf16`. ztrx side: a local source snapshot
 (folder name `ztrx-main`, no git history, so there is no commit to cite). The study was read-only: nothing was
 built or run in either tree, nothing was written into the ztrx folder and no game file was opened.
+
+Brought up to date at `387cc16` of the same branch: the rows and notes of C2, G7 and G8, section 7 and the new
+section 9.1 say what was done since the study. Everything else stands as studied.
 
 Every statement about ztrx comes from reading its sources and its three documentation pages. Every statement
 about Leonida names the file it was read in. Where a part was not read or not compared, the row says so.
@@ -184,7 +187,7 @@ Notes:
 | ID | Capability in ztrx | Has it | Where in Leonida | What is missing | Risk | Effort | Main frame |
 |---|---|---|---|---|---|---|---|
 | C1 | Settings: env, file, default | yes | `config.cpp` | nothing | low | none | no |
-| C2 | Log levels, module filter | no | `[rt]` lines | levels and filter | low | M | no |
+| C2 | Log levels, module filter | part | `log.h` | module filter | low | S | no |
 | C3 | Repo-write guard at run time | no | none | whole guard | low | S | no |
 | C4 | Stand-in title for tests | yes | `tiny_game` | nothing | low | none | no |
 
@@ -194,8 +197,12 @@ Notes:
   `gta6rt config` prints each value with its source. ztrx has four values (game, cache and data folders, test
   titles) with the same lookup order.
 - **C2.** ztrx filters by level and by module through one variable, and a plain release build is capped at
-  info. Leonida prints `[rt] <module>: ...` lines to the error stream without levels; 249 such lines were
-  counted before this study. Levels are the next step of the current work.
+  info. Leonida printed `[rt] <module>: ...` lines to the error stream without levels when this page was
+  written; 249 such lines were counted before this study. Since then `runtime/core/log.h` gives each of those
+  lines one of five levels (error, warn, info, debug, trace) behind one setting, `log.level` (`LEONIDA_LOG`,
+  described in `runtime/README.md`). The default, debug, prints every line that was printed before. The
+  filter by module was left out: the level is one value for the whole process. Compiled only; the levels were
+  never seen in a run.
 - **C3.** ztrx refuses to write game-derived data inside its source tree, found by a marker file at the root
   and by the path it was compiled from. In Leonida only `tools/progress_dashboard.py` refuses an output folder
   inside the repository; the runtime has no such check.
@@ -230,8 +237,8 @@ Notes:
 | G4 | Virtual memory call answered | part | `d3d12_xs.cpp` | accepts, ignores | low | S | no |
 | G5 | Queues, lists, fences | yes | `d3d12_xs_device.cpp` | layouts not compared | med | ? | yes |
 | G6 | Wait before signal held | yes | `queue_holds.h` | nothing known | low | none | yes |
-| G7 | Frame clock and tokens | part | `frame_pacer.h` | not wired to proxy | med | M | yes |
-| G8 | Present call on the queue | part | `xbox_present.cpp` | slot not wired | high | M | yes |
+| G7 | Frame clock and tokens | part | `frame_pacer.h` | no sink set yet | med | S | yes |
+| G8 | Present call on the queue | part | `xbox_present.cpp` | slot unmeasured, no sink set | high | S | yes |
 | G9 | Window and swap chain | part | `vulkan_present.h` | host path has none | med | M | yes |
 | G10 | Host device at level 12_0 | yes | `d3d12_xs.cpp` | nothing | low | none | yes |
 | G11 | DXGI adapter and one output | part | `dxgi_com.cpp` | identity differs | med | S | no |
@@ -263,15 +270,24 @@ Notes:
   tables were not compared with them slot by slot.
 - **G7.** `runtime/src/frame_pacer.h` models the clock, the origin event, the allowed latency and the tokens,
   and `runtime/shims/xbox_present.cpp` exposes the four frame calls on top of it; both are covered by tests.
-  Neither is reached from the device proxy: `runtime/shims/d3d12_xs_device.cpp` answers slots 78 to 80 with a
-  token counter of its own, and its wait returns at once. No file under `runtime/shims` or `runtime/src` other
-  than `xbox_present.cpp` itself uses the presentation class. Wiring it is testable without the game.
-- **G8.** The presentation class has the present call. The queue proxy refuses every slot past the public
-  table and logs it. The two headers disagree on the slot: `runtime/shims/xbox_present.h` cites slot 30 (older
-  runtime layout) or 32 (newer) from another project's measurement, while `runtime/shims/d3d12_xs_device.h`
-  says the slot is not known and is not guessed. A wiring needs a setting for the slot, like the existing ones
-  for the frame calls. A synthetic caller can prove the forwarding; that the slot is right for this title needs
-  a real run.
+  When this page was written neither was reached from the device proxy: `runtime/shims/d3d12_xs_device.cpp`
+  answered slots 78 to 80 with a token counter of its own, and its wait returned at once. Since `4ecdc6b` the
+  proxy has a frame-event sink (`FrameEventSink` in `runtime/shims/d3d12_xs_device.h`): when one is set, the
+  three calls go to it and its result is the title's. The ctest `xs_proxy_mock` puts a frame pacer on a clock
+  that only the test moves behind the sink. What is left: nothing sets a sink. No file under `runtime/shims`
+  or `runtime/src` other than `xbox_present.cpp` itself uses the presentation class, and `gta6rt` creates
+  none, so a run still gets the proxy's own answers. Slot 81 (the frame statistics) is not routed: the layout
+  of the console's entries is not measured. Compiled only, never run.
+- **G8.** The presentation class has the present call. When this page was written the queue proxy refused
+  every slot past the public table and logged it. The public numbers for the slot are 30 (older runtime
+  layout) and 32 (newer), measured by another project on other titles (`runtime/shims/xbox_present.h`); the
+  slot this title calls is not measured. Since `387cc16` a setting names it: `d3d12.present_x_slot`
+  (`LEONIDA_XS_PRESENT_X_SLOT`, a queue slot from 19 to 127). It is not set by default, so no slot is taken
+  on a guess. A call on the named slot goes to the present sink of the queue's device (`PresentSink` in
+  `runtime/shims/d3d12_xs_device.h`) with the real queue and the title's three words. The ctests
+  `xs_proxy_mock_present_slot` and `xs_proxy_mock_present_slot_invalid` are the synthetic caller. What is
+  left: nothing sets a sink, so the call is still refused, and that the slot is right for this title needs a
+  real run. Compiled only, never run.
 - **G9.** `runtime/src/vulkan_present.h` puts a back buffer on screen (scaled copy, two frames in flight,
   swap chain rebuilt on resize, blank present, source rectangle), and `runtime/shims/dxgi_swapchain.h` serves
   the DXGI front end. On the host D3D12 path nothing was found that owns a window and a swap chain for the
@@ -316,20 +332,34 @@ Notes:
 ztrx solves none of them, and cannot: they test Leonida's D3D12-on-Vulkan layer against the host's D3D12, and
 ztrx has neither a Vulkan layer nor tests of that kind.
 
-| Test | What fails on this PC | Counterpart in ztrx |
-|---|---|---|
-| `d3d12_vulkan_device` | a two-mip texture on a CPU-visible heap; a copy-count check | none |
-| `d3d12_dxr_validation_khr` | the layer cannot allocate its synthetic buffers | none |
-| `d3d12_r9g9b9e5_uav` | a committed resource on a custom heap | none |
-| `d3d12_existing_heap` | no key line captured yet | none |
-| `d3d12_close_parity` | three upload copies now match the reference; the table says otherwise | none |
-| `d3d12_subresource_copy` | the copy steps differ from the host's | none |
-| `d3d12_heap_properties` | 4 of 497 compared values differ | none |
-| `d3d12_set_descriptor_heaps` | an empty shader blob | none |
+The causes were not determined when this page was written. They were found afterwards, one test at a time:
 
-The causes are not determined on this page; that is the next phase of the work, one test at a time. Two habits
-of ztrx are worth keeping in mind there, as ideas and not as fixes: ask the host what it can do at run time and
-refuse the one object with a clear message (S5), and go on with a warning when a whole device is missing (G12).
+| Test | Cause found on this PC | Changed | Now | Commit |
+|---|---|---|---|---|
+| `d3d12_subresource_copy` | a host-transfer image gets no memory type | the layer | passes | `9dbbad1` |
+| `d3d12_r9g9b9e5_uav` | the same | the layer | passes | `9dbbad1` |
+| `d3d12_heap_properties` | a tier 1 host refuses mixed-category heaps | the test | passes | `b9f59de` |
+| `d3d12_vulkan_device` | the same | the test | passes | `b9f59de` |
+| `d3d12_dxr_validation_khr` | no acceleration structure build on this GPU | the test | skips | `8a27ff8` |
+| `d3d12_set_descriptor_heaps` | the host serializer refuses two root signature flags | the test | passes | `acfd9ff` |
+| `d3d12_close_parity` | this WARP refuses three lists the measured column accepts | the test | passes | `ad9d51b` |
+| `d3d12_existing_heap` | the driver binds no buffer 64 bytes into a page | the test | passes | `06372ec` |
+
+- This PC has a GTX 1070 Ti and Windows 10 with `d3d12.dll` 10.0.19041. The results come from real runs made
+  before running anything on this PC was ruled out: one run of the whole suite at `06372ec` gave 254 passed,
+  14 skipped and 1 failed.
+- The one failure left is `root_signature_oracle`, which is not one of the eight. The host serializer refuses
+  the same two flags there; that test is unchanged.
+- One commit changes the layer: when the driver lists the host image copy extension but gives such an image no
+  memory type, `runtime/shims/d3d12_vulkan_device.cpp` makes the image again without that usage and copies
+  through staging buffers. The other five change tests.
+- Not covered on a PC of this class after the changes: mixed-category heaps against a tier 1 host, the
+  validation of acceleration structure builds, three copy cases of the close-parity table, and the import of a
+  buffer the title places inside a page. They are covered on a tier 2 host, a newer GPU and a newer Windows.
+
+Two habits of ztrx were kept in mind for this, as ideas and not as fixes: ask the host what it can do at run
+time and refuse the one object with a clear message (S5), and go on with a warning when a whole device is
+missing (G12).
 
 ## 8. What this PC adds
 
@@ -365,6 +395,35 @@ host D3D12 only. The direction chosen earlier for Leonida was host D3D12 with a 
 layer frozen as the second backend, and the host D3D12 of this PC stops below what ztrx asks for. G7 and G8 are
 the same work on either backend. G9 exists on Vulkan and is missing on host D3D12. The decision is the
 maintainer's and is not made here.
+
+### 9.1 State at `387cc16`
+
+Integrated and compiled; NOT verified by running anything. The two steps below were built with MSVC on
+Windows 10, and no program, test or game was executed for them.
+
+| ID | State | Done | Left | Needs a real run for |
+|---|---|---|---|---|
+| G7 | partly | sink on device slots 78 to 80, `4ecdc6b` | a sink set in `gta6rt`; slot 81 | interval values |
+| G8 | partly | sink on the queue and the slot setting, `387cc16` | a sink set in `gta6rt` | the title's slot |
+| G9 | not done | nothing | a window and swap chain on the chosen backend | scaling, HDR |
+| G2 | not done | nothing | answers from the proxy itself | which versions the title asks for |
+| G1 | not done | left out on purpose | everything | everything |
+
+- **Chosen: G7 and G8.** They are the same work on either backend, so they do not wait for the open decision.
+  The proxies do not know the presentation class. A sink, a context pointer and one function per call, stands
+  between them, so the device proxy still needs neither a presenter nor Vulkan.
+- **Left of G7 and G8.** An adapter that puts the presentation class behind the two sinks, and `gta6rt`
+  creating that class. The class takes a window presenter, which exists on the Vulkan path only
+  (`runtime/shims/xbox_present.h`), so both wait for the backend decision with G9. Until then a run gets the
+  proxy's own frame answers, and the present call is refused with a log line.
+- **Left out: G2.** That the title asks for a device version the host lacks is a hypothesis from one stop
+  code. Answering versions on a guess could hide the real cause; a run has to name the version first.
+- **Left out: G1,** as before: nothing about it can be checked without the title.
+- **Features an older GPU lacks.** Neither step asks the GPU for anything, so there is no ray query, mesh
+  shader, shading rate or 16-bit float requirement to query yet. G9 is the first step that has to ask.
+- **Still to run, on another machine or in CI:** the ctests `xs_proxy_mock`, `xs_proxy_mock_present_slot`,
+  `xs_proxy_mock_present_slot_invalid`, `core_config` and `core_log`, and the text tests under `tests/`. The
+  expected values of the new checks were written by reading the code and have never been compared with a run.
 
 ## 10. Limits of this study
 
