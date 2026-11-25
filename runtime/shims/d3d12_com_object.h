@@ -14,6 +14,8 @@
 #include <utility>
 #include <vector>
 
+#include "../core/log.h"
+
 namespace rt::d3d12 {
 
 void stub(const char* method);
@@ -39,10 +41,9 @@ public:
         } else if (riid == __uuidof(IUnknown) || ((riid == __uuidof(Interfaces)) || ...)) {
             *out = static_cast<Stubs*>(this);  // one inheritance chain: every interface shares this pointer
         } else {
-            std::fprintf(stderr,
-                         "[rt] d3d12: QueryInterface: unknown IID {%08lx-%04x-%04x-%02x%02x-%02x%02x%02x%02x%02x%02x}\n",
-                         static_cast<unsigned long>(riid.Data1), riid.Data2, riid.Data3, riid.Data4[0], riid.Data4[1],
-                         riid.Data4[2], riid.Data4[3], riid.Data4[4], riid.Data4[5], riid.Data4[6], riid.Data4[7]);
+            RT_LOG_WARN("d3d12: QueryInterface: unknown IID {%08lx-%04x-%04x-%02x%02x-%02x%02x%02x%02x%02x%02x}\n",
+                        static_cast<unsigned long>(riid.Data1), riid.Data2, riid.Data3, riid.Data4[0], riid.Data4[1],
+                        riid.Data4[2], riid.Data4[3], riid.Data4[4], riid.Data4[5], riid.Data4[6], riid.Data4[7]);
             return E_NOINTERFACE;
         }
         AddRef();
