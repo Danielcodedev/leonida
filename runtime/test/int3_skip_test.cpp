@@ -1,5 +1,6 @@
-// LEONIDA_SKIP_INT3 (shims/startup_trace.h): with the variable set and a trace open, an int3 is logged once per
-// address and stepped over, so execution continues. A separate executable because the variable is read once.
+// loader.skip_int3 (LEONIDA_SKIP_INT3; shims/startup_trace.h): with set_skip_int3(true) and a trace open, an int3 is
+// logged once per address and stepped over, so execution continues. gta6rt sets the switch from the setting; this
+// test sets it itself. A separate executable because the switch changes what the handler does for the whole process.
 #include <windows.h>
 
 #include <cstdio>
@@ -38,7 +39,7 @@ __declspec(noinline) void site_b(int& reached) {
 }  // namespace
 
 int main() {
-    SetEnvironmentVariableW(L"LEONIDA_SKIP_INT3", L"1");  // before the first exception: the flag is read once
+    rt::startup_trace::set_skip_int3(true);  // before the first exception
     wchar_t temp[MAX_PATH];
     GetTempPathW(MAX_PATH, temp);
     const std::wstring path = std::wstring(temp) + L"int3_skip_test_" + std::to_wstring(GetCurrentProcessId()) + L".jsonl";

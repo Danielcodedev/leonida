@@ -266,7 +266,7 @@ target_compile_options(file_system_test PRIVATE /W4 /permissive- /utf-8)
 target_link_options(file_system_test PRIVATE /OPT:NOREF)
 target_link_libraries(file_system_test PRIVATE advapi32)  # the ACL calls of the unlistable-marker-folder check
 
-# LEONIDA_SKIP_INT3 (shims/startup_trace.h): its own executable, the variable is read once per process.
+# loader.skip_int3 (LEONIDA_SKIP_INT3; shims/startup_trace.h): its own executable, the switch is for the whole process.
 add_executable(int3_skip_test
   test/int3_skip_test.cpp
   shims/registry.cpp
