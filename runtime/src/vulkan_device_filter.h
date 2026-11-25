@@ -13,7 +13,15 @@
 
 namespace leonida {
 
-// The filter, lower-cased; empty when unset.
+// `text` as a filter: lower-cased, which is how it is compared with a device name.
+inline std::string vulkan_device_filter_of(std::string text) {
+    for (char& c : text) c = char(std::tolower(static_cast<unsigned char>(c)));
+    return text;
+}
+
+// The filter from the variable alone, lower-cased; empty when unset. This is what the test harnesses and tools use,
+// which load no settings file. The runtime's device takes the setting vulkan.device (the variable, else leonida.toml)
+// and passes it to the two-argument vulkan_device_wanted below (shims/d3d12_vulkan_device.cpp).
 inline std::string vulkan_device_filter() {
 #ifdef _MSC_VER
 #pragma warning(push)
@@ -23,18 +31,21 @@ inline std::string vulkan_device_filter() {
 #ifdef _MSC_VER
 #pragma warning(pop)
 #endif
-    std::string out = value ? value : "";
-    for (char& c : out) c = char(std::tolower(static_cast<unsigned char>(c)));
-    return out;
+    return vulkan_device_filter_of(value ? value : "");
 }
 
-// True when `device_name` (VkPhysicalDeviceProperties::deviceName) is wanted.
-inline bool vulkan_device_wanted(const char* device_name) {
-    const std::string filter = vulkan_device_filter();
+// True when `device_name` (VkPhysicalDeviceProperties::deviceName) is wanted by `filter`, which is lower-cased
+// (vulkan_device_filter_of); an empty filter takes every device.
+inline bool vulkan_device_wanted(const char* device_name, const std::string& filter) {
     if (filter.empty()) return true;
     std::string name = device_name ? device_name : "";
     for (char& c : name) c = char(std::tolower(static_cast<unsigned char>(c)));
     return name.find(filter) != std::string::npos;
+}
+
+// The same with the filter of the variable.
+inline bool vulkan_device_wanted(const char* device_name) {
+    return vulkan_device_wanted(device_name, vulkan_device_filter());
 }
 
 // Microsoft is the vendor of the D3D12 translation layers Windows adds next to the real GPU (Mesa's Dozen from the

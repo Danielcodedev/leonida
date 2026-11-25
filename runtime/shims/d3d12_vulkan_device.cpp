@@ -9423,10 +9423,13 @@ HRESULT create_vulkan_device_standalone(REFIID riid, void** out, QueueTestSettin
     // The first usable device of the highest vulkan_device_rank: a native driver over Microsoft's Dozen (which says
     // it is a discrete GPU, #915), then discrete over integrated; the test harnesses (vk_device_pick.h) pick the same.
     int chosen_rank = -1;
+    // vulkan.device (LEONIDA_VK_DEVICE, else leonida.toml): part of the device's name, compared without case
+    // (src/vulkan_device_filter.h). Nothing set takes every device.
+    const std::string device_filter = leonida::vulkan_device_filter_of(rt::config::get("vulkan.device").text);
     for (VkPhysicalDevice candidate : physicals) {
         VkPhysicalDeviceProperties props{};
         vkGetPhysicalDeviceProperties(candidate, &props);
-        if (!leonida::vulkan_device_wanted(props.deviceName)) continue;
+        if (!leonida::vulkan_device_wanted(props.deviceName, device_filter)) continue;
         candidate13.query(candidate, props.apiVersion, vkGetPhysicalDeviceFeatures2, vkEnumerateDeviceExtensionProperties);
         if (!candidate13.usable()) continue;
         VkPhysicalDeviceVulkan11Features f11{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES};
@@ -9458,7 +9461,7 @@ HRESULT create_vulkan_device_standalone(REFIID riid, void** out, QueueTestSettin
         }
     }
     if (!info.physical)
-        return fail(leonida::vulkan_device_filter().empty()
+        return fail(device_filter.empty()
                         ? "no Vulkan 1.3 GPU (or 1.2 with VK_KHR_dynamic_rendering and VK_KHR_synchronization2) with "
                           "dynamicRendering, synchronization2, timelineSemaphore and separateDepthStencilLayouts"
                         : "no GPU named by LEONIDA_VK_DEVICE has Vulkan 1.3 (or 1.2 with VK_KHR_dynamic_rendering and "
