@@ -243,6 +243,123 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "20870f649af7073d53e38067b2a84312175d56ea15217e1b15bc83506ec50afb"
 
 [[package]]
+name = "leonida"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "blake3",
+ "clap",
+ "leonida-core",
+ "leonida-game",
+ "leonida-hle",
+ "leonida-loader",
+ "leonida-pe",
+ "leonida-shader",
+ "memchr",
+ "walkdir",
+]
+
+[[package]]
+name = "leonida-core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "tempfile",
+ "thiserror",
+ "toml",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "leonida-formats"
+version = "0.1.0"
+
+[[package]]
+name = "leonida-game"
+version = "0.1.0"
+dependencies = [
+ "memchr",
+ "zlib-rs",
+]
+
+[[package]]
+name = "leonida-gpu"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "blake3",
+ "leonida-formats",
+ "leonida-pipeline",
+ "leonida-shader",
+ "tempfile",
+ "tracing",
+ "windows",
+ "windows-sys",
+ "zlib-rs",
+]
+
+[[package]]
+name = "leonida-hle"
+version = "0.1.0"
+dependencies = [
+ "leonida-formats",
+ "leonida-gpu",
+ "leonida-loader",
+ "leonida-pe",
+ "opus-pure",
+ "tempfile",
+ "tracing",
+ "windows",
+ "windows-core",
+ "windows-sys",
+ "zlib-rs",
+]
+
+[[package]]
+name = "leonida-loader"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "blake3",
+ "leonida-core",
+ "leonida-pe",
+ "tempfile",
+ "thiserror",
+ "tracing",
+ "windows-sys",
+]
+
+[[package]]
+name = "leonida-pe"
+version = "0.1.0"
+dependencies = [
+ "object",
+ "thiserror",
+]
+
+[[package]]
+name = "leonida-pipeline"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "blake3",
+ "leonida-core",
+ "tempfile",
+ "tracing",
+]
+
+[[package]]
+name = "leonida-shader"
+version = "0.1.0"
+dependencies = [
+ "thiserror",
+ "windows",
+ "windows-sys",
+ "zlib-rs",
+]
+
+[[package]]
 name = "libc"
 version = "0.2.191"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -627,123 +744,6 @@ name = "valuable"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ba73ea9cf16a25df0c8caa16c51acb937d5712a8429db78a3ee29d5dcacd3a65"
-
-[[package]]
-name = "victory"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "blake3",
- "clap",
- "memchr",
- "victory-core",
- "victory-game",
- "victory-hle",
- "victory-loader",
- "victory-pe",
- "victory-shader",
- "walkdir",
-]
-
-[[package]]
-name = "victory-core"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "serde",
- "tempfile",
- "thiserror",
- "toml",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "victory-formats"
-version = "0.1.0"
-
-[[package]]
-name = "victory-game"
-version = "0.1.0"
-dependencies = [
- "memchr",
- "zlib-rs",
-]
-
-[[package]]
-name = "victory-gpu"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "blake3",
- "tempfile",
- "tracing",
- "victory-formats",
- "victory-pipeline",
- "victory-shader",
- "windows",
- "windows-sys",
- "zlib-rs",
-]
-
-[[package]]
-name = "victory-hle"
-version = "0.1.0"
-dependencies = [
- "opus-pure",
- "tempfile",
- "tracing",
- "victory-formats",
- "victory-gpu",
- "victory-loader",
- "victory-pe",
- "windows",
- "windows-core",
- "windows-sys",
- "zlib-rs",
-]
-
-[[package]]
-name = "victory-loader"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "blake3",
- "tempfile",
- "thiserror",
- "tracing",
- "victory-core",
- "victory-pe",
- "windows-sys",
-]
-
-[[package]]
-name = "victory-pe"
-version = "0.1.0"
-dependencies = [
- "object",
- "thiserror",
-]
-
-[[package]]
-name = "victory-pipeline"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "blake3",
- "tempfile",
- "tracing",
- "victory-core",
-]
-
-[[package]]
-name = "victory-shader"
-version = "0.1.0"
-dependencies = [
- "thiserror",
- "windows",
- "windows-sys",
- "zlib-rs",
-]
 
 [[package]]
 name = "walkdir"

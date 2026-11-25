@@ -13,15 +13,15 @@ publish = false
 
 [workspace.dependencies]
 # Internal crates
-victory-core = { path = "crates/victory-core" }
-victory-pe = { path = "crates/victory-pe" }
-victory-loader = { path = "crates/victory-loader" }
-victory-hle = { path = "crates/victory-hle" }
-victory-gpu = { path = "crates/victory-gpu" }
-victory-shader = { path = "crates/victory-shader" }
-victory-formats = { path = "crates/victory-formats" }
-victory-pipeline = { path = "crates/victory-pipeline" }
-victory-game = { path = "crates/victory-game" }
+leonida-core = { path = "crates/leonida-core" }
+leonida-pe = { path = "crates/leonida-pe" }
+leonida-loader = { path = "crates/leonida-loader" }
+leonida-hle = { path = "crates/leonida-hle" }
+leonida-gpu = { path = "crates/leonida-gpu" }
+leonida-shader = { path = "crates/leonida-shader" }
+leonida-formats = { path = "crates/leonida-formats" }
+leonida-pipeline = { path = "crates/leonida-pipeline" }
+leonida-game = { path = "crates/leonida-game" }
 
 # External crates
 anyhow = "1.0.104"
@@ -73,7 +73,7 @@ opt-level = 2
 debug = "line-tables-only"
 
 # The development build: release code generation plus the `diagnostics`
-# feature (`cargo build --profile diag -p victory --features diagnostics`),
+# feature (`cargo build --profile diag -p leonida --features diagnostics`),
 # kept in its own folder so it does not evict the plain release build.
 [profile.diag]
 inherits = "release"

@@ -1,6 +1,7 @@
-# VIctory fork (work in progress)
+# Leonida Legacy (work in progress)
 
-A work-in-progress fork of [VIctory](https://github.com/Marvisak/VIctory), a
+A work-in-progress fork of [victory-gta6](https://github.com/fxceless/victory-gta6),
+itself a fork of [VIctory](https://github.com/Marvisak/VIctory), a
 compatibility layer that runs an Xbox Series title natively on Windows from
 files the user supplies. This fork follows upstream
 `main` and adds fixes aimed at one goal: getting the game's world to render
@@ -12,6 +13,9 @@ developer or publisher.
 
 ## Credits
 
+- **[victory-gta6](https://github.com/fxceless/victory-gta6)** by fxceless is the
+  fork this repository continues under the name Leonida Legacy, with its history kept.
+  Licensed GPL-3.0-or-later; so is Leonida Legacy.
 - **[VIctory](https://github.com/Marvisak/VIctory)** by Marvisak and its
   contributors is the base of everything here: the loader, the runtime
   services, the Direct3D 12 back end and the shader recompiler. Licensed
@@ -41,8 +45,8 @@ Tested on one machine: Windows 11, Intel i7-14700KF, NVIDIA RTX 4070 12 GB,
 | Saves | the game autosaves a checkpoint and loads it again |
 | First gameplay scene (the prologue) | renders: characters, textures, sky, sunlit exterior; HUD, pause menu and pad input work |
 | Light in shadow | missing: the game's ray-traced bounce light and ray-traced lamp and sun shadows do not run yet, so anything the sun does not hit directly is black |
-| Frame rate in the world | 2-4 fps: 420-450 ms per frame by default, 240-350 ms with the newer switches (`VICTORY_RELAY=2`, or `VICTORY_LATE_WAIT=3 VICTORY_WIDE_BACK=1 VICTORY_CARD_BUFFERS_MIN_MB=1 VICTORY_CARD_BUFFERS_MB=1024`); it started at 3-6 seconds per frame |
-| Stability | no driver hang or device loss in normal runs (a hang introduced by the wave64 update was found and fixed: its barrier form for 64-lane programs is now off unless `VICTORY_WAVE_WIDE=1`) |
+| Frame rate in the world | 2-4 fps: 420-450 ms per frame by default, 240-350 ms with the newer switches (`LEONIDA_RELAY=2`, or `LEONIDA_LATE_WAIT=3 LEONIDA_WIDE_BACK=1 LEONIDA_CARD_BUFFERS_MIN_MB=1 LEONIDA_CARD_BUFFERS_MB=1024`); it started at 3-6 seconds per frame |
+| Stability | no driver hang or device loss in normal runs (a hang introduced by the wave64 update was found and fixed: its barrier form for 64-lane programs is now off unless `LEONIDA_WAVE_WIDE=1`) |
 
 ### Newest (2026-11-25, later the same day)
 
@@ -64,35 +68,35 @@ with all of them, from about 120 ms in the morning. Still far from the console's
   thread (about 95 ms of a 120 ms frame in the morning) and the card
   (about 102 ms busy, by a timestamp pair around every host list:
   `cardmeter.rs`). Taking time off one alone moved the frame by 0 to 7 %.
-- `VICTORY_JOIN_PARTS=1` (off by default): the title's lists wait for
+- `LEONIDA_JOIN_PARTS=1` (off by default): the title's lists wait for
   memory values, which cut its ~15 submissions a frame into ~29 parts;
   parts that follow one another now go to the host as one submission
   (9 a frame), the same lists in the same order. About 6 %.
-- `VICTORY_BACK_OWN_VIEW=1` (off by default): what shaders wrote goes
+- `LEONIDA_BACK_OWN_VIEW=1` (off by default): what shaders wrote goes
   back into title view memory through a view of the layer's own, so the
   copy that wrote it is not read in again. About 9 % (submit thread 93 ->
   81 ms a frame, 104 -> 80 MB a frame checked). A CORRECTION: an earlier
   run seemed to show washed-out frames with this switch; the same frames
   turn up in about 6 of 21 runs with no switch at all (cause not known),
-  and `VICTORY_BACK_OWN_CHECK=1` counted 0 stores gone astray in 1.36
+  and `LEONIDA_BACK_OWN_CHECK=1` counted 0 stores gone astray in 1.36
   million.
-- Where the card's time goes now (`VICTORY_CARD_METER_PIPELINES=1`, a
+- Where the card's time goes now (`LEONIDA_CARD_METER_PIPELINES=1`, a
   table by pipeline): no pass is large. About 82 ms of the title's lists
   are spread over ~3,400 pipeline bindings a frame; ~2,400 of the
   indirect commands still get a clamp pass of the layer's with draw
   windows on (960 are compute dispatches; about 1,000 are mesh records
   the title keeps scattered through a 100 MB argument buffer, which a
   window of records at one step cannot serve).
-- `VICTORY_INDIRECT_GATHER=1` (off by default): a single indirect record
+- `LEONIDA_INDIRECT_GATHER=1` (off by default): a single indirect record
   that misses its window gets a slot in a scratch buffer of its list, and
   the list's prelude clamps all such records in one pass by a table of
   their offsets (the clamp shader with a gather bit), where each draw had
   a compute pass of the layer's in front of it. Proved by clamping every
   gathered record again at its draw and comparing on the card
-  (`VICTORY_INDIRECT_WINDOW_CHECK=1`): 7.9 million records, none differed.
+  (`LEONIDA_INDIRECT_WINDOW_CHECK=1`): 7.9 million records, none differed.
   About 600 of the ~1,600 draws that missed a window are served; the
   others come after a dispatch or a storing draw in their list. With
-  `VICTORY_CARD_REHASH_RUNS=1`: 104 -> 97 ms a frame (10.3 frames a
+  `LEONIDA_CARD_REHASH_RUNS=1`: 104 -> 97 ms a frame (10.3 frames a
   second at 3,800 draws).
 - What the card's time is now, added up: of ~87 ms busy in a 97 ms
   frame, the layer's own lists are ~19 ms and its clamp passes 10-20 ms;
@@ -101,9 +105,9 @@ with all of them, from about 120 ms in the morning. Still far from the console's
   scene would still be near 20 frames a second on this card: the
   translated shaders have to get cheaper too.
 - The frame rate is drawn into the top left corner of every frame shown
-  (`fpsbox.rs`; `VICTORY_FPS_COUNTER=0`: not): the window's caption has
+  (`fpsbox.rs`; `LEONIDA_FPS_COUNTER=0`: not): the window's caption has
   it too, but a capture of the picture does not carry the caption.
-- `VICTORY_COPY_CHANGED=1` (off by default): a refresh of a copy in the
+- `LEONIDA_COPY_CHANGED=1` (off by default): a refresh of a copy in the
   card's memory sends on only the 256-byte chunks that differ from the
   copy's CPU side. The layer's sync lists on the card fall from 12 to 8
   ms a frame, the submit thread pays 3.6 ms for the compare and is then
@@ -132,8 +136,8 @@ with all of them, from about 120 ms in the morning. Still far from the console's
   launches without it). Reverted; why a longer view breaks texture
   streaming is not known yet.
 - Measured and found to give nothing (switches left in, off):
-  `VICTORY_REFRESH_ONCE`, `VICTORY_ASYNC_PRESENT`, `VICTORY_VIEW_KNOWN`,
-  `VICTORY_SPREAD`, `VICTORY_QUEUE2=3`, `VICTORY_WINDOW_JUMP`. Each has an
+  `LEONIDA_REFRESH_ONCE`, `LEONIDA_ASYNC_PRESENT`, `LEONIDA_VIEW_KNOWN`,
+  `LEONIDA_SPREAD`, `LEONIDA_QUEUE2=3`, `LEONIDA_WINDOW_JUMP`. Each has an
   `=alt` form (twenty seconds on, twenty off, each change said in the
   log) so that one run measures both in the same scene.
 
@@ -153,7 +157,7 @@ What did it, on top of the list below:
   the runs before made 1, and the processor no longer compares 550 to
   710 MB a frame looking for shader writes (25 MB now).
 - Levels on demand ran on the card for the first time
-  (`VICTORY_LEVELS_ON_DEMAND=1`, still off by default; with the fixes of
+  (`LEONIDA_LEVELS_ON_DEMAND=1`, still off by default; with the fixes of
   pull request #747 by AscilCH): 3.1 GB of the card not allocated for
   texture levels the title does not hold, no device loss.
 - Guarded blocks under storage writes are opened by default; 14 more
@@ -165,15 +169,15 @@ What did it, on top of the list below:
   over the heap went from 70-220 ms a frame to about 3), and memory the
   guards already hold is not asked of the write watch (pull request #670
   by Jonirulah). Card copies' pieces can come down inside their own
-  flights (pull request #648 by Jonirulah, `VICTORY_CARD_FETCH_INFLIGHT=1`,
+  flights (pull request #648 by Jonirulah, `LEONIDA_CARD_FETCH_INFLIGHT=1`,
   off by default: the copy-back thread's wait went from 181 ms a frame to
   0 here, but the card got busier, so no gain is claimed yet). The frame is
   still 250 to 380 ms: the card is the limit now, most of it the
   per-record clamp before each of some 6,700 indirect draws a frame.
 - Pull request #220 (cheaper indirect draws) is IN this tree now, its
-  windows off by default (`VICTORY_INDIRECT_WINDOW=1`). History, so nobody
+  windows off by default (`LEONIDA_INDIRECT_WINDOW=1`). History, so nobody
   repeats it: with windows on it lost the device three times here. Its own
-  checker (`VICTORY_INDIRECT_WINDOW_CHECK=1`) then showed one list drawing
+  checker (`LEONIDA_INDIRECT_WINDOW_CHECK=1`) then showed one list drawing
   90 records of 2^24 vertices from a window, where the per-draw path lets
   eight through; a record of 2^23 vertices an instance or more now runs
   empty. Since that fix: eight runs with windows on, seven without a
@@ -184,33 +188,33 @@ What did it, on top of the list below:
 - Frame rate, second night (an RTX 4070; the first room went from about
   3.5-4 to 6-7 frames a second with ALL of the switches below; the
   defaults are unchanged and give about 4.5-5):
-  - `VICTORY_ASYNC_SUBMIT=1`: submissions are prepared and sent by a
+  - `LEONIDA_ASYNC_SUBMIT=1`: submissions are prepared and sent by a
     thread of the layer, not by the title's render thread, which a
     profile showed inside the submit path for 257 of 292 ms a frame.
-  - `VICTORY_QUEUE2=1`: fetches of what shaders wrote go to a copy queue
+  - `LEONIDA_QUEUE2=1`: fetches of what shaders wrote go to a copy queue
     (brought back, with the fix for a piece fetched beside a later
     flight); the copy-back thread's wait fell from about 125 to 7 ms a
     frame.
-  - `VICTORY_INDIRECT_WINDOW=1`: see above.
-  - `VICTORY_TEXTURE_NO_WAIT=1`: a texture refresh no longer waits while
+  - `LEONIDA_INDIRECT_WINDOW=1`: see above.
+  - `LEONIDA_TEXTURE_NO_WAIT=1`: a texture refresh no longer waits while
     the title remaps memory; the loading phase had 5 readings over a
     second where it had 18.
-  - `VICTORY_MERGE_GAP=64 VICTORY_MERGE_RUNS=4096`: title bytes put in
+  - `LEONIDA_MERGE_GAP=64 LEONIDA_MERGE_RUNS=4096`: title bytes put in
     under flights' shader writes are joined over small gaps (NOT exact:
     read the comment at `merge_gap` before using it).
   - On by default: fills of upload memory and read-only buffer copies no
     longer wait for flights and are checked against what the flights then
-    wrote (`VICTORY_FILL_WAIT=1` waits as before; no mismatch in any run
+    wrote (`LEONIDA_FILL_WAIT=1` waits as before; no mismatch in any run
     so far); up to 512 idle host lists and texture staging buffers are
     reused instead of made and freed every frame.
-  - `VICTORY_PROFILE=1` (diagnostics builds): a sampling profiler inside
+  - `LEONIDA_PROFILE=1` (diagnostics builds): a sampling profiler inside
     the layer; it is how the above was found.
 - Frame rate, third session: measuring first (same RTX 4070, first room).
-  - A frame log (`VICTORY_FRAME_LOG`, on in diagnostics builds): every
+  - A frame log (`LEONIDA_FRAME_LOG`, on in diagnostics builds): every
     frame's length, and for the usual frame and each long one what it was
     made of (the render thread's time in the present call, the submit
     thread's work, copies, copy-back, recording, texture work, faults,
-    disk). A card meter (`VICTORY_CARD_METER`) adds the card's time by
+    disk). A card meter (`LEONIDA_CARD_METER`) adds the card's time by
     kind of list from a timestamp at each list's start and end.
   - What they showed, windows off: a usual frame of 136 ms; the title's
     render thread waits 77 ms of it in the present call for the submit
@@ -221,19 +225,19 @@ What did it, on top of the list below:
     linear in draws (about 32 microseconds a draw all-in): the title draws
     about twice as much on some frames, which are the long ones.
   - The regular dips of earlier test runs were the test harness: a saved
-    frame (`VICTORY_CAPTURE_WORLD`, every 8th world frame) is read back
+    frame (`LEONIDA_CAPTURE_WORLD`, every 8th world frame) is read back
     and written as a PNG inside the present, 235 ms each.
-    `VICTORY_CAPTURE_WORLD_EVERY=64` for runs that measure speed.
-  - `VICTORY_INDIRECT_WINDOW=1` measured again with those instruments. A
+    `LEONIDA_CAPTURE_WORLD_EVERY=64` for runs that measure speed.
+  - `LEONIDA_INDIRECT_WINDOW=1` measured again with those instruments. A
     CORRECTION: the first figures given here (6.0 against 8.9 frames a
     second) compared two runs that stood in different scenes during the
     measured window (about 4,300 against 1,550 draws a frame) and are
     withdrawn. Compared at equal draws, by a line fitted to each run's
     frame times against its draws per frame: windows off 145 ms at 4,500
-    draws and 271 ms at 10,000; windows on with `VICTORY_COPY_PLAIN=1`
+    draws and 271 ms at 10,000; windows on with `LEONIDA_COPY_PLAIN=1`
     124 ms and 211 ms. On screen: 7-8 frames a second in the first rooms,
     10-12 in their lighter views.
-  - A driver watch (on by default; `VICTORY_DRIVER_WATCH=0` off): the
+  - A driver watch (on by default; `LEONIDA_DRIVER_WATCH=0` off): the
     layer subscribes to the system's event log and logs every entry of a
     display driver as it is recorded; the first one turns draw windows
     off for the rest of the run. Every device loss here had such entries
@@ -247,7 +251,7 @@ What did it, on top of the list below:
     sync looks at a changed page's records under one lock, fingerprint
     first; guarded view memory is left out of a submission's write-watch
     askings ahead (after triippywhale).
-  - `VICTORY_COPY_PLAIN=1`: copies of title memory made in place by this
+  - `LEONIDA_COPY_PLAIN=1`: copies of title memory made in place by this
     process, with a handler that falls back to the kernel's copy on a
     missing page. Its first form also took the layer's one-byte "is this
     page there" reads, 1,000 to 1,300 faults a frame, and won nothing;
@@ -256,21 +260,21 @@ What did it, on top of the list below:
     submit thread's kernel time fell from 44 to 20 ms a frame; the
     picture is the same.
   - The layer's submit and copy-back threads ask for the fast cores of a
-    hybrid processor (`VICTORY_FAST_CORES=0`: not): the submit thread was
+    hybrid processor (`LEONIDA_FAST_CORES=0`: not): the submit thread was
     found on a slow core in 6 % of its looks, now in none of 21,059.
-    `VICTORY_DISK_CORES=slow` (off, not measured) asks the slow cores for
+    `LEONIDA_DISK_CORES=slow` (off, not measured) asks the slow cores for
     the DirectStorage workers, which are as many as the logical
     processors and free to run anywhere.
   - Behind switches, built and unit-tested, not yet shown to pay:
-    `VICTORY_REFRESH_ONCE=1`, `VICTORY_VIEW_KNOWN=1`,
-    `VICTORY_BACK_OWN_VIEW=1` (picture to be checked),
-    `VICTORY_ASYNC_PRESENT=1` (the present goes behind the queue's line;
+    `LEONIDA_REFRESH_ONCE=1`, `LEONIDA_VIEW_KNOWN=1`,
+    `LEONIDA_BACK_OWN_VIEW=1` (picture to be checked),
+    `LEONIDA_ASYNC_PRESENT=1` (the present goes behind the queue's line;
     no gain while the card is the limit).
-  - Tried and refused: `VICTORY_BVH_HOLD=1` holds back the 64 programs
+  - Tried and refused: `LEONIDA_BVH_HOLD=1` holds back the 64 programs
     that walk ray-tracing structures nothing has built; the picture loses
     its indirect light with it, so it stays off.
   - The process opts out of the system's efficiency mode
-    (`VICTORY_EFFICIENCY_MODE=1` leaves it); on a hybrid processor the
+    (`LEONIDA_EFFICIENCY_MODE=1` leaves it); on a hybrid processor the
     frame log found the title's render and recording threads on fast
     cores in every look of a run, and the layer's submit thread on a slow
     core in 6 % of its looks.
@@ -289,7 +293,7 @@ What did it, on top of the list below:
 
 Memory sync between the title's memory and the copies on the card:
 - **A write through one view of a physical page is seen by the copies taken
-  through its other views** (`VICTORY_VIEW_GUARD=0` turns it off). The title
+  through its other views** (`LEONIDA_VIEW_GUARD=0` turns it off). The title
   shows one page at several addresses and a copy was guarded at one of them
   only. Measured on the test machine: 0.8 to 1.0 million such writes in a
   five-minute run, every one of which used to leave a copy stale. Since it
@@ -301,30 +305,30 @@ Memory sync between the title's memory and the copies on the card:
 - Writes of the storage layer into physical pages are counted where the title
   has those pages mapped (10,000 to 50,000 guarded blocks of copies lay under
   them in every run) and can open the guards there:
-  `VICTORY_PAGE_WRITES=guards` (off by default; `1`, `slots`, `all` do more).
-- Failed page-destination reads are retried (`VICTORY_DSTORAGE_RETRIES=0` = as before).
+  `LEONIDA_PAGE_WRITES=guards` (off by default; `1`, `slots`, `all` do more).
+- Failed page-destination reads are retried (`LEONIDA_DSTORAGE_RETRIES=0` = as before).
 
 Card memory (the test card is full from the first frame of the world: 85 to
 99 % of its budget for a whole run, about 26,000 texture copies let go and
 3,400 made again in five minutes, 2.8 GB of render targets that are all in
 use):
-- Levels on demand, **off by default** (`VICTORY_LEVELS_ON_DEMAND=1`): a
+- Levels on demand, **off by default** (`LEONIDA_LEVELS_ON_DEMAND=1`): a
   texture the title fills takes card memory only for the levels the title
   holds (2.2 to 3.0 GB of the copies were levels it does not hold). Its test
   runs on the software adapter; it has not run on a card yet.
 - Refused texture slots are held back for a few seconds so that a pass
-  reaches the slots behind them (`VICTORY_FULL_CARD_PASS=0` = as before);
+  reaches the slots behind them (`LEONIDA_FULL_CARD_PASS=0` = as before);
   room can be kept for the card copies of title buffers
-  (`VICTORY_CARD_ROOM_FOR_BUFFERS=1`, off).
+  (`LEONIDA_CARD_ROOM_FOR_BUFFERS=1`, off).
 
 Tools and diagnostics:
-- `victory translate <shader file> --warm all --jobs N` translates every
+- `leonida translate <shader file> --warm all --jobs N` translates every
   shader ahead of a run, on the processor only (about 4.5 to 6.5 minutes
   here); the shader cache is keyed on the translator's source, so a new
   build that does not touch the translator starts warm.
-- Counters, all off or diagnostics-only: `VICTORY_MERGE_RACE=1` (title bytes
+- Counters, all off or diagnostics-only: `LEONIDA_MERGE_RACE=1` (title bytes
   a copy-back is about to put back to older values: none found in 138,000
-  copy-backs), `VICTORY_WALLS_TRACE`, `VICTORY_CARD_ACCOUNTING`, and a census
+  copy-backs), `LEONIDA_WALLS_TRACE`, `LEONIDA_CARD_ACCOUNTING`, and a census
   of the copies the texture sweep never lets go.
 
 ### What this fork changed (summary)
@@ -342,16 +346,16 @@ Rendering:
 Speed and memory:
 - Waits for memory values, write-watch queries and page queries no longer walk page tables per call.
 - Large title buffers get a copy in card memory, with shader writes found by hashing on the card.
-- Submissions can be sent ahead of the wait for the card (`VICTORY_LATE_WAIT`), with a relay thread that lands results as the card finishes (`VICTORY_RELAY`): in a first five-minute run the card's idle time behind the submitting thread fell from about 136 to 30 ms per frame.
-- Title memory can be opened as a graphics heap so that buffers are used in place instead of copied (`VICTORY_INPLACE`, first stage only; a probe confirmed the approach on the test GPU).
+- Submissions can be sent ahead of the wait for the card (`LEONIDA_LATE_WAIT`), with a relay thread that lands results as the card finishes (`LEONIDA_RELAY`): in a first five-minute run the card's idle time behind the submitting thread fell from about 136 to 30 ms per frame.
+- Title memory can be opened as a graphics heap so that buffers are used in place instead of copied (`LEONIDA_INPLACE`, first stage only; a probe confirmed the approach on the test GPU).
 - The bindless texture queue no longer uploads stale views; the view table no longer grows without bound; the pipeline library is mapped instead of read into memory.
 - An intermittent device loss was traced to the pipeline library file being replaced while mapped; fixed.
 
-- Translated shaders get clean-up passes over the finished module (dead code, constant folding, reuse of values, branch facts); the pack's host instruction count falls by about 43 %, worth about 20 ms of GPU time per frame on the test machine (`VICTORY_SHADER_OPT=0` turns them off).
+- Translated shaders get clean-up passes over the finished module (dead code, constant folding, reuse of values, branch facts); the pack's host instruction count falls by about 43 %, worth about 20 ms of GPU time per frame on the test machine (`LEONIDA_SHADER_OPT=0` turns them off).
 
 Most of the newer speed changes sit behind environment switches that are off
-by default (`VICTORY_LATE_WAIT`, `VICTORY_RELAY`, `VICTORY_WIDE_BACK`,
-`VICTORY_CARD_BUFFERS_MIN_MB`, `VICTORY_INPLACE`, `VICTORY_BVH_BUILDER`, ...).
+by default (`LEONIDA_LATE_WAIT`, `LEONIDA_RELAY`, `LEONIDA_WIDE_BACK`,
+`LEONIDA_CARD_BUFFERS_MIN_MB`, `LEONIDA_INPLACE`, `LEONIDA_BVH_BUILDER`, ...).
 Each is described in a comment where it is read.
 
 ### Known problems
@@ -362,7 +366,8 @@ Each is described in a comment where it is read.
 - A few style lints are switched off for this fork in the workspace `Cargo.toml` until the newer code is tidied.
 - Many changes here are specific to this title and this GPU, and some are marked `shortcut:` in the code where they approximate what the console does.
 
-Everything below this line is upstream VIctory's own README, unchanged; its
+Everything below this line is upstream VIctory's own README, with its commands,
+paths and switches renamed to this fork's (`leonida`, `LEONIDA_*`); its
 status section describes upstream, not this fork.
 
 ---
@@ -395,7 +400,7 @@ Tested on one machine: Windows 11, AMD RX 6700 XT.
 > **Warning.** Entering the world on a real GPU can currently hang it, and
 > Windows then resets the display driver (every monitor goes black for a
 > moment). To look further, use a diagnostics build with
-> `VICTORY_D3D12_WARP=1`, which renders on the software adapter.
+> `LEONIDA_D3D12_WARP=1`, which renders on the software adapter.
 
 What each part does today and what it still needs:
 
@@ -426,20 +431,20 @@ the Windows paging file size, then retry.
 
 ```powershell
 cargo xtask install-hooks                # asset-policy check on every commit
-copy victory.example.toml victory.toml   # then set your paths (outside the repo)
+copy leonida.example.toml leonida.toml   # then set your paths (outside the repo)
 cargo test --workspace                   # needs no game data
-cargo run -p victory -- config           # check your paths
+cargo run -p leonida -- config           # check your paths
 ```
 
 Run the title:
 
 ```powershell
-cargo build --release -p victory
-target\release\victory.exe run <game dir>\<the title's exe> --execute
+cargo build --release -p leonida
+target\release\leonida.exe run <game dir>\<the title's exe> --execute
 ```
 
 The window caption shows the framerate. Saves, settings and `crashes.log`
-are kept under the data folder (default `%LOCALAPPDATA%\victory\data`), derived
+are kept under the data folder (default `%LOCALAPPDATA%\leonida\data`), derived
 data under the cache folder.
 
 Input: XInput pads. With none connected the keyboard is a pad while the
@@ -457,17 +462,17 @@ title's window has focus:
 ## Commands
 
 ```
-victory inspect <exe|dll> [--imports] [--exports]
-victory census [paths...] [--missing] [--strict]
-victory lib-exports <import.lib> [--list]
-victory shader-info [paths...] [--verbose] [--disasm]
-victory translate [paths...] [--validate] [--pipelines] [--list] [--jobs N]
-victory run <exe> [--execute] [--unimplemented trap|zero] [--strict]
+leonida inspect <exe|dll> [--imports] [--exports]
+leonida census [paths...] [--missing] [--strict]
+leonida lib-exports <import.lib> [--list]
+leonida shader-info [paths...] [--verbose] [--disasm]
+leonida translate [paths...] [--validate] [--pipelines] [--list] [--jobs N]
+leonida run <exe> [--execute] [--unimplemented trap|zero] [--strict]
             [--console series-x|series-s] [-- <title arguments>]
-victory config
+leonida config
 ```
 
-Logging: `VICTORY_LOG=victory_loader=trace,info` (a release build logs
+Logging: `LEONIDA_LOG=leonida_loader=trace,info` (a release build logs
 info and above).
 
 ## Debugging
@@ -475,28 +480,28 @@ info and above).
 A release build has no debugging aids. Build them in with
 
 ```powershell
-cargo build --profile diag -p victory --features diagnostics   # target\diag\victory.exe
+cargo build --profile diag -p leonida --features diagnostics   # target\diag\leonida.exe
 ```
 
 | Variable | Effect |
 |----------|--------|
-| `VICTORY_LOG=<target>=debug,...` | debug and trace output |
-| `VICTORY_STACKS=20,60` | every thread's stack at those seconds |
-| `VICTORY_WATCH=<rva>,...` | logs a title u32 when it changes |
-| `VICTORY_KEYS=30:Enter,35:X` | presses keys at those seconds, focus or not |
-| `VICTORY_CRASH_SAVE=<rva>:<len>,...` | saves title memory to the cache folder on a crash |
-| `VICTORY_CAPTURE=<dir>` | saves presented frames (powers of two, or `VICTORY_CAPTURE_FRAMES=<list>`) |
-| `VICTORY_DUMP_TARGETS=1` | with the two above, saves every render target of those frames |
-| `VICTORY_D3D12_DEBUG=1` | host debug layer |
-| `VICTORY_D3D12_GBV=1` | with the above, GPU-based validation (bad descriptor use reported, not faulted; slow) |
-| `VICTORY_D3D12_DRED=1` | on a GPU failure, the allocation hit and the commands in flight |
-| `VICTORY_PIPELINE_WAIT_MS=24` | reduce the per-frame wait for background pipeline creation from the default of 500 ms. A draw can be omitted until its pipeline is ready |
-| `VICTORY_SKIP_PIPELINES=<hash>,...` | omit draws and dispatches, including indirect ones, whose pipeline contains a listed 16-digit shader hash |
-| `VICTORY_GPU_TIMING=1` | with the above, each list of a submission run and timed on its own; slow lists logged with their slowest commands |
-| `VICTORY_D3D12_WARP=1` | host device on the software adapter (slow; cannot reset the driver) |
-| `VICTORY_SHADER_LOOP_LIMIT=<n>` | translated shader loops stop after `n` iterations per lane instead of 2^20 (own shader cache entries); if a lower `n` makes world frames much faster, loops hitting the limit are what makes them slow |
-| `VICTORY_AUDIO_CAPTURE=<file.wav>` | records what the title plays (our process only) |
-| `VICTORY_XMA_DUMP=<dir>` | saves the first 32 XMA voices' context and input |
+| `LEONIDA_LOG=<target>=debug,...` | debug and trace output |
+| `LEONIDA_STACKS=20,60` | every thread's stack at those seconds |
+| `LEONIDA_WATCH=<rva>,...` | logs a title u32 when it changes |
+| `LEONIDA_KEYS=30:Enter,35:X` | presses keys at those seconds, focus or not |
+| `LEONIDA_CRASH_SAVE=<rva>:<len>,...` | saves title memory to the cache folder on a crash |
+| `LEONIDA_CAPTURE=<dir>` | saves presented frames (powers of two, or `LEONIDA_CAPTURE_FRAMES=<list>`) |
+| `LEONIDA_DUMP_TARGETS=1` | with the two above, saves every render target of those frames |
+| `LEONIDA_D3D12_DEBUG=1` | host debug layer |
+| `LEONIDA_D3D12_GBV=1` | with the above, GPU-based validation (bad descriptor use reported, not faulted; slow) |
+| `LEONIDA_D3D12_DRED=1` | on a GPU failure, the allocation hit and the commands in flight |
+| `LEONIDA_PIPELINE_WAIT_MS=24` | reduce the per-frame wait for background pipeline creation from the default of 500 ms. A draw can be omitted until its pipeline is ready |
+| `LEONIDA_SKIP_PIPELINES=<hash>,...` | omit draws and dispatches, including indirect ones, whose pipeline contains a listed 16-digit shader hash |
+| `LEONIDA_GPU_TIMING=1` | with the above, each list of a submission run and timed on its own; slow lists logged with their slowest commands |
+| `LEONIDA_D3D12_WARP=1` | host device on the software adapter (slow; cannot reset the driver) |
+| `LEONIDA_SHADER_LOOP_LIMIT=<n>` | translated shader loops stop after `n` iterations per lane instead of 2^20 (own shader cache entries); if a lower `n` makes world frames much faster, loops hitting the limit are what makes them slow |
+| `LEONIDA_AUDIO_CAPTURE=<file.wav>` | records what the title plays (our process only) |
+| `LEONIDA_XMA_DUMP=<dir>` | saves the first 32 XMA voices' context and input |
 
 Every build appends crashes and host GPU failures to `crashes.log` in the
 title's data folder.
