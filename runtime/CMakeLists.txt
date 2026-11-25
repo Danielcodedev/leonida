@@ -153,6 +153,7 @@ set(LEONIDA_SETTING_READERS
   src/pe_loader.cpp
   shims/registry.cpp
   shims/bcrypt_rng.cpp
+  shims/xgameruntime.cpp
 )
 list(TRANSFORM LEONIDA_SETTING_READERS PREPEND "${CMAKE_CURRENT_SOURCE_DIR}/")
 get_property(_gta6rt_targets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
