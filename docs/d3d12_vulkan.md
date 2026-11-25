@@ -2455,7 +2455,9 @@ The trace will enumerate them.
   created with `VK_IMAGE_USAGE_HOST_TRANSFER_BIT_EXT` when the device supports that usage with the requested
   image format and flags, moved to
   `GENERAL` and zero-filled on the host at creation, and copied with `vkCopyMemoryToImageEXT`/
-  `vkCopyImageToMemoryEXT` while they stay in `GENERAL` (D3D12's `COMMON`). Every other case (no extension, a
+  `vkCopyImageToMemoryEXT` while they stay in `GENERAL` (D3D12's `COMMON`). A driver can accept the usage and then
+  name no memory type for the image (NVIDIA 582.66 on a GTX 1070 Ti: `memoryTypeBits` 0 with the usage, 0x82
+  without it); the image is then made again without the usage. Every other case (no extension, such an image, a
   texture a barrier has moved, a default-heap texture, which D3D12 does not allow but the layer copies and logs) is
   a `CopyTextureRegion` from or to a host-visible staging buffer, replayed on the device's queue and waited for, so
   the layout tracker and a first use's zero fill behave exactly as for the application's own copies.

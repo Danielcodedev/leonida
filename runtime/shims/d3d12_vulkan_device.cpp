@@ -2244,6 +2244,20 @@ public:
         }
         VkMemoryRequirements requirements{};
         vk.vkGetImageMemoryRequirements(device_.info.device, image_, &requirements);
+        if (host_transfer_ && !requirements.memoryTypeBits) {
+            // A driver can accept the host-transfer usage and then name no memory type for the image: NVIDIA 582.66 on
+            // a GTX 1070 Ti answers memoryTypeBits 0 with the usage and 0x82 without it. Make the image again without
+            // the usage, so its CPU copies take the staging path.
+            log_once("no memory type for a host-transfer image, using staging copies; format", int(info.format));
+            vk.vkDestroyImage(device_.info.device, image_, nullptr);
+            image_ = VK_NULL_HANDLE;
+            host_transfer_ = false;
+            info.usage &= ~VK_IMAGE_USAGE_HOST_TRANSFER_BIT_EXT;
+            support = device_.check_image_support(info);
+            if (FAILED(support)) return support;
+            if (vk.vkCreateImage(device_.info.device, &info, nullptr, &image_) != VK_SUCCESS) return E_OUTOFMEMORY;
+            vk.vkGetImageMemoryRequirements(device_.info.device, image_, &requirements);
+        }
         memory_ = device_.allocate(requirements, 0, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &memory_flags_);
         if (!memory_ || vk.vkBindImageMemory(device_.info.device, image_, memory_, 0) != VK_SUCCESS)
             return E_OUTOFMEMORY;
