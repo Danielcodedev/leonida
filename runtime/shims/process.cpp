@@ -34,6 +34,7 @@
 #include <type_traits>
 #include <vector>
 
+#include "../core/log.h"
 #include "process_shim.h"
 #include "shims.h"
 
@@ -201,9 +202,9 @@ DWORD_PTR __stdcall game_set_thread_affinity_mask(HANDLE thread, DWORD_PTR mask)
     static std::atomic<int> substituted{0};
     const int n = ++substituted;
     if (n <= 8)
-        std::fprintf(stderr, "[rt] process: SetThreadAffinityMask(0x%llx) names cores the host lacks; the thread stays, "
-                             "answered its mask 0x%llx (call %d)\n",
-                     static_cast<unsigned long long>(mask), static_cast<unsigned long long>(actual), n);
+        RT_LOG_WARN("process: SetThreadAffinityMask(0x%llx) names cores the host lacks; the thread stays, "
+                    "answered its mask 0x%llx (call %d)\n",
+                    static_cast<unsigned long long>(mask), static_cast<unsigned long long>(actual), n);
     // The log may have failed (a closed stderr pipe leaves ERROR_NO_DATA); the call itself succeeded.
     SetLastError(ERROR_SUCCESS);
     return actual;
@@ -227,10 +228,10 @@ BOOL __stdcall game_set_thread_group_affinity(HANDLE thread, const GROUP_AFFINIT
     static std::atomic<int> substituted{0};
     const int n = ++substituted;
     if (n <= 8)
-        std::fprintf(stderr, "[rt] process: SetThreadGroupAffinity(group %u, 0x%llx) names cores or a group the host lacks; "
-                             "the thread stays, answered group %u mask 0x%llx (call %d)\n",
-                     static_cast<unsigned>(requested->Group), static_cast<unsigned long long>(requested->Mask),
-                     static_cast<unsigned>(actual.Group), static_cast<unsigned long long>(actual.Mask), n);
+        RT_LOG_WARN("process: SetThreadGroupAffinity(group %u, 0x%llx) names cores or a group the host lacks; "
+                    "the thread stays, answered group %u mask 0x%llx (call %d)\n",
+                    static_cast<unsigned>(requested->Group), static_cast<unsigned long long>(requested->Mask),
+                    static_cast<unsigned>(actual.Group), static_cast<unsigned long long>(actual.Mask), n);
     // The log may have failed (a closed stderr pipe leaves ERROR_NO_DATA); the call itself succeeded.
     SetLastError(ERROR_SUCCESS);
     return TRUE;
@@ -239,7 +240,7 @@ BOOL __stdcall game_set_thread_group_affinity(HANDLE thread, const GROUP_AFFINIT
 // host's own affinity runs the same work, so it succeeds and changes nothing.
 BOOL __stdcall game_set_threadpool_affinity_mask(PTP_POOL, DWORD_PTR) { return TRUE; }
 void __cdecl game_abort() {
-    std::fprintf(stderr, "[rt] process: the game called abort()\n");
+    RT_LOG_ERROR("process: the game called abort()\n");
     // The game's signal() import is not shimmed: its handler goes into the host CRT's process-wide table, which
     // std::signal here reads too. UCRT's abort() raises SIGABRT before it terminates; do the same only when a
     // handler is installed, because raising it with the default action would terminate the host process. A handler
