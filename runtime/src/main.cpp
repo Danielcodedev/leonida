@@ -185,24 +185,27 @@ int wmain(int argc, wchar_t** argv) {
     }
     {
         const leonida::mods::LoadResult mods = leonida::mods::load_mods(mods_dir);
-        for (const std::string& e : mods.errors) std::fprintf(stderr, "[rt] mods: skipped %s\n", e.c_str());
+        for (const std::string& e : mods.errors) RT_LOG_WARN("mods: skipped %s\n", e.c_str());
         for (const auto& m : mods.mods) {
-            std::fprintf(stderr, "[rt] mods: %s%s\n", m.name.c_str(), m.enabled ? "" : " (disabled)");
+            RT_LOG_INFO("mods: %s%s\n", m.name.c_str(), m.enabled ? "" : " (disabled)");
             for (const auto& sw : m.archetype_swaps)
-                std::fprintf(stderr, "[rt] mods:   archetype %s (0x%08X) -> %s (0x%08X)\n", sw.from_name.c_str(),
-                             sw.from, sw.to_name.c_str(), sw.to);
+                RT_LOG_INFO("mods:   archetype %s (0x%08X) -> %s (0x%08X)\n", sw.from_name.c_str(),
+                            sw.from, sw.to_name.c_str(), sw.to);
         }
         leonida::mods::set_active(leonida::mods::ArchetypeSwaps(mods.mods));
         const leonida::mods::CameraView camera = leonida::mods::camera_of(mods.mods);
         leonida::mods::set_active_camera(camera);
         if (camera.first_person)
-            std::fprintf(stderr, "[rt] mods: first-person view (value %u) for %s%s\n", camera.first_person_value,
-                         camera.contexts.empty() ? "every context" : "the listed contexts",
-                         view_mode_getter_rva ? "" : "; not applied: no --view-mode-getter RVA for this executable");
-        if (leonida::mods::active().size())
-            std::fprintf(stderr, archetype_lookup_rva ? "[rt] mods: %zu archetype swap(s) loaded\n"
-                                 : "[rt] mods: %zu archetype swap(s) loaded; not applied: no --archetype-lookup RVA for "
-                                   "this executable (docs/modding.md)\n", leonida::mods::active().size());
+            RT_LOG_INFO("mods: first-person view (value %u) for %s%s\n", camera.first_person_value,
+                        camera.contexts.empty() ? "every context" : "the listed contexts",
+                        view_mode_getter_rva ? "" : "; not applied: no --view-mode-getter RVA for this executable");
+        if (leonida::mods::active().size()) {
+            if (archetype_lookup_rva)
+                RT_LOG_INFO("mods: %zu archetype swap(s) loaded\n", leonida::mods::active().size());
+            else
+                RT_LOG_WARN("mods: %zu archetype swap(s) loaded; not applied: no --archetype-lookup RVA for "
+                            "this executable (docs/modding.md)\n", leonida::mods::active().size());
+        }
     }
     rt::d3d12_trace::set_enabled(trace_d3d12);
     // Slot 133 imports the title's pages; xmem commits them on first touch, so they are committed first.
@@ -220,12 +223,12 @@ int wmain(int argc, wchar_t** argv) {
     // The console's Zen 2 instructions this CPU may lack (docs/cpu_features.md): emulated on #UD. Installed after the
     // trace's handler so it runs first, and an emulated instruction is not recorded as an exception.
     if (const auto host = rt::cpu_emulation::detect_host(); !host.sse4a || !host.clzero || !host.monitorx || !host.clwb)
-        std::fprintf(stderr, "[rt] cpu: this CPU lacks%s%s%s%s; the game's uses are emulated (docs/cpu_features.md)\n",
-                     host.sse4a ? "" : " SSE4a", host.clzero ? "" : " CLZERO", host.monitorx ? "" : " MONITORX",
-                     host.clwb ? "" : " CLWB");
+        RT_LOG_WARN("cpu: this CPU lacks%s%s%s%s; the game's uses are emulated (docs/cpu_features.md)\n",
+                    host.sse4a ? "" : " SSE4a", host.clzero ? "" : " CLZERO", host.monitorx ? "" : " MONITORX",
+                    host.clwb ? "" : " CLWB");
     if (!rt::cpu_emulation::install())
-        std::fprintf(stderr, "[rt] cpu: AddVectoredExceptionHandler failed (error %lu); instructions this CPU lacks "
-                             "will stop the game\n", GetLastError());
+        RT_LOG_ERROR("cpu: AddVectoredExceptionHandler failed (error %lu); instructions this CPU lacks "
+                     "will stop the game\n", GetLastError());
 
     try {
         rt::Loader loader(game_dir);
@@ -236,10 +239,10 @@ int wmain(int argc, wchar_t** argv) {
             const auto r = leonida::hooks::hook_image_results(main_module.base, view_mode_getter_rva,
                                                               &leonida::mods::override_view_mode);
             if (r.ok)
-                std::fprintf(stderr, "[rt] mods: view-mode getter at RVA 0x%X hooked: %zu direct call(s) redirected\n",
-                             view_mode_getter_rva, r.redirected);
+                RT_LOG_INFO("mods: view-mode getter at RVA 0x%X hooked: %zu direct call(s) redirected\n",
+                            view_mode_getter_rva, r.redirected);
             else
-                std::fprintf(stderr, "[rt] mods: view-mode getter at RVA 0x%X not hooked: %s\n", view_mode_getter_rva,
+                RT_LOG_ERROR("mods: view-mode getter at RVA 0x%X not hooked: %s\n", view_mode_getter_rva,
                              r.error);
         }
         if (archetype_lookup_rva) {
@@ -247,10 +250,10 @@ int wmain(int argc, wchar_t** argv) {
                 main_module.base, archetype_lookup_rva,
                 [](uint32_t hash) { return leonida::mods::active().remap(hash); }, archetype_lookup_arg);
             if (r.ok)
-                std::fprintf(stderr, "[rt] mods: archetype lookup at RVA 0x%X hooked (argument %d): %zu direct "
-                                     "call(s) redirected\n", archetype_lookup_rva, archetype_lookup_arg, r.redirected);
+                RT_LOG_INFO("mods: archetype lookup at RVA 0x%X hooked (argument %d): %zu direct "
+                            "call(s) redirected\n", archetype_lookup_rva, archetype_lookup_arg, r.redirected);
             else
-                std::fprintf(stderr, "[rt] mods: archetype lookup at RVA 0x%X not hooked: %s\n", archetype_lookup_rva,
+                RT_LOG_ERROR("mods: archetype lookup at RVA 0x%X not hooked: %s\n", archetype_lookup_rva,
                              r.error);
         }
         if (run) rt::process::set_command_line(image.filename().wstring(), game_args);
