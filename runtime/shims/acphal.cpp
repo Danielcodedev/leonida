@@ -27,6 +27,7 @@
 #include <string>
 #include <vector>
 
+#include "../core/log.h"
 #include "shims.h"
 #include "startup_trace.h"
 
@@ -310,8 +311,7 @@ struct AcpHalImpl {
         (void)d3;
         static std::atomic<bool> warned{false};
         if (!warned.exchange(true, std::memory_order_relaxed)) {
-            std::fprintf(stderr,
-                         "[rt] acphal: command accepted and dropped: no audio DSP hardware on PC\n");
+            RT_LOG_WARN("acphal: command accepted and dropped: no audio DSP hardware on PC\n");
         }
         trace_call("AcpHal::SubmitCommand", "");
         return S_OK;
