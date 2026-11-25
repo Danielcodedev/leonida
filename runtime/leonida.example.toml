@@ -1,0 +1,180 @@
+# Settings of gta6rt. Copy this file to `leonida.toml` next to gta6rt.exe and change what you need.
+#
+# A value is taken from the first place that has one: the environment variable named with each setting, then this
+# file, then the default. LEONIDA_CONFIG names another file to read in place of the one next to the program.
+# `gta6rt config` prints every setting with its value and where the value comes from.
+#
+# Every setting is listed below with its default, switched off by the "# " in front of it; remove the "# " to set
+# it. Text goes in single quotes, which take a Windows path as written ('D:\games\gta6'). Numbers, true and false
+# need no quotes. A value of '' means "not set". A name this file format does not know is an error, so a misspelt
+# setting cannot go unnoticed.
+
+[paths]
+# LEONIDA_GAME_DIR: the game folder the package's MicrosoftGame.Config is read from.
+# Not set: the folder --game-dir names, else the folder of the image.
+# game_dir = ''
+
+# LEONIDA_SAVE_DIR: where saved games go. Not set: %LOCALAPPDATA%\Leonida\saves.
+# save_dir = ''
+
+# LEONIDA_SHADERS: the folder of translated shaders (<work>\shaders\spirv of make_game.py).
+# Not set: the folder that shader_path.txt next to the program names.
+# shaders = ''
+
+# LEONIDA_COMPAT_DIR: a folder of compat modules (runtime/README.md, "Compat modules"). Not set: none are used.
+# compat_dir = ''
+
+[loader]
+# LEONIDA_UNIMPLEMENTED: what a call to an import without a shim does: 'log', 'fail' or 'stop' (runtime/README.md).
+# unimplemented = 'log'
+
+# LEONIDA_TLS_GA_PATCH: false turns off the loader's TLS rewrite of the image, to measure what the image does
+# without it (runtime/README.md, "PE loader").
+# tls_ga_patch = true
+
+# LEONIDA_SKIP_CPU_CHECK: true skips the AVX check that --init and --run make before any code of the game runs.
+# skip_cpu_check = false
+
+# LEONIDA_SKIP_INT3: a diagnostic for --trace. true logs an int3 in the game's code once per address and steps
+# over it.
+# skip_int3 = false
+
+# LEONIDA_RNG_SEED: a number, decimal or hexadecimal with 0x. With it the bcrypt shim returns the same bytes in
+# every run. Not set: random bytes from the host.
+# rng_seed = ''
+
+[system]
+# What xgameruntime.dll reports to the title (runtime/README.md, "environment overrides").
+
+# LEONIDA_DEVICE_TYPE: the XSystemDeviceType, 0 to 8; 7 is Xbox Series X.
+# device_type = 7
+
+# LEONIDA_ANALYTICS_FORM: the form string of XSystemGetAnalyticsInfo. Not set: the one the device type gives.
+# analytics_form = ''
+
+# LEONIDA_PACKAGE_ID: the identifier of the running package, up to 32 characters.
+# package_id = 'LeonidaPackageIdentifier00000000'
+
+# LEONIDA_CONTENT_PACKAGES: the content packages XPackageMount can mount, as 'id1=path1;id2=path2'. Not set: none.
+# content_packages = ''
+
+# LEONIDA_PACKAGED: false makes XPackageIsPackagedProcess answer false.
+# packaged = true
+
+# LEONIDA_GAMERTAG: the offline user's gamertag, up to 15 characters of printable ASCII.
+# gamertag = 'Player'
+
+# LEONIDA_HDR: what the title is told when it asks for HDR output (docs/runtime_imports.md, "HDR").
+# false: HDR is reported as disabled.
+# hdr = false
+
+# LEONIDA_LOG_GAME_EVENTS: true logs every event the title writes, with its dimensions and measurements.
+# log_game_events = false
+
+[d3d12]
+# LEONIDA_D3D12: the device behind D3D12XboxCreateDevice: 'host' is the D3D12 of this PC, 'vulkan' the runtime's
+# D3D12 over Vulkan.
+# backend = 'host'
+
+# XS_TRACE: true logs the first call of each slot of the Xbox device.
+# xs_trace = false
+
+# The slots of the Xbox device's own methods, each 3 to 127 (docs/d3d12_vulkan.md). Change them only for a trace
+# that disagrees with the defaults.
+# LEONIDA_XS_FRAME_INTERVAL_SLOT: SetFrameIntervalX.
+# frame_interval_slot = 78
+# LEONIDA_XS_SCHEDULE_EVENT_SLOT: ScheduleFrameEventX.
+# schedule_event_slot = 79
+# LEONIDA_XS_WAIT_EVENT_SLOT: WaitFrameEventX.
+# wait_event_slot = 80
+# LEONIDA_XS_QUEUE_X_SLOT: CreateCommandQueueX.
+# queue_x_slot = 48
+# LEONIDA_XS_LIST_X_SLOT: CreateCommandListX.
+# list_x_slot = 73
+
+[vulkan]
+# The Vulkan backend (docs/d3d12_vulkan.md).
+
+# LEONIDA_VK_DEVICE: picks the GPU by its name (runtime/src/vulkan_device_filter.h). Not set: the runtime's choice.
+# device = ''
+
+# LEONIDA_VK_VALIDATION: true runs the device under the Khronos validation layer.
+# validation = false
+
+# LEONIDA_VK_MAX_QUEUES_PER_FAMILY: a test setting, 1 to 16: at most this many Vulkan queues per queue family.
+# The game's device ignores it.
+# max_queues_per_family = 16
+
+# LEONIDA_VK_GRAPHICS_FAMILY_ONLY: a test setting: true puts every D3D12 queue in the graphics family.
+# The game's device ignores it.
+# graphics_family_only = false
+
+# LEONIDA_ARENA_MB: the size of the device's memory arena in MiB, at most 4095.
+# arena_mb = 256
+
+# LEONIDA_ARENA_LOG: true logs every address the arena hands out and every allocation it refuses.
+# arena_log = false
+
+# LEONIDA_UPLOAD_SYSMEM: true keeps upload heaps in system memory on a GPU with Resizable BAR.
+# upload_sysmem = false
+
+# LEONIDA_BINDLESS_IDLE_WAIT: true brings back the old wait before the bindless descriptor set is replaced.
+# bindless_idle_wait = false
+
+# LEONIDA_RT_AS: how acceleration structures are built: 'xdxr' writes the records the game's shaders read, 'khr'
+# builds Vulkan's own (docs/bvh.md).
+# rt_as = 'xdxr'
+
+[present]
+# LEONIDA_SDR_EOTF: how SDR output is decoded: 'srgb' is piecewise sRGB, 'gamma22' (or '2.2') a pure power of 2.2.
+# sdr_eotf = 'srgb'
+
+# LEONIDA_PRESENT_UNCAP: true takes the frame-rate cap off: frame events return at once and presents do not wait
+# for vblank.
+# uncap = false
+
+# LEONIDA_PRESENT_NO_TEAR: true never lets a late frame tear.
+# no_tear = false
+
+# LEONIDA_CAPTURE: a folder. With it, presented frames are also written there as PPM files. Not set: no capture.
+# capture_dir = ''
+
+# LEONIDA_CAPTURE_EVERY: with a capture folder, every how many presented frames one is written.
+# capture_every = 30
+
+# LEONIDA_CAPTURE_LIMIT: with a capture folder, how many frames are written at most.
+# capture_limit = 24
+
+[input]
+# Controllers, keyboard and mouse (docs/gameinput.md).
+
+# LEONIDA_PROMPTS: the input family the title is told is in use: 'auto' follows the devices; or 'xbox',
+# 'playstation' (or 'ps5'), 'ps4', 'ps3', 'nintendo', 'keyboard'.
+# prompts = 'auto'
+
+# LEONIDA_PROMPTS_SWITCH_MS: the shortest time between two changes of that family, 0 to 2000 ms.
+# prompts_switch_ms = 300
+
+# LEONIDA_DS_TRIGGERS: DualSense trigger effects: 'off', 'rumble' or 'resistance'.
+# ds_triggers = 'rumble'
+
+# LEONIDA_DS_TRIGGER_GAIN: scales the trigger level before it becomes an effect, 0 to 4.
+# ds_trigger_gain = 1
+
+# LEONIDA_DS_TRIGGER_FREQ: the vibration frequency of the 'rumble' trigger mode, 1 to 255.
+# ds_trigger_freq = 30
+
+# LEONIDA_DS_LIGHTBAR: the lightbar colour as 'RRGGBB' (hexadecimal), or 'off'. Not set: SDL's player colour.
+# ds_lightbar = ''
+
+# LEONIDA_RUMBLE: false turns all rumble, trigger and force-feedback output off.
+# rumble = true
+
+# LEONIDA_GAMEINPUT_THREAD: false stops the background poll thread (tests).
+# thread = true
+
+# LEONIDA_KEYBOARD_PAD: the keyboard as a gamepad: 'off'; 'focus' while this program has the focus; 'always'.
+# keyboard_pad = 'off'
+
+# LEONIDA_MOUSE_SENSITIVITY: scales how far the mouse moves the keyboard pad's right stick, 0.1 to 10.
+# mouse_sensitivity = 1

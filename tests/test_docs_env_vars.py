@@ -4,8 +4,8 @@
 
 `runtime/README.md` documents the runtime's variables one by one, but five that the `xgameruntime` shim reads
 (`LEONIDA_DEVICE_TYPE` and four more) were in no document at all. This collects the variable names that appear as
-string literals in `runtime/src`, `runtime/shims` and `make_game.py` and checks that each is written in some
-tracked Markdown file. Sources and Markdown only: no build, no GPU, no game files.
+string literals in `runtime/core`, `runtime/src`, `runtime/shims` and `make_game.py` and checks that each is written
+in some tracked Markdown file. Sources and Markdown only: no build, no GPU, no game files.
 """
 import os
 import re
@@ -15,7 +15,7 @@ import unittest
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # A variable name as a string literal: "LEONIDA_X", L"LEONIDA_X" or 'LEONIDA_X'.
 LITERAL = re.compile(r"""["']((?:LEONIDA|GTA6RT)_[A-Z0-9_]+)["']""")
-CODE = ("runtime/src/", "runtime/shims/", "make_game.py")
+CODE = ("runtime/core/", "runtime/src/", "runtime/shims/", "make_game.py")
 # Set by the runtime for itself, not by a person: gta6rt passes the first to the copy of itself it starts with the
 # image base reserved (runtime/src/base_reservation.h), and the second is a name that is only looked up to make
 # the CRT build its environment table (runtime/shims/process.cpp).

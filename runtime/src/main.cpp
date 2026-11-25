@@ -24,6 +24,7 @@
 #include <filesystem>
 #include <map>
 #include <string>
+#include <string_view>
 #include <system_error>
 #include <vector>
 
@@ -33,6 +34,7 @@
 #include "host_cpu.h"
 #include "mods.h"
 #include "pe_loader.h"
+#include "../core/config.h"
 #include "../shims/d3d12_trace.h"
 #include "../shims/d3d12_xs_device.h"
 #include "../shims/file_system.h"
@@ -52,17 +54,53 @@ const char* binding_name(rt::Binding b) {
     }
 }
 
+// The folder of gta6rt.exe; empty when Windows does not give its path.
+std::filesystem::path program_dir() {
+    std::wstring self(32768, L'\0');
+    const DWORD n = GetModuleFileNameW(nullptr, self.data(), static_cast<DWORD>(self.size()));
+    if (!n || n >= self.size()) return {};
+    return std::filesystem::path(self.substr(0, n)).parent_path();
+}
+
 int usage() {
     std::fprintf(stderr,
-                 "usage: gta6rt --dry-run <image> [--game-dir DIR] [--overlay DIR] [--mods DIR] [--archetype-lookup RVA[,ARG]] [--view-mode-getter RVA] [--trace FILE]\n"
+                 "usage: gta6rt config\n"
+                 "       gta6rt --dry-run <image> [--game-dir DIR] [--overlay DIR] [--mods DIR] [--archetype-lookup RVA[,ARG]] [--view-mode-getter RVA] [--trace FILE]\n"
                  "       gta6rt --init <image> [--game-dir DIR] [--overlay DIR] [--mods DIR] [--archetype-lookup RVA[,ARG]] [--view-mode-getter RVA] [--trace-d3d12] [--trace FILE]\n"
                  "       gta6rt --run <exe> [--game-dir DIR] [--overlay DIR] [--mods DIR] [--archetype-lookup RVA[,ARG]] [--view-mode-getter RVA] [--trace-d3d12] [--trace FILE] [-- game arguments...]\n");
     return 2;
 }
 
+// Prints UTF-8 text to stdout: as wide text on a console, which shows a path the code page lacks, and as the bytes
+// themselves into a pipe or a file.
+void print_utf8(const std::string& text) {
+    const HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
+    DWORD mode;
+    if (GetConsoleMode(out, &mode)) {
+        const int size = MultiByteToWideChar(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), nullptr, 0);
+        std::wstring wide(static_cast<size_t>(size > 0 ? size : 0), L'\0');
+        if (size > 0) MultiByteToWideChar(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), wide.data(), size);
+        std::fflush(stdout);
+        DWORD written;
+        if (WriteConsoleW(out, wide.data(), static_cast<DWORD>(wide.size()), &written, nullptr)) return;
+    }
+    std::fwrite(text.data(), 1, text.size(), stdout);
+}
+
 }  // namespace
 
 int wmain(int argc, wchar_t** argv) {
+    // The settings file, before anything reads a setting (core/config.h). A file that cannot be read, or that names
+    // a setting that does not exist, ends the run: a misspelt setting must not pass as one that does nothing.
+    if (std::string error; !rt::config::load(program_dir(), &error)) {
+        std::fprintf(stderr, "error: %s\n", error.c_str());
+        return 2;
+    }
+    // `gta6rt config`, alone on the command line: every setting, its value and where the value comes from.
+    if (argc == 2 && std::wstring_view(argv[1]) == L"config") {
+        print_utf8(rt::config::report());
+        return 0;
+    }
     std::filesystem::path image, game_dir, overlay_dir, mods_dir;
     uint32_t archetype_lookup_rva = 0;  // --archetype-lookup RVA[,ARG]: the game's archetype lookup by hash
     int archetype_lookup_arg = 0;

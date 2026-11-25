@@ -162,6 +162,40 @@ With `LEONIDA_RNG_SEED=<number>` (decimal, or hexadecimal with `0x`; read once w
 runs with the same seed get the same bytes. The shim prints `[rt] bcrypt: deterministic LEONIDA_RNG_SEED enabled`
 with the seed on stderr; a seed of 0 uses a fixed non-zero state. Unset, the host's generator answers as before.
 
+## Settings: `leonida.toml` and `gta6rt config`
+
+Every setting of the runtime is a row of one table, `kSettings` in `runtime/core/config.h`: a name in the settings
+file (`section.name`), an environment variable and a default. A value is taken from the first of these that has one:
+
+1. the environment variable, when it is set and not empty;
+2. the settings file;
+3. the default.
+
+The settings file is the one `LEONIDA_CONFIG` names, else `leonida.toml` in the folder of `gta6rt.exe`, if there is
+one. `runtime/leonida.example.toml` lists every setting with its default and its variable; copy it and remove the
+`# ` in front of what you change. The file is read once, when `gta6rt` starts. A section or name that is not in the
+table, a name set twice, or a `LEONIDA_CONFIG` that names no file ends the run with exit code 2 and a line such as
+`leonida.toml:12: there is no setting vulkan.validaton`, so a misspelt setting cannot pass as one that does nothing.
+
+The format is the part of TOML the file needs: `[section]` lines, `name = value` lines and `#` comments. A value is
+text in single quotes (taken as written, so a Windows path needs no doubled backslashes), text in double quotes
+(only `\\` and `\"` are escapes), a number, or `true`/`false`. `''` leaves a setting unset.
+
+`gta6rt config` prints the file in use and one line per setting: its name, where its value comes from (`default`,
+`file` or `environment`), its variable and the value.
+
+```text
+settings file: C:\leonida\runtime\build\leonida.toml
+system.gamertag               environment  LEONIDA_GAMERTAG                  Tester
+vulkan.validation             file         LEONIDA_VK_VALIDATION             1
+vulkan.arena_mb               default      LEONIDA_ARENA_MB                  256
+```
+
+State of the move: the table, the file reader and `gta6rt config` are in place, and the places that read a setting
+are being moved to the table one file at a time. A reader that has not been moved yet still takes its value from
+the environment variable alone, so for it a value in the file has no effect although `gta6rt config` lists it.
+This paragraph goes when the last reader has moved.
+
 ## PE loader
 
 `src/pe_loader.cpp` maps x86-64 images at their preferred base, or elsewhere (with relocations) when

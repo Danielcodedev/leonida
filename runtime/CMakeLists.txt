@@ -39,8 +39,16 @@ target_link_libraries(root_signature_test PRIVATE gta6rt_root_signature)
 # AVX, OSXSAVE and XCR0 YMM state from synthetic CPUID/XCR0 words, plus one call on the real host.
 add_executable(host_cpu_test test/host_cpu_test.cpp src/host_cpu.cpp)
 target_include_directories(host_cpu_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+# The core layer: what every other part of the runtime may use, and which uses none of them. It holds the settings
+# table (core/config.h): a value comes from its environment variable, else from leonida.toml, else from the default.
+add_library(gta6rt_core STATIC
+  core/config.cpp
+)
+# The table's shape, the order of the three sources, the file reader and leonida.example.toml against the table.
+add_executable(core_config_test test/core_config_test.cpp)
+target_link_libraries(core_config_test PRIVATE gta6rt_core)
 if(MSVC)
-  foreach(_portable gta6rt_root_signature root_signature_test host_cpu_test)
+  foreach(_portable gta6rt_root_signature root_signature_test host_cpu_test gta6rt_core core_config_test)
     target_compile_definitions(${_portable} PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
     target_compile_options(${_portable} PRIVATE /W4 /permissive- /utf-8)
   endforeach()
