@@ -144,6 +144,34 @@ else()
   leonida_vulkan_headers_missing()
 endif()
 
+# The sources that read a setting from the table (core/config.h). Many targets compile them directly (the loader
+# tests build src/pe_loader.cpp themselves), so every target that compiles one of them links gta6rt_core here, in one
+# place, and a source that moves to the table is added to this list. The list goes when the layers are libraries
+# that carry the dependency themselves.
+set(LEONIDA_SETTING_READERS
+  src/host_cpu.cpp
+  src/pe_loader.cpp
+)
+list(TRANSFORM LEONIDA_SETTING_READERS PREPEND "${CMAKE_CURRENT_SOURCE_DIR}/")
+get_property(_gta6rt_targets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
+foreach(_target IN LISTS _gta6rt_targets)
+  get_target_property(_type ${_target} TYPE)
+  get_target_property(_sources ${_target} SOURCES)
+  if(NOT _sources OR NOT _type MATCHES "^(EXECUTABLE|STATIC_LIBRARY|SHARED_LIBRARY|MODULE_LIBRARY)$")
+    continue()
+  endif()
+  foreach(_source IN LISTS _sources)
+    if(_source MATCHES "^\\$<")
+      continue()  # a generator expression: objects of another target, not a source file
+    endif()
+    get_filename_component(_source "${_source}" ABSOLUTE BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
+    if(_source IN_LIST LEONIDA_SETTING_READERS)
+      target_link_libraries(${_target} PRIVATE gta6rt_core)
+      break()
+    endif()
+  endforeach()
+endforeach()
+
 # Timed condition-variable waits on Wine 9 (#3796): every Windows executable and DLL built against the dynamic CRT
 # (/MD, the default) gets src/crt_timed_wait.cpp, which keeps msvcprt.lib's statically linked timed wait out of the
 # link so that a wait and the mutex it unlocks always use msvcp140's own layout. A target that links the CRT

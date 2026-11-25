@@ -16,6 +16,7 @@
 #include <system_error>
 #include <vector>
 
+#include "../core/config.h"
 #include "../shims/shims.h"
 #include "../shims/startup_trace.h"
 #include "base_reservation.h"
@@ -523,11 +524,7 @@ size_t patch_ga_tls_reads(Module& m, uint32_t slot) {
     return sites;
 }
 
-bool ga_tls_patch_enabled() {
-    char v[8] = {};
-    size_t n = 0;
-    return !(getenv_s(&n, v, "LEONIDA_TLS_GA_PATCH") == 0 && n == 2 && v[0] == '0');
-}
+bool ga_tls_patch_enabled() { return rt::config::get("loader.tls_ga_patch").text != "0"; }
 
 void uninstall_thread_block(Module& m) {
     if (m.tls_slot >= kMaxMappedTlsModules) return;
@@ -1066,9 +1063,7 @@ struct RuntimeLoadScope {
 }  // namespace
 
 Loader::Loader(std::filesystem::path game_dir) : game_dir_(std::move(game_dir)) {
-    std::vector<wchar_t> compat(32768);
-    const DWORD n = GetEnvironmentVariableW(L"LEONIDA_COMPAT_DIR", compat.data(), static_cast<DWORD>(compat.size()));
-    if (n > 0 && n < compat.size()) compat_dir_ = std::filesystem::path(compat.data());
+    compat_dir_ = rt::config::path("paths.compat_dir");
     shims::add_module_lookup(this, &lookup_in_loader);
     shims::add_bundled_loader(this, &kBundledOps);
 }
