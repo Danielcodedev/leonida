@@ -394,6 +394,67 @@ mod tests {
         assert!(cached(&cache, &build, b"other", fail).is_err());
     }
 
+    #[test]
+    fn a_translation_survives_an_unwritable_cache() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("cache");
+        let cache = Cache::open(&root).unwrap();
+        std::fs::remove_dir(&root).unwrap();
+        std::fs::write(&root, b"not a folder").unwrap();
+        let runs = AtomicU64::new(0);
+        let translate = |_: &[u8]| {
+            runs.fetch_add(1, Ordering::Relaxed);
+            Ok(shader())
+        };
+
+        assert_eq!(cached(&cache, &[7; 32], b"a container", translate), Ok(shader()));
+        assert_eq!(runs.load(Ordering::Relaxed), 1, "the result was kept");
+        assert_eq!(std::fs::read(&root).unwrap(), b"not a folder");
+    }
+
+    #[test]
+    fn a_translation_survives_failed_publication_without_leaving_a_staging_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Cache::open(dir.path()).unwrap();
+        let runs = AtomicU64::new(0);
+        let translate = |_: &[u8]| {
+            runs.fetch_add(1, Ordering::Relaxed);
+            Ok(shader())
+        };
+        let build = [7; 32];
+        let container = b"a container";
+        assert_eq!(cached(&cache, &build, container, translate), Ok(shader()));
+        let entries = walk(dir.path());
+        assert_eq!(entries.len(), 1);
+        let entry = &entries[0];
+        std::fs::remove_file(entry).unwrap();
+        // A directory at the destination lets staging succeed but prevents publication.
+        std::fs::create_dir(entry).unwrap();
+
+        assert_eq!(cached(&cache, &build, container, translate), Ok(shader()));
+        assert_eq!(runs.load(Ordering::Relaxed), 2, "one translation per miss");
+        assert!(entry.is_dir(), "the conflicting destination was not removed");
+        assert!(walk(dir.path()).is_empty(), "the staging file was removed");
+    }
+
+    #[test]
+    fn translation_errors_are_reported_and_not_cached() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Cache::open(dir.path()).unwrap();
+        let runs = AtomicU64::new(0);
+        let translate = |_: &[u8]| {
+            runs.fetch_add(1, Ordering::Relaxed);
+            Err::<HostShader, _>("synthetic translation refused".to_owned())
+        };
+
+        for expected in 1..=2 {
+            let error = cached(&cache, &[7; 32], b"a container", translate).unwrap_err();
+            assert!(error.contains("synthetic translation refused"), "{error}");
+            assert_eq!(runs.load(Ordering::Relaxed), expected);
+            assert!(walk(dir.path()).is_empty());
+        }
+    }
+
     fn walk(dir: &std::path::Path) -> Vec<PathBuf> {
         let mut files = Vec::new();
         for e in std::fs::read_dir(dir).unwrap().flatten() {
