@@ -5,6 +5,17 @@ The status summary is in [README.md](../README.md).
 
 ## Newest (2026-11-26)
 
+**R-7: a lane mask copied back one half at a time.**
+`CS_TransmissionVolumetrics`, `CS_TransmissionVolumetricsSubmerged` and
+`PS_VoxelizeVisiblity` park a 64-bit lane mask in VGPR lanes and read it
+back with two `v_readlane_b32`, which `ir::unspill` turns into two
+`s_mov_b32`. Structurisation only knew a mask whose halves one instruction
+wrote, so the pair was opaque (an opaque lane mask, or a lane mask holding
+lanes elsewhere read as data). A pair whose halves are copied from `s[n]`
+and `s[n+1]` of one pair now takes the mask of that pair (no `shortcut:`).
+All 3 translate and pass the DXIL validator; a full `translate --list
+--validate` shows no other program changing.
+
 **UP-1: keep a shader-cache miss's translation.**
 Adapted from upstream VIctory
 [`bca3ecd`](https://github.com/Marvisak/VIctory/commit/bca3ecd00a3e0cf4814e0061cafc510f0a286ba2).
