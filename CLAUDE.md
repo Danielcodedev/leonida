@@ -69,6 +69,7 @@ It is a fork of [fxceless/victory-gta6](https://github.com/fxceless/victory-gta6
 | `run-gta6.ps1` | builds and starts the game with the frame-rate switches for this PC's graphics card |
 | `measure-gta6.ps1`, `start-measure.cmd` | the same with the diagnostics build and logs; a double-click start for testers |
 | `gpu-profiles.json`, `scripts/leonida-settings.ps1` | the run scripts' switches by graphics card, and the loader that applies them |
+| `scripts/measure-run.ps1`, `scripts/make-view.ps1` | one unattended diagnostics run with frame shots and a summary of its figures; small JPEG copies of shots |
 | `docs/` | architecture, asset policy, ray tracing, the fork's measurement log |
 | `.claude/skills/` | agent skills, copied in `.agents/skills/` for other agents; [AGENTS.md](AGENTS.md) lists them. Edit both copies |
 
@@ -119,6 +120,33 @@ those is its own item, not something to fold into another pull request.
 - Post figures, never log files: logs can quote game data.
 - The first run after a change to `leonida-shader` re-translates every shader (the cache keys on the translator's
   source), so it stutters. Don't measure that run.
+
+## Picture and feel: unattended runs
+
+For work on shaders, textures, a wrong or black picture, or anything that brings the game closer to how it looks
+and plays on the console, test it with unattended runs before and after. No one has to play: an agent can run,
+measure and look at the result itself. This is how levels on demand was found to draw a wall that stayed black
+on an RTX 3080.
+
+1. Build the diagnostics build (`cargo build --profile diag -p leonida --features diagnostics`). After a change to
+   `leonida-shader`, warm the cache first (`target\diag\leonida.exe translate --warm all`, about 3 minutes).
+2. A run of `main` and a run of your change, in the same series folder (about 6 minutes each):
+
+   ```powershell
+   $root = Join-Path $env:LOCALAPPDATA 'leonida\runs\my-change'
+   powershell -ExecutionPolicy Bypass -File scripts\measure-run.ps1 -Root $root -Label 01-main
+   powershell -ExecutionPolicy Bypass -File scripts\measure-run.ps1 -Root $root -Label 02-mine
+   ```
+
+   A change behind a switch needs no second build: put the switch in an opt-in profile in
+   `gpu-profiles.local.json` (git ignores it) and pass `-Profile <name>`.
+3. Compare the figures in `$root\summary.txt`, and look at the shots side by side: `cap\world-600.view.jpg` and
+   `cap\world-1000.view.jpg` of each run, taken that many frames after the world's first frame. The scene can still
+   differ a little between runs, and one run each varies by about 5 ms a frame: run twice before calling a
+   difference real.
+4. If it helps (a better picture, or a shorter frame) and no run lost the device or wrote a crash report, open a
+   pull request with the figures from `summary.txt` and what the shots showed, in words. Never attach the shots
+   or logs: they are game data.
 
 ## Upstream
 
