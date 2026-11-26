@@ -5,6 +5,16 @@ The status summary is in [README.md](../README.md).
 
 ## Newest (2026-11-26)
 
+**R-7: a sampler chosen by control flow between immediate samplers.**
+40 programs (cascade shadows, terrain, `PS_TexturedLit*`,
+`PS_TexturedDeferred`, `PS_PuddleDetect`...) failed with a descriptor
+chosen by control flow: the join was between two immediate samplers (one
+clamping, one wrapping), and `descriptor_phi` only joins heap loads. The
+join now picks a static sampler number; the sample is made with each
+sampler it can be and its channels are selected by that number. Exact, at
+the cost of one more sample per affected read. A join of an immediate and a
+loaded sampler is still refused. All 40 translate and pass the DXIL validator.
+
 **R-7: a lane mask copied back one half at a time.**
 `CS_TransmissionVolumetrics`, `CS_TransmissionVolumetricsSubmerged` and
 `PS_VoxelizeVisiblity` park a 64-bit lane mask in VGPR lanes and read it
