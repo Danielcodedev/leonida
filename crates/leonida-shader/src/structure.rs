@@ -916,6 +916,39 @@ impl<'a> Lanes<'a> {
                         i.write(Reg::S(EXEC)) == Some(v) || i.write(Reg::S(EXEC + 1)) == Some(v)
                     })
                 };
+                // Each half copied on its own from the same half of another
+                // pair (a mask parked in VGPR lanes and read back, `ir::unspill`):
+                // the pair copied.
+                let copied = |d: Option<(usize, usize)>, v: Value| {
+                    let i = def(d)?;
+                    let Fields::Sop { src, .. } = &i.fields else {
+                        return None;
+                    };
+                    match (i.name(), src.first()) {
+                        ("s_mov_b32", Some(&Operand::Scalar { code, .. }))
+                            if code != NULL && i.writes.first().map(|w| w.1) == Some(v) =>
+                        {
+                            Some((i, code))
+                        }
+                        _ => None,
+                    }
+                };
+                if m.is_none()
+                    && lo != hi
+                    && let (Some((a, ca)), Some((b, cb))) = (copied(lo, k.0), copied(hi, k.1))
+                    && ca.checked_add(1) == Some(cb)
+                    && let (Some(x), Some(y)) = (a.read(Reg::S(ca)), b.read(Reg::S(cb)))
+                    && (x, y) != k
+                {
+                    let r = self.mask((x, y));
+                    let cache = if r.1 {
+                        &mut self.masks
+                    } else {
+                        &mut self.other
+                    };
+                    cache.insert(k, r.0);
+                    return r;
+                }
                 let derived = exec_write(lo, k.0) || exec_write(hi, k.1);
                 // shortcut: the atom names the pair by its low dword, and
                 // lowering takes the high dword written beside it. For halves
@@ -1688,6 +1721,42 @@ mod tests {
                 "{reader:#x}: vcc_hi was zeroed after the compare"
             );
         }
+    }
+
+    #[test]
+    fn a_mask_copied_one_half_at_a_time_is_the_mask_copied() {
+        let cnd = 256 | (256 << 9) | (2 << 18);
+        let copy = |hi: u32| {
+            build(
+                &[
+                    0x7D84_0080, // v_cmp_eq_u32 vcc, 0, v0
+                    0xBE82_036A, // s_mov_b32 s2, vcc_lo
+                    hi,
+                    0xD501_0001,
+                    cnd, // v_cndmask_b32 v1, v0, v0, s[2:3]
+                    S_ENDPGM,
+                ],
+                true,
+            )
+        };
+        // s_mov_b32 s3, vcc_hi: the compare.
+        let p = copy(0xBE83_036B);
+        let s = structure(&p).unwrap();
+        let cmp = p.blocks[0].insts[0].write(Reg::S(VCC)).unwrap();
+        let lo = p.blocks[0].insts[1].write(Reg::S(2)).unwrap();
+        assert_eq!(
+            s.masks.get(&lo).and_then(|&m| s.bools.node(m)),
+            Some((Atom::Lane(cmp), Bool::FALSE, Bool::TRUE))
+        );
+        // s_mov_b32 s3, 0: lanes 32-63 clear, not the compare.
+        let p = copy(0xBE83_0380);
+        let s = structure(&p).unwrap();
+        let cmp = p.blocks[0].insts[0].write(Reg::S(VCC)).unwrap();
+        let lo = p.blocks[0].insts[1].write(Reg::S(2)).unwrap();
+        assert_ne!(
+            s.masks.get(&lo).and_then(|&m| s.bools.node(m)),
+            Some((Atom::Lane(cmp), Bool::FALSE, Bool::TRUE))
+        );
     }
 
     #[test]
