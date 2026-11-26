@@ -493,6 +493,14 @@ cargo test -p leonida-gpu --lib --release --locked `
 cargo test -p leonida-gpu --lib --release --locked `
   bench_single_record_clamp -- --ignored --nocapture --test-threads=1
 ```
+**Texture refreshes wait for unrelated remaps (P-4).** In an opening
+scene run on `0a1a17b`, base profile, Ryzen 9 7900X and RTX 4070 Ti SUPER
+(621.40), the median measured frame window was 1,706 ms. One window
+spent 1,038 ms per frame waiting for the mapping lock across texture
+refresh threads. A refresh needs its own mapped bytes to stay put, while
+the current lock also makes it wait for changes elsewhere in the title's
+address space. A remap can temporarily unmap a whole view to replace one
+page, so any narrower lock has to cover the full span of that view.
 
 **The passes over copies in the card's memory hash a piece with 64
 threads.** The compare after a submission and the rehash after ranges go
