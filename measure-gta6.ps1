@@ -4,8 +4,9 @@
 # When the game closes it offers a short test report (scripts\test-report.ps1): figures
 # only, shown in full, and shared only if you say so.
 #
-# The first time, it asks for the folder of your copy of the game (the one with
-# MicrosoftGame.config in it) and offers to remember it in leonida.toml, which git ignores.
+# The first time, it offers to look for your copy of the game (the folder with
+# MicrosoftGame.config in it) or asks for that folder (scripts\game-dir.ps1), and offers to
+# remember it in leonida.toml, which git ignores.
 #
 #   powershell -ExecutionPolicy Bypass -File .\measure-gta6.ps1
 #   powershell -ExecutionPolicy Bypass -File .\measure-gta6.ps1 -GameDir 'D:\Games\GTA VI'   # this run only
@@ -52,10 +53,8 @@ try {
 
         if (-not (Test-GameDir $dir)) {
             if ($dir -ne '' -and $dir -ne '(not set)') { Write-Host "The saved game folder has no MicrosoftGame.config: $dir" }
-            do {
-                $dir = (Read-Host 'Folder of your copy of the game (the one with MicrosoftGame.config in it)').Trim().Trim('"')
-                if (-not (Test-GameDir $dir)) { Write-Host "No MicrosoftGame.config in '$dir', try again." }
-            } until (Test-GameDir $dir)
+            . (Join-Path $PSScriptRoot 'scripts\game-dir.ps1')
+            $dir = Read-GameDir
 
             $answer = Read-Host 'Remember this folder for next time? [Y/n]'
             if ($answer.Trim() -match '^(y|yes)?$') {

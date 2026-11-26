@@ -108,7 +108,9 @@ switches, for a comparison in the same place.
 1. Download this repository (Code, Download ZIP) and unpack it, or clone it.
 2. Double-click `start-measure.cmd`. If the Visual Studio C++ build tools or Rust are missing, it offers to install
    them with winget (about 3 GB, 5 to 15 minutes, asks first). The first build takes about 5 to 10 minutes.
-3. Give it the folder of your copy of the game, answer its questions, and play until the place you want to test.
+3. Say yes when it offers to look for your copy of the game, and check the folder it found. If it finds nothing, drag
+   the game's `.exe` from File Explorer into the window and press Enter. Answer its other questions, and play until
+   the place you want to test.
 4. Close the game window. The script offers a short test report: your graphics card, driver, CPU, RAM, Windows
    version, the switches that were on and the frame rates. It shows all of it before anything is shared, and never
    includes log files, game files, paths or your user name.

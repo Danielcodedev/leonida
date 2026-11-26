@@ -1,8 +1,9 @@
 # Builds Leonida Legacy and starts the game with the frame-rate switches measured to help
 # for this PC's graphics card (gpu-profiles.json; all off by default in the code).
 #
-# The first time, it asks for the folder of your copy of the game (the one with
-# MicrosoftGame.config in it) and offers to remember it in leonida.toml, which git ignores.
+# The first time, it offers to look for your copy of the game (the folder with
+# MicrosoftGame.config in it) or asks for that folder (scripts\game-dir.ps1), and offers to
+# remember it in leonida.toml, which git ignores.
 #
 #   powershell -ExecutionPolicy Bypass -File .\run-gta6.ps1
 #   powershell -ExecutionPolicy Bypass -File .\run-gta6.ps1 -GameDir 'D:\Games\GTA VI'   # this run only
@@ -43,10 +44,8 @@ try {
 
         if (-not (Test-GameDir $dir)) {
             if ($dir -ne '' -and $dir -ne '(not set)') { Write-Host "The saved game folder has no MicrosoftGame.config: $dir" }
-            do {
-                $dir = (Read-Host 'Folder of your copy of the game (the one with MicrosoftGame.config in it)').Trim().Trim('"')
-                if (-not (Test-GameDir $dir)) { Write-Host "No MicrosoftGame.config in '$dir', try again." }
-            } until (Test-GameDir $dir)
+            . (Join-Path $PSScriptRoot 'scripts\game-dir.ps1')
+            $dir = Read-GameDir
 
             $answer = Read-Host 'Remember this folder for next time? [Y/n]'
             if ($answer.Trim() -match '^(y|yes)?$') {
