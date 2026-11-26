@@ -66,7 +66,9 @@ It is a fork of [fxceless/victory-gta6](https://github.com/fxceless/victory-gta6
 | `crates/leonida-pe`, `-pipeline`, `-game` | PE reading, the converter cache, game-specific formats and build ids |
 | `xtask` | `cargo xtask policy` and `cargo xtask install-hooks` |
 | `scripts/rename-from-upstream.ps1` | renames code taken from upstream (`victory` to `leonida`) |
-| `run-gta6.ps1` | builds and starts the game with the measured frame-rate switches |
+| `run-gta6.ps1` | builds and starts the game with the frame-rate switches for this PC's graphics card |
+| `measure-gta6.ps1`, `start-measure.cmd` | the same with the diagnostics build and logs; a double-click start for testers |
+| `gpu-profiles.json`, `scripts/leonida-settings.ps1` | the run scripts' switches by graphics card, and the loader that applies them |
 | `docs/` | architecture, asset policy, ray tracing, the fork's measurement log |
 | `.claude/skills/` | agent skills, copied in `.agents/skills/` for other agents; [AGENTS.md](AGENTS.md) lists them. Edit both copies |
 
@@ -90,8 +92,10 @@ If `cargo xtask` fails with "The directory name is invalid" after the folder was
 
 ## Known red, not yours
 
-`main` already fails CI: 9 clippy errors in `leonida-gpu` (TODO C-1) and the test
-`warp_budget_saturates_without_wraparound_and_preserves_draw_fields` (TODO C-2), both inherited from victory-gta6.
+Clippy passes on `main` since #20 (TODO C-1). CI still fails on one test, `main` included:
+`pipeline::host::tests::depth_bounds_pipeline_loads_and_filters_draws` fails on GitHub's runner and passes on an
+RTX 3080; the cause is not checked. The test of TODO C-2,
+`warp_budget_saturates_without_wraparound_and_preserves_draw_fields`, failed on some runs and passed on others.
 Compare against `main` before and after your change; a pull request must not add a new failure or warning. Fixing
 those is its own item, not something to fold into another pull request.
 
