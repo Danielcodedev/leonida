@@ -57,14 +57,9 @@ try {
     }
     $env:LEONIDA_GAME_DIR = $dir
 
-    $env:LEONIDA_ASYNC_SUBMIT = '1'
-    $env:LEONIDA_QUEUE2 = '1'
-    $env:LEONIDA_INDIRECT_WINDOW = '1'
-    $env:LEONIDA_COPY_PLAIN = '1'
-    $env:LEONIDA_JOIN_PARTS = '1'
-    $env:LEONIDA_BACK_OWN_VIEW = '1'
-    $env:LEONIDA_INDIRECT_GATHER = '1'
-    $env:LEONIDA_CARD_REHASH_RUNS = '1'
+    # The frame-rate switches for this PC's graphics card (gpu-profiles.json).
+    . (Join-Path $PSScriptRoot 'scripts\leonida-settings.ps1')
+    Set-LeonidaProfiles $PSScriptRoot
 
     $env:LEONIDA_FRAME_LOG = '1'
     $env:LEONIDA_CARD_METER = '1'
