@@ -3,6 +3,20 @@
 The detailed log of what this fork measured and changed, moved here from the README.
 The status summary is in [README.md](../README.md).
 
+## Newest (2026-11-26)
+
+**The passes over copies in the card's memory hash a piece with 64
+threads.** The compare after a submission and the rehash after ranges go
+up walked each 64 KiB piece with one thread, 4,096 steps one after the
+other. A group of 64 threads now walks it side by side, and one of them
+hashes their 64 results (after avatarmanz/VIctory-7900XTX f669746). RTX
+3080 12 GB (driver 621.24), Ryzen 7 7800X3D, first rooms, with
+`LEONIDA_CARD_WINDOWS_MB=3072`, `LEONIDA_WINDOW_UPLOAD=1` and
+`LEONIDA_TEXTURE_ROOM_PERCENT=70` in both runs: our send-and-hash and
+compare lists 21 -> 3.6 ms of card time a frame, the usual frame 149-158
+-> 129-135 ms. Not behind a switch: the hashes are made and compared by
+the same shader, so only their values change, not which pieces differ.
+
 ## Newest (2026-11-25, later the same day)
 
 **Update, 2026-11-25 afternoon: what a frame is made of, measured, and two
