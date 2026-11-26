@@ -256,6 +256,7 @@ dependencies = [
  "leonida-pe",
  "leonida-shader",
  "memchr",
+ "tempfile",
  "walkdir",
 ]
 

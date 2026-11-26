@@ -66,7 +66,6 @@ The goal: a console-like experience on PC. The game starts straight into play, h
 | U-2 | Fullscreen and borderless window, and a choice of output resolution. | `leonida-gpu` | GPU |
 | U-3 | The frame-rate switches as settings in `leonida.toml` instead of environment variables, with the tested ones on by default. Since #24 the run scripts pick them by graphics card from `gpu-profiles.json`; this item moves that choice into the program itself. | `leonida-core` (config) | - |
 | U-4 | Pad first: after launch, the game is playable without touching the keyboard. | `leonida-hle` (input) | game |
-| U-6 | Before execution, name missing title DLLs required through other title DLLs, including deeper dependencies, while keeping optional delay imports optional. | `apps/leonida` (startup) | - |
 
 ## Code health
 
