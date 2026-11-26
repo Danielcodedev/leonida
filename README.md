@@ -23,6 +23,7 @@
 <p align="center">
   <a href="#status">Status</a> |
   <a href="#getting-started">Getting started</a> |
+  <a href="#updating">Updating</a> |
   <a href="docs/fork-notes.md">Fork notes</a> |
   <a href="#contact">Contact</a> |
   <a href="#credits">Credits</a> |
@@ -41,6 +42,12 @@ It is a fork of [victory-gta6](https://github.com/fxceless/victory-gta6), itself
 > This repository **does not contain the game, keys or an executable**. You need your own copy of the game.
 > Everything the tools make from your files (translated shaders, caches, saves, logs) stays outside the repository
 > and on your PC. Never share those files.
+
+**Made for everyone's PC, not just ours.** Many projects like this are tuned on the developer's own machine and
+nowhere else. Leonida Legacy aims to run as well as it can on your hardware, and to be usable by people who can't
+code and don't have an AI assistant to help them. The run scripts pick their settings for your graphics card
+(`gpu-profiles.json`), so a change that helps one card is not forced on everyone. If it runs badly on your PC, tell us
+your CPU, GPU, driver version and frame rate (see [Contact](#contact)); that is how new cards get a profile.
 
 ## Status
 
@@ -84,8 +91,9 @@ The first run asks for the folder of your copy of the game (the one with `Micros
 `leonida.toml`, which git ignores. `leonida config` shows what is set, and `leonida.example.toml` lists the other
 settings.
 
-`run-gta6.ps1` does the build and the run in one step, with the frame-rate switches that measured faster (they are
-off by default). It asks for the game folder too, and whether to remember it:
+`run-gta6.ps1` does the build and the run in one step, with the frame-rate switches measured for your graphics card
+(`gpu-profiles.json`; they are off by default in the program). It asks for the game folder too, and whether to
+remember it:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\run-gta6.ps1
@@ -113,6 +121,31 @@ Input: XInput pads. With none connected, the keyboard acts as a pad while the ga
 | Q / E, Z / C | shoulders, triggers |
 | F / H | stick clicks |
 | Esc, Tab | Menu, View |
+
+## Updating
+
+Get the newest version before you report a problem: it may already be fixed. In PowerShell, in the folder you
+cloned:
+
+```powershell
+git switch main
+git pull
+powershell -ExecutionPolicy Bypass -File .\run-gta6.ps1
+```
+
+`run-gta6.ps1` builds the new version before it starts the game. Your game folder, saves and settings are outside
+the code (`leonida.toml` and `%LOCALAPPDATA%\leonida`), so updating keeps them.
+
+- **First time only:** if you cloned before the project moved to ProjectLeonidaL, point your copy at it once:
+  `git remote set-url origin https://github.com/ProjectLeonidaL/leonida.git`. If `git pull` then says your branch
+  has no upstream, run `git branch -u origin/main` once.
+- **`git pull` refuses because files changed:** you edited something in the folder. `git stash` puts your changes
+  aside, then `git pull` again; `git stash pop` brings them back. Your own GPU settings belong in
+  `gpu-profiles.local.json`, which git leaves alone.
+- **The first run after an update stutters** while shaders are translated again. Let the warm-up run when the script
+  asks, or play a minute and start again.
+- **Don't have git?** Download the code as a ZIP from the green *Code* button on GitHub, unpack it over a fresh
+  folder, and copy your `leonida.toml` across.
 
 ## Contact
 
