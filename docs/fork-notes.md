@@ -5,6 +5,39 @@ The status summary is in [README.md](../README.md).
 
 ## Newest (2026-11-26)
 
+**U-3: graphics profiles are selected by the executable.**
+Direct `leonida run` and translation warm-up now resolve the same measured
+base profile that the launch scripts used, before the runtime caches its
+switches. The catalog is embedded at build time; an optional
+`gpu-profiles.local.json` beside the selected config is applied afterwards.
+The base profile still contains the same eight values, and `card-windows`
+and the optional one-record clamp remain opt-in. This moves existing
+optimizations into direct Windows/Wine launches; it adds no measured FPS gain.
+
+`[graphics]` in `leonida.toml` provides typed settings for the eleven
+options in the catalog. Explicit environment values override TOML, and
+TOML overrides profiles. `profiles = []` or `["none"]` disables profile
+selection while retaining explicit settings. Named selections include
+base and apply in catalog order, with null cancelling earlier profile
+values. `LEONIDA_PROFILE` still overrides selection; its existing value
+`1` remains the diagnostics CPU sampler and does not select a graphics
+profile. Malformed settings and unknown profile names report errors.
+
+Adapter discovery uses the first DXGI adapter, matching the runtime's
+`D3D12CreateDevice(None)`, rather than the scripts' largest-VRAM heuristic.
+It respects diagnostics WARP selection and loads an explicitly requested
+RenderDoc hook before querying DXGI. If discovery fails, only unqualified
+profiles match. Profiles cannot set paths used for config/game/cache/data,
+logging, adapter selection, or RenderDoc's startup controls.
+
+`leonida config --graphics` reports the effective plan and each value's
+source as JSON without game files. Launchers use this result for reporting
+and let the child apply it. They preserve caller overrides and restore
+their temporary environment changes afterwards. `-SpeedSwitches off`
+disables both profile and TOML settings through `LEONIDA_GRAPHICS_OFF=1`
+and clears runtime overrides, preserving adapter and capture-hook selection.
+Shareable switch reports redact paths and other arbitrary string values.
+
 **P-5: less clock work in emulated wait hints.**
 Each `monitorx` / `mwaitx` pair previously read and converted the performance
 counter three times: once for each rate-line check and once for wait

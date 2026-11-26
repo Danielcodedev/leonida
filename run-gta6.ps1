@@ -1,5 +1,5 @@
 # Builds Leonida Legacy and starts the game with the frame-rate switches measured to help
-# for this PC's graphics card (gpu-profiles.json; all off by default in the code).
+# for this PC's graphics card, resolved natively from profiles and leonida.toml.
 #
 # The first time, it offers to look for your copy of the game (the folder with
 # MicrosoftGame.config in it) or asks for that folder (scripts\game-dir.ps1), and offers to
@@ -19,6 +19,9 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+
+. (Join-Path $PSScriptRoot 'scripts\leonida-settings.ps1')
+$environmentBefore = Save-LeonidaEnvironment
 
 function Test-GameDir([string]$dir) {
     $dir -ne '' -and (Test-Path -LiteralPath (Join-Path $dir 'MicrosoftGame.config') -PathType Leaf)
@@ -57,9 +60,8 @@ try {
     }
     $env:LEONIDA_GAME_DIR = $dir
 
-    # The frame-rate switches for this PC's graphics card (gpu-profiles.json).
-    . (Join-Path $PSScriptRoot 'scripts\leonida-settings.ps1')
-    Set-LeonidaProfiles $PSScriptRoot
+    # Show the settings the program will resolve again when it starts.
+    Show-LeonidaGraphics (Get-LeonidaGraphics $exe)
 
     # Shaders not in the cache are translated the first time the game uses them, mid-play.
     if ($WarmUp -eq 'ask') {
@@ -83,5 +85,6 @@ try {
 
     & $exe run --execute
 } finally {
+    Restore-LeonidaEnvironment $environmentBefore
     Pop-Location
 }

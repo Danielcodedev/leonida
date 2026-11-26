@@ -19,7 +19,7 @@ param(
     # yes: warm up the shader cache before starting, no: skip it, ask: ask (default).
     [ValidateSet('ask', 'yes', 'no')]
     [string]$WarmUp = 'ask',
-    # on: the switches gpu-profiles.json picks for this card (default), off: none, ask: ask.
+    # on: native profiles and graphics settings (default), off: baseline, ask: ask.
     [ValidateSet('on', 'off', 'ask')]
     [string]$SpeedSwitches = 'on',
     # ask: offer a test report when the game closes (default), no: don't.
@@ -28,6 +28,9 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+
+. (Join-Path $PSScriptRoot 'scripts\leonida-settings.ps1')
+$environmentBefore = Save-LeonidaEnvironment
 
 function Test-GameDir([string]$dir) {
     $dir -ne '' -and (Test-Path -LiteralPath (Join-Path $dir 'MicrosoftGame.config') -PathType Leaf)
@@ -66,27 +69,24 @@ try {
     }
     $env:LEONIDA_GAME_DIR = $dir
 
-    # The frame-rate switches for this PC's graphics card (gpu-profiles.json).
-    . (Join-Path $PSScriptRoot 'scripts\leonida-settings.ps1')
-    Set-LeonidaProfiles $PSScriptRoot
-
-    # Whatever LEONIDA_* is set now, besides paths and logging, is a speed switch.
-    $notSwitches = 'LEONIDA_CONFIG', 'LEONIDA_GAME_DIR', 'LEONIDA_CACHE_DIR', 'LEONIDA_DATA_DIR', 'LEONIDA_PROFILE', 'LEONIDA_LOG', 'LEONIDA_KEEP_WINDOW'
-    $switches = @(Get-ChildItem Env:LEONIDA_* | Where-Object { $_.Name -notin $notSwitches })
     if ($SpeedSwitches -eq 'ask') {
+        $graphics = Get-LeonidaGraphics $exe
+        Show-LeonidaGraphics $graphics
         Write-Host ''
-        Write-Host 'Turn the speed switches on? They are the frame-rate switches measured faster for your card:'
-        Write-Host (($switches | ForEach-Object { $_.Name -replace '^LEONIDA_', '' }) -join ', ')
+        Write-Host 'Use the graphics settings selected for this run?'
+        Write-Host ((Get-LeonidaGraphicsSwitches $graphics -Short) -join ', ')
         Write-Host 'To help compare, play once with them and once without, in the same place in the game.'
         $answer = Read-Host 'Speed switches on? [Y/n]'
         $SpeedSwitches = if ($answer.Trim() -match '^(y|yes)?$') { 'on' } else { 'off' }
     }
     if ($SpeedSwitches -eq 'off') {
-        $switches | ForEach-Object { Remove-Item -LiteralPath "Env:$($_.Name)" }
-        $switches = @()
+        Disable-LeonidaGraphics
         Write-Host 'speed switches: off'
     }
-    $switchList = @($switches | ForEach-Object { '{0}={1}' -f $_.Name, $_.Value })
+    # Capture the effective plan before adding diagnostic flags, including native-only settings.
+    $graphics = Get-LeonidaGraphics $exe
+    Show-LeonidaGraphics $graphics
+    $switchList = @(Get-LeonidaGraphicsSwitches $graphics)
 
     $env:LEONIDA_FRAME_LOG = '1'
     $env:LEONIDA_CARD_METER = '1'
@@ -123,11 +123,13 @@ try {
     if ($Report -eq 'ask') {
         try {
             & (Join-Path $PSScriptRoot 'scripts\test-report.ps1') -Log $log -SpeedSwitches $switchList `
-                -SwitchMode $SpeedSwitches -WarmUp $WarmUp -Started $started -ExitCode "$exitCode" -Exe $exe
+                -SwitchMode $SpeedSwitches -WarmUp $WarmUp -Started $started `
+                -ExitCode "$exitCode" -Exe $exe -Graphics $graphics
         } catch {
             Write-Warning "the test report failed: $_"
         }
     }
 } finally {
+    Restore-LeonidaEnvironment $environmentBefore
     Pop-Location
 }

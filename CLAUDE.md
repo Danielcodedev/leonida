@@ -68,7 +68,8 @@ It is a fork of [fxceless/victory-gta6](https://github.com/fxceless/victory-gta6
 | `scripts/rename-from-upstream.ps1` | renames code taken from upstream (`victory` to `leonida`) |
 | `run-gta6.ps1` | builds and starts the game with the frame-rate switches for this PC's graphics card |
 | `measure-gta6.ps1`, `start-measure.cmd` | the same with the diagnostics build and logs; a double-click start for testers |
-| `gpu-profiles.json`, `scripts/leonida-settings.ps1` | the run scripts' switches by graphics card, and the loader that applies them |
+| `gpu-profiles.json`, `leonida-core::graphics` | measured profiles embedded in the executable, and native settings resolution |
+| `scripts/leonida-settings.ps1` | launcher queries and reports for the native graphics settings |
 | `scripts/measure-run.ps1`, `scripts/make-view.ps1` | one unattended diagnostics run with frame shots and a summary of its figures; small JPEG copies of shots |
 | `docs/` | architecture, asset policy, ray tracing, the fork's measurement log |
 | `.claude/skills/` | agent skills, copied in `.agents/skills/` for other agents; [AGENTS.md](AGENTS.md) lists them. Edit both copies |

@@ -20,12 +20,20 @@ param(
     [datetime]$Started = [datetime]::MinValue,
     [string]$ExitCode = '',
     # leonida.exe, to find the data folder (crashes.log) with `leonida config`.
-    [string]$Exe = ''
+    [string]$Exe = '',
+    # The pre-launch native plan, when called by measure-gta6.ps1.
+    $Graphics = $null
 )
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 . (Join-Path $PSScriptRoot 'leonida-settings.ps1')
+if (-not $Exe) {
+    foreach ($build in 'diag', 'release') {
+        $candidate = Join-Path $root "target\$build\leonida.exe"
+        if (Test-Path -LiteralPath $candidate) { $Exe = $candidate; break }
+    }
+}
 
 $server = '1574773017114841229'
 $channel = '1575267731857739916'
@@ -150,15 +158,23 @@ $where = Limit-Text (Read-Host 'Where in the game were you at the end (for examp
 $issue = Limit-Text (Read-Host 'Anything wrong (crash, missing textures, flashing, sound)?').Trim() 600
 
 if ($Started -eq [datetime]::MinValue) { $Started = (Get-Item -LiteralPath $Log).CreationTime }
-$gpu = Get-LeonidaGpu
+if (-not $Graphics -and $Exe) {
+    Push-Location $root
+    try { $Graphics = Get-LeonidaGraphics $Exe }
+    catch { Write-Warning "graphics card could not be queried: $_" }
+    finally { Pop-Location }
+}
+$gpu = if ($Graphics -and $Graphics.gpu) { $Graphics.gpu }
+    else { [pscustomobject]@{ name = 'unknown'; vendor = 'other'; vram_mb = 0 } }
 $cpu = ([string]@(Get-CimInstance Win32_Processor)[0].Name).Trim()
 $ram = [math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1GB)
 $os = (Get-CimInstance Win32_OperatingSystem).Caption -replace '^Microsoft\s+', ''
 $nt = Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'
 $names = @($SpeedSwitches | Where-Object { $_ } | ForEach-Object {
     $name, $value = $_ -split '=', 2
-    $short = $name -replace '^LEONIDA_', ''
-    if ($value -eq '1') { $short } else { "$short=$value" }
+    # Direct callers can supply raw values too: never copy paths into the shared report.
+    $safe = Format-LeonidaGraphicsSwitch $name $value -Short
+    if ($safe -match '^([^=]+)=1$') { $Matches[1] } else { $safe }
 })
 $switchText = $SwitchMode
 if ($names.Count -gt 0) { $switchText += ': ' + ($names -join ', ') }
@@ -170,7 +186,7 @@ $crashed = Test-CrashWritten $Exe $Started
 
 $lines = @(
     '**Leonida Legacy test report**'
-    "GPU: $($gpu.Name), $($gpu.VramMB) MB"
+    "GPU: $($gpu.name), $($gpu.vram_mb) MB"
     "Driver: $(Get-DriverVersion $gpu.Name)"
     "CPU: $cpu"
     "RAM: $ram GB"
