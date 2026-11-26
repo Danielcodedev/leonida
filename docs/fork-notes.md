@@ -25,6 +25,34 @@ publication regressions fail on `a141614` before the fix. No game data is used
 and no gameplay or frame-rate improvement is claimed. UP-1 remains open for
 other useful upstream changes.
 
+Measured `a141614`'s cache implementation (with tests only, `d0981c1`)
+against `3b4834f` on an Intel Core i9-14900KS, Pop!_OS 22.04, ext4,
+Proton 11's Wine 11.0 in Steam's offline Flatpak runtime, Rust 1.98.1
+Windows release builds. The PC has an RTX 5090, NVIDIA 580.173.02; this
+benchmark does no GPU work. An external harness embeds both exact source
+files with identical adapters and the real pipeline cache. It times the
+whole `cached()` call using a synthetic clone callback, excluding setup,
+result checks, destruction and the caller's build-fingerprint calculation.
+
+Twelve paired rounds alternate implementation order and rotate payload
+sizes, after two warm-up passes. Each sample has 128 lookups. Misses use
+unique absent entries; the OS filesystem cache is not flushed. Every
+returned field, every stored byte and the translation/hit/miss counts are
+checked. All 144 samples are retained, including one slower patched 8 KiB
+miss sample. Miss times in microseconds per lookup:
+
+| Synthetic payload | Before, median (range) | After, median (range) | Reduction in median |
+|-------------------|------------------------|-----------------------|---------------------|
+| 8 KiB | 276.3 (254.6–307.5) | 204.8 (177.6–419.5) | 25.9% |
+| 64 KiB | 297.5 (274.6–478.0) | 220.9 (199.0–299.1) | 25.7% |
+| 256 KiB | 541.5 (489.8–1394.2) | 330.2 (312.3–378.7) | 39.0% |
+
+Pre-existing cache-hit controls never translated. Their median paired
+changes were -1.0%, -1.7% and +1.1% respectively: no cache-hit improvement
+is claimed. These measurements cover synthetic cache overhead on this
+host under Wine, not actual translation time, native Windows filesystem
+performance, gameplay loading time or FPS.
+
 **U-3: graphics profiles are selected by the executable.**
 Direct `leonida run` and translation warm-up now resolve the same measured
 base profile that the launch scripts used, before the runtime caches its
