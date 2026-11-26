@@ -890,6 +890,20 @@ pair the shots were alike (0.6 % against 0.0 %). No run lost the device
 or wrote a crash report. Opt-in until it is measured on more cards and
 the passes without room are understood.
 
+## Water read-back on by default (2026-11-27)
+
+`LEONIDA_TEXTURE_BACK` (`texback.rs`) copies the ocean's height and
+displacement maps, which compute passes write, back into title memory,
+where the title's boat physics reads them. It was off unless set; it is
+now on unless set to `0` (a list of kinds still picks others). Without it
+the boat at the start of the first fishing mission falls through the
+water and the mission fails; Belobug/VIctory-Belobug-AMD has it on by
+default for the same reason ("sank in every one" without it, its
+`docs/findings.md`). Played on an RTX 3080 12 GB, Ryzen 7 7800X3D,
+driver 621.24: with `LEONIDA_TEXTURE_BACK=1` the boat stayed up and the
+mission went on. Cost: about a megabyte copied back per list that writes
+one of the four kinds (`shortcut:` in `texback.rs`).
+
 ## Debugging
 
 A release build has no debugging aids. Build them in with
