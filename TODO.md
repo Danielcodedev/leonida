@@ -47,6 +47,7 @@ The goal: a console-like experience on PC. The game starts straight into play, h
 | S-1 | One device loss with indirect draw windows on (`LEONIDA_INDIRECT_WINDOW=1`), 44 s into the world. Cause not found. Don't combine it with `LEONIDA_CARD_FETCH_INFLIGHT=1`. | `leonida-gpu` | game, GPU |
 | S-2 | A session past the first rooms lost the device in the open world with no driver entry ("device removed"). | `leonida-gpu` | game, GPU |
 | S-3 | Menu frame pacing drifts on one screen in release builds. | `leonida-gpu` | game, GPU |
+| S-5 | Pipeline workers overflow their 2 MiB thread stacks while the first world loads (four workers in each of two Linux runs). Find the cause and keep pipeline compilation running. | `leonida-gpu` | game, GPU |
 
 ## Audio, input and system services
 
