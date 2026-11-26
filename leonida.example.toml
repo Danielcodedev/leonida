@@ -18,3 +18,26 @@
 # Other Xbox Series titles used to test platform-level code.
 # env: LEONIDA_TEST_TITLES (separated by ';')
 test_titles = []
+
+# The executable selects the measured profiles automatically, including in Wine.
+# Precedence: explicit environment > these settings > selected profiles.
+# See the effective values with `leonida config --graphics` (no game needed).
+[graphics]
+# Omit profiles for automatic selection. [] or ["none"] disables profiles;
+# individual settings below still apply. Named profiles also include base.
+# profiles = ["base"]
+
+# Leave a setting commented to use its profile value. false explicitly turns it off.
+# async_submit = true          # LEONIDA_ASYNC_SUBMIT
+# queue2 = 1                   # LEONIDA_QUEUE2: 0..3, copy-queue bit mask
+# indirect_window = true       # LEONIDA_INDIRECT_WINDOW
+# copy_plain = true            # LEONIDA_COPY_PLAIN
+# join_parts = true            # LEONIDA_JOIN_PARTS
+# back_own_view = true         # LEONIDA_BACK_OWN_VIEW
+# indirect_gather = true       # LEONIDA_INDIRECT_GATHER
+# card_rehash_runs = true      # LEONIDA_CARD_REHASH_RUNS
+
+# These experimental settings are NOT enabled automatically.
+# card_windows_mb = 0          # LEONIDA_CARD_WINDOWS_MB: limit in MiB, 0 disables
+# window_upload = false        # LEONIDA_WINDOW_UPLOAD
+# texture_room_percent = 90    # LEONIDA_TEXTURE_ROOM_PERCENT: 50..97

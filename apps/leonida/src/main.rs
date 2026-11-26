@@ -4,6 +4,7 @@
 //! the user's cache directory (outside the repository).
 
 mod census;
+mod graphics;
 mod inspect;
 mod run;
 mod shader;
@@ -120,6 +121,9 @@ enum Command {
         /// First save this folder as the game folder in leonida.toml.
         #[arg(long)]
         game_dir: Option<PathBuf>,
+        /// Print the effective graphics settings as JSON, without running a title.
+        #[arg(long, conflicts_with = "game_dir")]
+        graphics: bool,
     },
 }
 
@@ -168,6 +172,7 @@ fn main() -> Result<()> {
             jobs,
             warm,
         } => {
+            graphics::initialize(&leonida_core::Config::load()?)?;
             // The warm-up keys its translations on the same host facts a run
             // gets from the device; the switches below still override them.
             if warm.is_some() && !leonida_hle::modules::d3d12x::probe_translation_host() {
@@ -200,7 +205,12 @@ fn main() -> Result<()> {
             };
             run::run(&exe, unimplemented, strict, execute, console)
         }
-        Command::Config { game_dir } => {
+        Command::Config { game_dir, graphics } => {
+            if graphics {
+                let plan = graphics::plan(&leonida_core::Config::load()?)?;
+                println!("{}", plan.to_json()?);
+                return Ok(());
+            }
             if let Some(dir) = game_dir {
                 check_game_dir(&dir)?;
                 let saved = leonida_core::Config::save_game_dir(&dir)?;

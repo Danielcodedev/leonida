@@ -45,13 +45,13 @@ It is a fork of [victory-gta6](https://github.com/fxceless/victory-gta6), itself
 
 **Made for everyone's PC, not just ours.** Many projects like this are tuned on the developer's own machine and
 nowhere else. Leonida Legacy aims to run as well as it can on your hardware, and to be usable by people who can't
-code and don't have an AI assistant to help them. The run scripts pick their settings for your graphics card
+code and don't have an AI assistant to help them. The program picks its settings for your graphics card
 (`gpu-profiles.json`), so a change that helps one card is not forced on everyone. If it runs badly on your PC, tell us
 your CPU, GPU, driver version and frame rate (see [Contact](#contact)); that is how new cards get a profile.
 
 ## Status
 
-**Not playable yet: 2 to 4 frames per second by default, and shadowed areas are black.** Tested on Windows 11 Pro,
+**Not playable yet: frame rates are low, and shadowed areas are black.** Tested on Windows 11 Pro,
 AMD Ryzen 7 7800X3D, NVIDIA RTX 3080 12 GB, 32 GB RAM, Series X profile. The world frame rates below were measured
 by victory-gta6 on an RTX 4070 and have not been measured again on this machine yet.
 
@@ -62,7 +62,7 @@ by victory-gta6 on an RTX 4070 and have not been measured again on this machine 
 | Saves | the game autosaves a checkpoint and loads it again |
 | First gameplay scene | renders characters, textures, sky and the sunlit exterior; HUD, pause menu and pad input work |
 | Light in shadow | missing: ray-traced bounce light and shadows don't run yet, so anything out of direct sun is black |
-| Frame rate in the world | 2-4 fps by default; about 10 fps in the first rooms with the newer switches, all off by default |
+| Frame rate in the world | Earlier measurements: 2-4 fps without the newer switches, about 10 fps in the first rooms with them; the measured base profile now applies to direct launches too |
 
 Known problems:
 
@@ -95,9 +95,9 @@ If startup names a missing game DLL, restore that file from your complete copy o
 folder containing the complete installation. Leonida checks required DLLs, including dependencies of other
 DLLs, before running title code.
 
-`run-gta6.ps1` does the build and the run in one step, with the frame-rate switches measured for your graphics card
-(`gpu-profiles.json`; they are off by default in the program). It asks for the game folder too, and whether to
-remember it:
+`run-gta6.ps1` does the build and the run in one step. The program itself selects the frame-rate settings from
+`gpu-profiles.json`, including when launched directly through Wine. It asks for the game folder too, and whether
+to remember it:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\run-gta6.ps1
@@ -105,7 +105,37 @@ powershell -ExecutionPolicy Bypass -File .\run-gta6.ps1
 
 `measure-gta6.ps1` does the same with the diagnostics build, the frame log and the card meter on, and saves
 everything the game prints to `%LOCALAPPDATA%\leonida\logs`. `-SpeedSwitches off` runs it without the frame-rate
-switches, for a comparison in the same place.
+switches or your graphics overrides, for a comparison in the same place.
+
+### Graphics settings
+
+The measured base profile is automatic. Experimental profiles such as `card-windows` remain opt-in.
+To change a setting, add a `[graphics]` section to your `leonida.toml`; the example file lists every option:
+
+```toml
+[graphics]
+async_submit = false
+queue2 = 0
+```
+
+Only the options you write change. To disable automatic profiles, use `profiles = ["none"]` (or `profiles = []`)
+in that section. Other settings you explicitly write still apply. To choose profiles yourself, use a list such
+as `profiles = ["base", "my-test"]`; named profiles include the base settings and apply in catalog order.
+
+Environment overrides take precedence over TOML settings, which take precedence over profiles. For example,
+an explicit `LEONIDA_QUEUE2=0` still wins. `LEONIDA_PROFILE` overrides the profile list, except the existing
+diagnostics value `1`, which enables the CPU sampler and leaves graphics selection to the config. Run
+`leonida config --graphics` to see the selected adapter, profiles, effective values and their sources as JSON;
+it needs no game files. The scripts use this same result and leave your environment overrides intact.
+
+The standard catalog is built into the executable. Put local profiles in `gpu-profiles.local.json` beside
+your selected config file (the current folder when no config exists). They apply after the built-in catalog.
+Profiles match the adapter used by Direct3D, including Wine's reported adapter identity. If discovery fails,
+only profiles without card-specific conditions match. A local profile can cancel an earlier profile value
+with `null`, but cannot override an explicit TOML or environment value. Game/cache/data paths, logging, RenderDoc startup
+and WARP selection remain separate from graphics profiles.
+GPU name patterns support case-insensitive `*`, `?`, `[abc]` and `[a-z]`; malformed patterns and unsupported
+backtick escapes or negated character classes report an error. Unknown profile names also report an error.
 
 ### Testing for the project, with no programming experience
 
@@ -150,7 +180,8 @@ An experimental optimization reduces GPU work before individual indirect draws. 
 RTX 5090 benchmark by 19.4%; gameplay and other cards are unmeasured, so it stays off by default.
 [The measurements and limits are here](docs/fork-notes.md#newest-2026-11-26).
 
-To compare it using your configured game, create `gpu-profiles.local.json` with the following content. If
+To compare it using your configured game, create `gpu-profiles.local.json` beside your selected config file
+(normally in the checkout) with the following content. If
 the file already exists, add only this profile object to its existing `profiles` array:
 
 ```json

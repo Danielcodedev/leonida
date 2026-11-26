@@ -33,6 +33,7 @@ fn run_title(
     // A title that relaunched itself: the old process must be gone first.
     leonida_hle::modules::lifecycle::wait_for_previous();
     let cfg = leonida_core::Config::load()?;
+    crate::graphics::initialize(&cfg)?;
     let original = std::fs::read(exe).with_context(|| format!("reading {}", exe.display()))?;
     let prepared = leonida_loader::prepare(&original)?;
     let hash = prepared.original_hash.to_hex();

@@ -18,6 +18,9 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+. (Join-Path $PSScriptRoot 'scripts\leonida-settings.ps1')
+$environmentBefore = Save-LeonidaEnvironment
+
 Push-Location $PSScriptRoot
 try {
     cargo build --profile diag -p leonida --features diagnostics
@@ -33,9 +36,8 @@ try {
     New-Item -ItemType Directory -Force $run | Out-Null
     $wanted = @($ShotAt -split ',' | Where-Object { $_.Trim() -ne '' }).Count
 
-    # The frame-rate switches for this PC's graphics card (gpu-profiles.json).
-    . (Join-Path $PSScriptRoot 'scripts\leonida-settings.ps1')
-    Set-LeonidaProfiles $PSScriptRoot
+    # Show the settings the program will resolve again when it starts.
+    Show-LeonidaGraphics (Get-LeonidaGraphics $exe)
     $env:LEONIDA_SHOT = $run
     $env:LEONIDA_SHOT_AT = $ShotAt
     if ($Keys -ne '') { $env:LEONIDA_KEYS = $Keys }
@@ -55,5 +57,6 @@ try {
     $done = @(Get-ChildItem -Path $run -Recurse -Filter 'done' -ErrorAction SilentlyContinue).Count
     Write-Host "$done of $wanted shot(s) written to $run"
 } finally {
+    Restore-LeonidaEnvironment $environmentBefore
     Pop-Location
 }

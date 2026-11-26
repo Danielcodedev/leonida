@@ -1,81 +1,146 @@
-# The LEONIDA_* switches for this PC's graphics card, from gpu-profiles.json (and
-# gpu-profiles.local.json, if there is one). Dot-sourced by the run scripts:
-#
-#   . (Join-Path $PSScriptRoot 'scripts\leonida-settings.ps1')
-#   Set-LeonidaProfiles $PSScriptRoot
-
-# The card with the most memory of its own: name, vendor and memory in MB, from the
-# display adapters' registry keys (Win32_VideoController stops counting at 4 GB).
-function Get-LeonidaGpu {
-    $class = 'HKLM:\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}'
-    $best = $null
-    foreach ($key in @(Get-ChildItem -LiteralPath $class -ErrorAction SilentlyContinue)) {
-        if ($key.PSChildName -notmatch '^\d{4}$') { continue }
-        $p = Get-ItemProperty -LiteralPath $key.PSPath -ErrorAction SilentlyContinue
-        if (-not $p -or -not $p.DriverDesc) { continue }
-        $bytes = [double]0
-        $q = $p.'HardwareInformation.qwMemorySize'
-        $d = $p.'HardwareInformation.MemorySize'
-        if ($q) { $bytes = [double]$q }
-        elseif ($d -is [byte[]] -and $d.Length -ge 4) { $bytes = [double][BitConverter]::ToUInt32($d, 0) }
-        elseif ($d) { $bytes = [double]$d }
-        $vendor = switch -Regex ([string]$p.MatchingDeviceId) {
-            'ven_10de' { 'nvidia'; break }
-            'ven_1002' { 'amd'; break }
-            'ven_8086' { 'intel'; break }
-            default { 'other' }
+# The program resolves graphics settings, including profiles, leonida.toml and explicit
+# environment overrides. Query the same plan for launch messages and measurement reports;
+# never copy profile values into this PowerShell window.
+function Get-LeonidaGraphics {
+    [CmdletBinding()]
+    param([string]$Exe)
+    if (-not $Exe) { throw 'no leonida executable was supplied for graphics settings' }
+    $errors = [System.IO.Path]::GetTempFileName()
+    try {
+        # Windows PowerShell 5.1 represents native stderr as errors. Keep it separate from
+        # the JSON and check the native exit code ourselves, including when stderr is used.
+        $before = $ErrorActionPreference
+        $encodingBefore = [Console]::OutputEncoding
+        $ErrorActionPreference = 'Continue'
+        $PSNativeCommandUseErrorActionPreference = $false
+        try {
+            # Rust writes UTF-8; Windows PowerShell otherwise decodes the console code page.
+            [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
+            $out = & $Exe config --graphics 2> $errors
+            $code = $LASTEXITCODE
+        } catch {
+            throw "could not query graphics settings from '$Exe': $_"
+        } finally {
+            [Console]::OutputEncoding = $encodingBefore
+            $ErrorActionPreference = $before
         }
-        $gpu = [pscustomobject]@{ Name = [string]$p.DriverDesc; Vendor = $vendor; VramMB = [int]($bytes / 1MB) }
-        if (-not $best -or $gpu.VramMB -gt $best.VramMB) { $best = $gpu }
+        $detail = (Get-Content -LiteralPath $errors -Raw -ErrorAction SilentlyContinue)
+        if ($code -ne 0) {
+            throw ("leonida config --graphics failed (exit $code); " +
+                "check leonida.toml and graphics profiles. $detail")
+        }
+        try {
+            $plan = ($out -join "`n") | ConvertFrom-Json -ErrorAction Stop
+            foreach ($field in 'gpu', 'profiles', 'settings', 'sources') {
+                if ($field -notin $plan.PSObject.Properties.Name) { throw "missing '$field'" }
+            }
+            if ($plan.settings -isnot [pscustomobject] -or $plan.sources -isnot [pscustomobject]) {
+                throw 'settings and sources must be JSON objects'
+            }
+        } catch {
+            throw ("leonida config --graphics returned invalid JSON settings; " +
+                "rebuild leonida.exe. $_")
+        }
+        if ($detail) { Write-Warning $detail.Trim() }
+        $plan
+    } finally {
+        Remove-Item -LiteralPath $errors -ErrorAction SilentlyContinue
     }
-    if (-not $best) { $best = [pscustomobject]@{ Name = 'unknown'; Vendor = 'other'; VramMB = 0 } }
-    $best
 }
 
-function Test-LeonidaMatch($match, $gpu) {
-    if (-not $match) { return $true }
-    if ($match.vendor -and $match.vendor -ne $gpu.Vendor) { return $false }
-    if ($match.min_vram_mb -and $gpu.VramMB -lt [int]$match.min_vram_mb) { return $false }
-    if ($match.max_vram_mb -and $gpu.VramMB -gt [int]$match.max_vram_mb) { return $false }
-    if ($match.name -and $gpu.Name -notlike $match.name) { return $false }
-    $true
+function Show-LeonidaGraphics($Plan) {
+    $gpu = $Plan.gpu
+    $card = if ($gpu) { '{0} ({1}, {2} MB)' -f $gpu.name, $gpu.vendor, $gpu.vram_mb }
+        else { 'unknown' }
+    $profiles = if (@($Plan.profiles).Count) { $Plan.profiles -join ', ' } else { 'none' }
+    Write-Host ("graphics card: {0}; profiles: {1}" -f $card, $profiles)
+    $kept = @($Plan.sources.PSObject.Properties | Where-Object { $_.Value -eq 'environment' } |
+        Sort-Object Name | ForEach-Object { $_.Name })
+    if ($kept.Count) { Write-Host ("explicit environment overrides: {0}" -f ($kept -join ', ')) }
 }
 
-# Sets the switches of the profiles that fit (or those LEONIDA_PROFILE names) and says
-# which they were. -Gpu stands in for the card, for trying a profile out.
-function Set-LeonidaProfiles([string]$Root, $Gpu = $null) {
-    if (-not $Gpu) { $Gpu = Get-LeonidaGpu }
-    $forced = @()
-    if ($env:LEONIDA_PROFILE) { $forced = @($env:LEONIDA_PROFILE -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ }) }
-    $set = [ordered]@{}
-    $applied = @()
-    # Switches an earlier run left in this window (this script, play.ps1, by hand) go, so the
-    # profiles decide; LEONIDA_KEEP_WINDOW=1 keeps them. Paths, LEONIDA_PROFILE and LEONIDA_LOG stay.
-    $stay = 'LEONIDA_CONFIG', 'LEONIDA_GAME_DIR', 'LEONIDA_CACHE_DIR', 'LEONIDA_DATA_DIR', 'LEONIDA_PROFILE', 'LEONIDA_LOG', 'LEONIDA_KEEP_WINDOW'
-    if ($env:LEONIDA_KEEP_WINDOW -ne '1') {
-        Get-ChildItem Env:LEONIDA_* | Where-Object { $_.Name -notin $stay } | ForEach-Object { Remove-Item -LiteralPath "Env:$($_.Name)" }
+# Shareable reports show simple switch values only, never paths, hashes or arbitrary text.
+# Keep the complete values local in `leonida config --graphics`.
+function Format-LeonidaGraphicsSwitch([string]$Name, [string]$Value, [switch]$Short) {
+    if ($Name -notmatch '\ALEONIDA_[A-Z0-9_]+\z') { return '<unknown switch>=<set>' }
+    $simple = '\A(?:[0-9]{1,10}|0x[0-9a-f]{1,8}|alt|on|off|<set>|<empty>)\z'
+    $safe = if ($Value -match $simple) { $Value }
+        elseif ($Value -eq '') { '<empty>' }
+        else { '<set>' }
+    if ($Short) { $Name = $Name -replace '^LEONIDA_', '' }
+    '{0}={1}' -f $Name, $safe
+}
+
+# Includes native-only settings and sanitizes values for messages and shareable reports.
+function Get-LeonidaGraphicsSwitches($Plan, [switch]$Short) {
+    $Plan.settings.PSObject.Properties | Sort-Object Name | ForEach-Object {
+        Format-LeonidaGraphicsSwitch $_.Name $_.Value -Short:$Short
     }
-    $files = @(Join-Path $Root 'gpu-profiles.json')
-    $local = Join-Path $Root 'gpu-profiles.local.json'
-    if (Test-Path -LiteralPath $local) { $files += $local }
-    foreach ($file in $files) {
-        $data = Get-Content -LiteralPath $file -Raw | ConvertFrom-Json
-        foreach ($p in @($data.profiles)) {
-            $wanted = if ($forced -contains 'none') { $false }
-                elseif ($forced.Count -gt 0) { $p.name -eq 'base' -or $forced -contains $p.name }
-                elseif ($p.opt_in) { $false }
-                else { Test-LeonidaMatch $p.match $Gpu }
-            if (-not $wanted) { continue }
-            foreach ($s in @($p.env.PSObject.Properties)) { $set[$s.Name] = $s.Value }
-            $applied += $p.name
+}
+
+# Launchers change process environment variables, which otherwise survive into another
+# script in the same PowerShell window. Restore the caller's values even after a failure.
+function Save-LeonidaEnvironment {
+    $saved = @{}
+    # .NET Framework's single-variable getter (also used by Env:) can mistake an
+    # existing empty value for a missing one after a stale Win32 error. The full
+    # environment block preserves both presence and value without that lookup.
+    foreach ($entry in [Environment]::GetEnvironmentVariables().GetEnumerator()) {
+        if ($entry.Key -like 'LEONIDA_*') { $saved[$entry.Key] = $entry.Value }
+    }
+    $saved
+}
+
+# .NET Framework and older PowerShell versions delete empty values through Env:.
+# The Windows API distinguishes an explicit empty override from an absent variable.
+function Set-LeonidaEmptyEnvironment([string]$Name) {
+    if (-not ('LeonidaLauncherEnvironment' -as [type])) {
+        Add-Type -TypeDefinition @'
+using System.Runtime.InteropServices;
+public static class LeonidaLauncherEnvironment {
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool SetEnvironmentVariable(string name, string value);
+}
+'@
+    }
+    if (-not [LeonidaLauncherEnvironment]::SetEnvironmentVariable($Name, '')) {
+        throw "could not restore empty environment value $Name"
+    }
+}
+
+function Restore-LeonidaEnvironment([System.Collections.IDictionary]$Before) {
+    $current = Save-LeonidaEnvironment
+    foreach ($name in $current.Keys) {
+        if (-not $Before.Contains($name)) {
+            # Plain $null binds as an empty string, which .NET 9+ preserves.
+            [Environment]::SetEnvironmentVariable($name, [NullString]::Value)
         }
     }
-    $kept = @()
-    foreach ($name in $set.Keys) {
-        if (Test-Path -LiteralPath "Env:$name") { $kept += $name; continue }
-        if ($null -ne $set[$name]) { Set-Item -LiteralPath "Env:$name" ([string]$set[$name]) }
+    foreach ($name in $Before.Keys) {
+        if (-not $current.Contains($name) -or $current[$name] -cne $Before[$name]) {
+            if ($Before[$name] -eq '' -and
+                [Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) {
+                Set-LeonidaEmptyEnvironment $name
+            } else {
+                [Environment]::SetEnvironmentVariable($name, $Before[$name])
+            }
+        }
     }
-    if ($applied.Count -eq 0) { $applied = @('none') }
-    Write-Host ("graphics card: {0} ({1}, {2} MB); profiles: {3}" -f $Gpu.Name, $Gpu.Vendor, $Gpu.VramMB, ($applied -join ', '))
-    if ($kept.Count -gt 0) { Write-Host ("already set in this window, left as they are: {0}" -f ($kept -join ', ')) }
+}
+
+# A measurement baseline disables both profiles and TOML graphics settings. Explicit
+# runtime overrides must also go; paths, logging and early startup controls remain available.
+function Disable-LeonidaGraphics {
+    $stay = 'LEONIDA_CONFIG', 'LEONIDA_GAME_DIR', 'LEONIDA_CACHE_DIR', 'LEONIDA_DATA_DIR',
+        'LEONIDA_TEST_TITLES', 'LEONIDA_PROFILE', 'LEONIDA_LOG', 'LEONIDA_KEEP_WINDOW',
+        'LEONIDA_GRAPHICS_OFF', 'LEONIDA_D3D12_WARP', 'LEONIDA_RELAUNCHED_FROM',
+        'LEONIDA_AUDIO_CAPTURE_OF'
+    $current = Save-LeonidaEnvironment
+    foreach ($name in $current.Keys) {
+        if ($name -notin $stay -and $name -notlike 'LEONIDA_RENDERDOC*') {
+            [Environment]::SetEnvironmentVariable($name, [NullString]::Value)
+        }
+    }
+    $env:LEONIDA_GRAPHICS_OFF = '1'
 }

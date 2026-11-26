@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use serde::Deserialize;
 
+use crate::graphics::{self, Adapter, Environment, GraphicsSettings, Plan};
 use crate::policy::ensure_outside_repo;
 
 #[derive(Debug, Default, Clone)]
@@ -24,6 +25,8 @@ pub struct Config {
     pub test_titles: Vec<PathBuf>,
     /// The config file that was read, if any.
     pub source: Option<PathBuf>,
+    /// Graphics overrides applied before the host device or title starts.
+    pub graphics: GraphicsSettings,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -31,6 +34,8 @@ pub struct Config {
 struct FileConfig {
     #[serde(default)]
     paths: FilePaths,
+    #[serde(default)]
+    graphics: GraphicsSettings,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -68,7 +73,10 @@ impl Config {
             }
             None => (None, FileConfig::default()),
         };
-        Self::resolve(parsed.paths, source, |k| std::env::var_os(k))
+        parsed.graphics.validate()?;
+        let mut config = Self::resolve(parsed.paths, source, |k| std::env::var_os(k))?;
+        config.graphics = parsed.graphics;
+        Ok(config)
     }
 
     fn resolve(
@@ -95,7 +103,13 @@ impl Config {
             data_dir,
             test_titles,
             source,
+            graphics: GraphicsSettings::default(),
         })
+    }
+
+    /// Resolves graphics settings without changing the process environment.
+    pub fn graphics_plan(&self, gpu: Option<Adapter>, env: &Environment) -> Result<Plan> {
+        graphics::load(&self.graphics, self.source.as_deref(), gpu, env)
     }
 
     /// The game directory, or a helpful error if it is not configured.
@@ -119,6 +133,7 @@ impl Config {
         let new = with_game_dir(&text, game_dir)?;
         let parsed: FileConfig =
             toml::from_str(&new).with_context(|| format!("updating {}", path.display()))?;
+        parsed.graphics.validate()?;
         anyhow::ensure!(
             parsed.paths.game_dir.as_deref() == Some(game_dir),
             "updating {}: the game folder did not read back",
@@ -299,6 +314,24 @@ mod tests {
         let text = "[paths]\r\n# game_dir = 'x'\r\n";
         let new = with_game_dir(text, Path::new("y")).unwrap();
         assert_eq!(new, "[paths]\r\ngame_dir = \"y\"\r\n");
+    }
+
+    #[test]
+    fn game_dir_save_preserves_graphics_and_comments() {
+        let graphics = "[graphics]\n# Keep the user's choice.\nprofiles = ['none']\nqueue2 = 2\n";
+        for text in [
+            format!("[paths]\ngame_dir = 'old'\n\n{graphics}"),
+            format!("{graphics}\n[paths]\ngame_dir = 'old'\n"),
+            graphics.to_owned(),
+        ] {
+            let new = with_game_dir(&text, Path::new("new")).unwrap();
+            assert!(new.contains(graphics));
+            let parsed: FileConfig = toml::from_str(&new).unwrap();
+            assert_eq!(parsed.paths.game_dir, Some(PathBuf::from("new")));
+            assert_eq!(parsed.graphics.queue2, Some(2));
+            assert_eq!(parsed.graphics.profiles, Some(vec!["none".into()]));
+            parsed.graphics.validate().unwrap();
+        }
     }
 
     #[test]
