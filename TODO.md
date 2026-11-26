@@ -47,7 +47,6 @@ The goal: a console-like experience on PC. The game starts straight into play, h
 | S-1 | One device loss with indirect draw windows on (`LEONIDA_INDIRECT_WINDOW=1`), 44 s into the world. Cause not found. Don't combine it with `LEONIDA_CARD_FETCH_INFLIGHT=1`. | `leonida-gpu` | game, GPU |
 | S-2 | A session past the first rooms lost the device in the open world with no driver entry ("device removed"). | `leonida-gpu` | game, GPU |
 | S-3 | Menu frame pacing drifts on one screen in release builds. | `leonida-gpu` | game, GPU |
-| S-5 | DXIL conversion can recurse without end when a generated loop has more than one back edge per block or header; pipeline workers overflow their stacks and leave pipelines unfinished. Normalize those back edges before writing DXIL. | `leonida-shader` | game, GPU |
 
 ## Audio, input and system services
 
