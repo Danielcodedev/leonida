@@ -131,6 +131,37 @@ held, and any lock the driver held stays held; deleting
 `compiler-crashed.txt` gives the listed pipelines another try. Not yet run
 on an AMD card; on an RTX 3080 the guard never fires.
 
+**C-2: indirect-budget tests allow either thread group to reserve first.**
+The saturation test submits 128 records as two 64-thread groups. Each
+group reserves its whole charge atomically and admits records in lane
+order, but separate groups in one dispatch have no ordering guarantee.
+The inherited test required surviving records 1 and 2; records 64 and 65
+are equally valid when the other group wins. Commit `f85101b` introduced
+that assertion alongside group-level charging, overconstraining the test.
+
+The test now accepts exactly either pair, while still requiring the budget
+to saturate without wrapping, exactly two admitted records, zero counts
+for every rejected record, unchanged source bytes, and all preserved draw
+fields and stride padding. It repeats the two-group dispatch 16 times.
+A separate test submits the halves in each explicit order with one shared
+budget, requiring the corresponding pair. Both tests use the unchanged
+production shader and barriers; no runtime ordering or budget logic changes.
+
+On an RTX 5090 (NVIDIA 580.173.02), i9-14900KS, Pop!_OS 22.04 and Proton
+11's Wine 11.0 with vkd3d-proton, the old assertion failed when the controlled
+reverse order produced records 64 and 65 at the exact budget cap. The fixed
+hardware test passed all 16 unordered and both ordered cases. The unordered
+RTX runs all selected records 1 and 2; the controlled reverse case is not a
+claim of naturally observed reversed scheduling on that card. All inputs
+are original synthetic data. This repairs regression coverage, not gameplay
+performance. To run the explicit hardware test:
+
+```powershell
+cargo test -p leonida-gpu --lib --release --locked `
+  host_budget_saturates_without_wraparound_and_preserves_draw_fields -- `
+  --ignored --nocapture --test-threads=1
+```
+
 **P-5: repeated console-instruction warnings no longer take a shared lock.**
 Every decoded console-only instruction used to lock a vector just to check
 whether its kind had already been logged. A bit per kind now records that
