@@ -1,6 +1,8 @@
 # Like run-gta6.ps1, but with the diagnostics build: frame log and card meter
 # (per pipeline) on, and everything the emulator prints saved to a log file.
 # Logs go under %LOCALAPPDATA%\leonida\logs (game-derived output stays out of the repo).
+# When the game closes it offers a short test report (scripts\test-report.ps1): figures
+# only, shown in full, and shared only if you say so.
 #
 # The first time, it asks for the folder of your copy of the game (the one with
 # MicrosoftGame.config in it) and offers to remember it in leonida.toml, which git ignores.
@@ -8,12 +10,20 @@
 #   powershell -ExecutionPolicy Bypass -File .\measure-gta6.ps1
 #   powershell -ExecutionPolicy Bypass -File .\measure-gta6.ps1 -GameDir 'D:\Games\GTA VI'   # this run only
 #   powershell -ExecutionPolicy Bypass -File .\measure-gta6.ps1 -WarmUp yes   # warm up the shader cache without asking
+#   powershell -ExecutionPolicy Bypass -File .\measure-gta6.ps1 -SpeedSwitches off   # the same run without the switches
+#   powershell -ExecutionPolicy Bypass -File .\measure-gta6.ps1 -Report no   # no report afterwards
 
 param(
     [string]$GameDir = '',
     # yes: warm up the shader cache before starting, no: skip it, ask: ask (default).
     [ValidateSet('ask', 'yes', 'no')]
-    [string]$WarmUp = 'ask'
+    [string]$WarmUp = 'ask',
+    # on: the switches gpu-profiles.json picks for this card (default), off: none, ask: ask.
+    [ValidateSet('on', 'off', 'ask')]
+    [string]$SpeedSwitches = 'on',
+    # ask: offer a test report when the game closes (default), no: don't.
+    [ValidateSet('ask', 'no')]
+    [string]$Report = 'ask'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -61,6 +71,24 @@ try {
     . (Join-Path $PSScriptRoot 'scripts\leonida-settings.ps1')
     Set-LeonidaProfiles $PSScriptRoot
 
+    # Whatever LEONIDA_* is set now, besides paths and logging, is a speed switch.
+    $notSwitches = 'LEONIDA_CONFIG', 'LEONIDA_GAME_DIR', 'LEONIDA_CACHE_DIR', 'LEONIDA_DATA_DIR', 'LEONIDA_PROFILE', 'LEONIDA_LOG', 'LEONIDA_KEEP_WINDOW'
+    $switches = @(Get-ChildItem Env:LEONIDA_* | Where-Object { $_.Name -notin $notSwitches })
+    if ($SpeedSwitches -eq 'ask') {
+        Write-Host ''
+        Write-Host 'Turn the speed switches on? They are the frame-rate switches measured faster for your card:'
+        Write-Host (($switches | ForEach-Object { $_.Name -replace '^LEONIDA_', '' }) -join ', ')
+        Write-Host 'To help compare, play once with them and once without, in the same place in the game.'
+        $answer = Read-Host 'Speed switches on? [Y/n]'
+        $SpeedSwitches = if ($answer.Trim() -match '^(y|yes)?$') { 'on' } else { 'off' }
+    }
+    if ($SpeedSwitches -eq 'off') {
+        $switches | ForEach-Object { Remove-Item -LiteralPath "Env:$($_.Name)" }
+        $switches = @()
+        Write-Host 'speed switches: off'
+    }
+    $switchList = @($switches | ForEach-Object { '{0}={1}' -f $_.Name, $_.Value })
+
     $env:LEONIDA_FRAME_LOG = '1'
     $env:LEONIDA_CARD_METER = '1'
     $env:LEONIDA_CARD_METER_PIPELINES = '1'
@@ -89,7 +117,18 @@ try {
 
     # The emulator logs to stderr; PowerShell 5.1 wraps those lines as errors, so don't stop on them.
     $ErrorActionPreference = 'Continue'
+    $started = Get-Date
     & $exe run --execute 2>&1 | ForEach-Object { "$_" } | Tee-Object -FilePath $log
+    $exitCode = $LASTEXITCODE
+
+    if ($Report -eq 'ask') {
+        try {
+            & (Join-Path $PSScriptRoot 'scripts\test-report.ps1') -Log $log -SpeedSwitches $switchList `
+                -SwitchMode $SpeedSwitches -WarmUp $WarmUp -Started $started -ExitCode "$exitCode" -Exe $exe
+        } catch {
+            Write-Warning "the test report failed: $_"
+        }
+    }
 } finally {
     Pop-Location
 }
