@@ -107,6 +107,63 @@ powershell -ExecutionPolicy Bypass -File .\run-gta6.ps1
 everything the game prints to `%LOCALAPPDATA%\leonida\logs`. `-SpeedSwitches off` runs it without the frame-rate
 switches or your graphics overrides, for a comparison in the same place.
 
+### Experimental Linux launch with Steam Flatpak and Proton
+
+Leonida still builds as a Windows executable; Proton runs it on Linux. On Pop!_OS 22.04 with
+Proton 11.0, an RTX 5090 and NVIDIA 580.173.02, this path reached the opening scene with a
+newer vkd3d-proton build, then stopped at a game resource-pool breakpoint. Gameplay on Linux
+has not been validated. You need the Steam Flatpak with Proton installed, a working
+PulseAudio-compatible desktop socket, and an x64 `d3dcompiler_47.dll` from a Windows SDK
+installation. [The Windows SDK includes this DLL][sdk-d3dcompiler].
+
+Build the Windows executable on Linux with [cargo-xwin][cargo-xwin], or use a Windows release
+build you made yourself. Follow cargo-xwin's setup instructions for Clang/LLVM, then run in this
+repository:
+
+```sh
+rustup target add x86_64-pc-windows-msvc
+cargo install cargo-xwin --locked
+cargo xwin build --release --locked --target x86_64-pc-windows-msvc -p leonida
+```
+
+Put the game executable named by `MicrosoftGame.config` beside that manifest and the rest of your
+game files. On the tested NVIDIA PC, Proton 11.0's bundled vkd3d-proton 3.0.0 exited while
+creating compute pipelines during world loading. For that combination, download vkd3d-proton
+3.2.0 or newer from the [official package workflow][vkd3d-proton] and extract it outside this
+repository. Its `x64` folder must contain matching `d3d12.dll` and `d3d12core.dll` files.
+Then run:
+
+```sh
+./run-gta6-linux.sh \
+  --game-dir "$HOME/Games/GTA6" \
+  --proton "$HOME/.var/app/com.valvesoftware.Steam/data/Steam/steamapps/common/Proton 11.0" \
+  --compiler "$HOME/WindowsSDK/x64/d3dcompiler_47.dll" \
+  --vkd3d-dir "$HOME/Downloads/vkd3d-proton/x64"
+```
+
+Replace those four paths with yours. `--exe` selects another Leonida Windows executable. The
+launcher reads the repository's `leonida.toml` if present; `--config` selects another settings
+file. It also reads `gpu-profiles.local.json` beside that file. It creates a dedicated Wine prefix
+with Proton's DXVK/vkd3d graphics DLLs and your compiler DLL. The prefix, shader cache and saves
+stay under `~/.local/share/leonida/proton` (or `$XDG_DATA_HOME/leonida/proton`). `--state-dir`
+chooses another location outside the repository. For symlinks to files in another directory,
+pass `--read-only-dir` for each target directory. `--bind-only` checks imports without starting
+the title.
+
+The launcher copies the newer vkd3d-proton DLL pair only into its dedicated Wine prefix. If
+your Proton already includes a working version, omit `--vkd3d-dir` to use its bundled pair.
+
+The script grants [Flatpak's PulseAudio socket][flatpak-sockets] and checks for its presence inside
+Steam's sandbox before starting the game. If the check fails, restore your desktop's
+PulseAudio-compatible audio service and Steam's audio permission. The title stays offline. This
+launcher is for compatibility, **not malware isolation**: Steam's app data can still be visible
+to Wine. Only run game files you trust.
+
+[sdk-d3dcompiler]: https://learn.microsoft.com/en-us/windows/desktop/directx-sdk--august-2009-
+[cargo-xwin]: https://github.com/rust-cross/cargo-xwin
+[flatpak-sockets]: https://docs.flatpak.org/en/latest/flatpak-command-reference.html
+[vkd3d-proton]: https://github.com/HansKristian-Work/vkd3d-proton/actions/workflows/artifacts.yml
+
 ### Graphics settings
 
 The measured base profile is automatic. Experimental profiles such as `card-windows` remain opt-in.
