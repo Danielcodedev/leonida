@@ -542,11 +542,21 @@ fn workers() -> bool {
     })
 }
 
+/// Shader translation and the host compiler exhausted the default 2 MiB
+/// thread stack during the first world load. Reserve more stack only for
+/// these workers; Windows commits the pages as they are used.
+const PIPELINE_WORKER_STACK: usize = 8 * 1024 * 1024;
+
+fn worker_builder(slot: usize) -> std::thread::Builder {
+    std::thread::Builder::new()
+        .name(format!("leonida-pipelines-{slot}"))
+        .stack_size(PIPELINE_WORKER_STACK)
+}
+
 /// Starts one pipeline worker.
 fn spawn_worker() -> bool {
     let slot = NEXT_SLOT.fetch_add(1, Ordering::Relaxed);
-    let spawned = std::thread::Builder::new()
-        .name(format!("leonida-pipelines-{slot}"))
+    let spawned = worker_builder(slot)
         .spawn(move || {
             WORKER_SLOT.set(slot);
             // Below the title's own threads (loading, recording).
@@ -599,6 +609,23 @@ fn drained() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Ask Windows for the stack it actually gave a pipeline worker. The
+    /// default 2 MiB stack is too small for some world pipelines.
+    #[test]
+    fn pipeline_worker_has_room_for_large_compiles() {
+        use windows::Win32::System::Threading::GetCurrentThreadStackLimits;
+
+        let worker = worker_builder(999)
+            .spawn(|| {
+                let (mut low, mut high) = (0usize, 0usize);
+                // SAFETY: both outputs live for the duration of this call.
+                unsafe { GetCurrentThreadStackLimits(&mut low, &mut high) };
+                high - low
+            })
+            .unwrap();
+        assert!(worker.join().unwrap() >= 8 * 1024 * 1024);
+    }
 
     /// A first use queues the pipeline and, within the budget, gets the
     /// worker's answer (here: no host pipeline for no shaders).
