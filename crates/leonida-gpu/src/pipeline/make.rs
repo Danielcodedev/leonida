@@ -15,8 +15,8 @@
 //! The default budget is half a second per title frame. A pass the title
 //! runs only once and whose pipeline takes longer is lost.
 
-use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
+use std::collections::{HashSet, VecDeque};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -60,16 +60,244 @@ impl Pending {
     }
 
     fn make(&self) {
-        self.made.get_or_init(|| {
-            if let Some(s) = self.shaders.iter().find(|s| super::skip_listed(&s.hash)) {
+        // Not through `OnceLock::get_or_init`: a worker the driver's compiler
+        // crashed under stays inside the call for good ([`guard_start`]), and
+        // anyone else asking would wait for it forever.
+        if self.made.get().is_none() {
+            let made = if let Some(s) = self.shaders.iter().find(|s| super::skip_listed(&s.hash)) {
                 tracing::warn!(hash = %s.hash, "host pipeline not made: its shader is in LEONIDA_SKIP_PIPELINES");
-                return None;
-            }
-            HostPipeline::new(&self.shaders, self.graphics.as_deref())
-        });
+                None
+            } else if crashed_keys(|keys| keys.contains(&self.key)) {
+                SKIPPED_CRASHED.fetch_add(1, Ordering::Relaxed);
+                tracing::warn!(
+                    key = %self.key,
+                    shaders = ?self.shaders,
+                    "host pipeline not made: the driver's compiler crashed on it in an earlier run"
+                );
+                None
+            } else {
+                HostPipeline::new(&self.shaders, self.graphics.as_deref())
+            };
+            let _ = self.made.set(made);
+        }
         let (lock, done) = &DONE;
         let _held = lock.lock().unwrap_or_else(|e| e.into_inner());
         done.notify_all();
+    }
+}
+
+/// Pipelines not made because the driver's compiler crashed on them before.
+static SKIPPED_CRASHED: AtomicU64 = AtomicU64::new(0);
+
+/// Beside the pipeline library: the pipelines the driver's compiler crashed
+/// on, one key to a line, then anything (`#` begins a comment). Deleting the
+/// file gives them another try.
+const CRASHED_FILE: &str = "compiler-crashed.txt";
+
+/// The keys of [`CRASHED_FILE`], read on first use.
+static CRASHED_KEYS: Mutex<Option<HashSet<String>>> = Mutex::new(None);
+
+fn crashed_keys<R>(f: impl FnOnce(&mut HashSet<String>) -> R) -> R {
+    let mut keys = CRASHED_KEYS.lock().unwrap_or_else(|e| e.into_inner());
+    let keys = keys.get_or_insert_with(|| {
+        let listed = super::library::folder()
+            .and_then(|d| std::fs::read_to_string(d.join(CRASHED_FILE)).ok())
+            .unwrap_or_default();
+        listed
+            .lines()
+            .filter(|l| !l.trim_start().starts_with('#'))
+            .filter_map(|l| l.split_whitespace().next())
+            .map(str::to_owned)
+            .collect()
+    });
+    f(keys)
+}
+
+/// Whether a crash of the driver's compiler on a worker is caught
+/// (`LEONIDA_COMPILER_GUARD=0`: not, and the run ends as before).
+fn guard_on() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LEONIDA_COMPILER_GUARD").is_none_or(|v| v != "0"))
+}
+
+/// Worker threads the guard can tell apart, over the run.
+const MAX_SLOTS: usize = 128;
+/// Per worker slot: its compile crashed (set by the handler), and where.
+static CRASHED: [AtomicBool; MAX_SLOTS] = [const { AtomicBool::new(false) }; MAX_SLOTS];
+static FAULT_ADDRESS: [AtomicU64; MAX_SLOTS] = [const { AtomicU64::new(0) }; MAX_SLOTS];
+static FAULT_RIP: [AtomicU64; MAX_SLOTS] = [const { AtomicU64::new(0) }; MAX_SLOTS];
+static NEXT_SLOT: AtomicUsize = AtomicUsize::new(0);
+/// The event the handler signals (a Win32 handle).
+static CRASH_EVENT: AtomicUsize = AtomicUsize::new(0);
+/// What each slot's worker is making. Never locked by the handler.
+static ACTIVE_JOBS: Mutex<Vec<Option<Arc<Pending>>>> = Mutex::new(Vec::new());
+
+thread_local! {
+    /// This worker's slot (`usize::MAX`: none).
+    static WORKER_SLOT: std::cell::Cell<usize> = const { std::cell::Cell::new(usize::MAX) };
+    /// Whether this thread is inside the compile of a pipeline.
+    static COMPILING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// A worker's compile of a pipeline: noted for the guard while it lasts.
+struct Compile {
+    slot: usize,
+}
+
+impl Compile {
+    fn begin(slot: usize, p: &Arc<Pending>) -> Compile {
+        if slot < MAX_SLOTS && guard_on() {
+            let mut jobs = ACTIVE_JOBS.lock().unwrap_or_else(|e| e.into_inner());
+            if jobs.len() < MAX_SLOTS {
+                jobs.resize(MAX_SLOTS, None);
+            }
+            jobs[slot] = Some(p.clone());
+            COMPILING.set(true);
+        }
+        Compile { slot }
+    }
+}
+
+impl Drop for Compile {
+    fn drop(&mut self) {
+        if COMPILING.replace(false) && self.slot < MAX_SLOTS {
+            let mut jobs = ACTIVE_JOBS.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(job) = jobs.get_mut(self.slot) {
+                *job = None;
+            }
+        }
+    }
+}
+
+/// Installs the handler for the driver's compiler crashing, and the thread
+/// that deals with what it leaves. AMD's compiler (`amdxc64.dll`) reads one
+/// of the first pages while it makes some pipelines, and not the same ones
+/// in every run (an RX 9070 XT in Belobug/VIctory-Belobug-AMD 81ebb7bdc, an
+/// RX 7700 XT here, in the loading screen): the process ended. The handler
+/// does the least there is: it notes where, signals, and leaves the worker
+/// asleep for good, with no allocation, lock or file (the crash may have
+/// been under any of them). The watcher lists the pipeline in
+/// [`CRASHED_FILE`], answers it with no host pipeline (its draws are
+/// dropped, as an untranslated one's) and starts another worker.
+fn guard_start() {
+    use windows_sys::Win32::System::Diagnostics::Debug::AddVectoredExceptionHandler;
+    use windows_sys::Win32::System::Threading::CreateEventW;
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    if !guard_on() {
+        return;
+    }
+    ONCE.call_once(|| {
+        // SAFETY: an unnamed auto-reset event, no security attributes.
+        let event = unsafe { CreateEventW(std::ptr::null(), 0, 0, std::ptr::null()) };
+        if event.is_null() {
+            tracing::warn!("no event for the driver's compiler crashes: they are not caught");
+            return;
+        }
+        CRASH_EVENT.store(event as usize, Ordering::Release);
+        let spawned = std::thread::Builder::new().name("leonida-pipeline-watch".into()).spawn(watch);
+        if let Err(e) = spawned {
+            tracing::warn!(error = %e, "no thread for the driver's compiler crashes: they are not caught");
+            return;
+        }
+        // SAFETY: a handler that lives as long as the process.
+        unsafe {
+            AddVectoredExceptionHandler(1, Some(compiler_crashed));
+        }
+        tracing::info!("the driver's compiler crashing on a pipeline worker is caught (LEONIDA_COMPILER_GUARD=0: not)");
+    });
+}
+
+/// The handler: a worker inside a compile read or wrote one of the first
+/// pages. See [`guard_start`].
+unsafe extern "system" fn compiler_crashed(
+    info: *mut windows_sys::Win32::System::Diagnostics::Debug::EXCEPTION_POINTERS,
+) -> i32 {
+    use windows_sys::Win32::System::Threading::{SetEvent, Sleep};
+    const ACCESS_VIOLATION: i32 = 0xc000_0005_u32 as i32;
+    const CONTINUE_SEARCH: i32 = 0;
+    // SAFETY: the system passes a live record.
+    let record = unsafe { &*(*info).ExceptionRecord };
+    if record.ExceptionCode != ACCESS_VIOLATION
+        || record.NumberParameters < 2
+        || record.ExceptionInformation[1] >= 0x10000
+    {
+        return CONTINUE_SEARCH;
+    }
+    if !COMPILING.try_with(|c| c.get()).unwrap_or(false) {
+        return CONTINUE_SEARCH;
+    }
+    let slot = WORKER_SLOT.try_with(|s| s.get()).unwrap_or(usize::MAX);
+    if slot >= MAX_SLOTS {
+        return CONTINUE_SEARCH;
+    }
+    let _ = COMPILING.try_with(|c| c.set(false));
+    FAULT_ADDRESS[slot].store(record.ExceptionInformation[1] as u64, Ordering::Relaxed);
+    #[cfg(target_arch = "x86_64")]
+    // SAFETY: the system passes a live context.
+    FAULT_RIP[slot].store(unsafe { (*(*info).ContextRecord).Rip }, Ordering::Relaxed);
+    CRASHED[slot].store(true, Ordering::Release);
+    let event = CRASH_EVENT.load(Ordering::Acquire);
+    if event != 0 {
+        // SAFETY: the event lives as long as the process.
+        unsafe { SetEvent(event as windows_sys::Win32::Foundation::HANDLE) };
+    }
+    loop {
+        // SAFETY: a plain sleep.
+        unsafe { Sleep(u32::MAX - 1) };
+    }
+}
+
+/// The thread that deals with the workers the compiler crashed under.
+fn watch() {
+    use windows_sys::Win32::System::Threading::{INFINITE, WaitForSingleObject};
+    loop {
+        let event = CRASH_EVENT.load(Ordering::Acquire);
+        // SAFETY: the event lives as long as the process.
+        unsafe { WaitForSingleObject(event as windows_sys::Win32::Foundation::HANDLE, INFINITE) };
+        for (slot, crashed) in CRASHED.iter().enumerate() {
+            if crashed.swap(false, Ordering::AcqRel) {
+                lost(slot);
+            }
+        }
+    }
+}
+
+/// The worker at `slot` is gone with the pipeline it was making: what the
+/// worker's loop does after a pipeline is done here for it.
+fn lost(slot: usize) {
+    let job = {
+        let mut jobs = ACTIVE_JOBS.lock().unwrap_or_else(|e| e.into_inner());
+        jobs.get_mut(slot).and_then(Option::take)
+    };
+    let Some(p) = job else {
+        return;
+    };
+    tracing::error!(
+        key = %p.key,
+        shaders = ?p.shaders,
+        rip = format_args!("{:#x}", FAULT_RIP[slot].load(Ordering::Relaxed)),
+        address = format_args!("{:#x}", FAULT_ADDRESS[slot].load(Ordering::Relaxed)),
+        "the driver's compiler crashed making a host pipeline: it is left out (listed in {CRASHED_FILE}), the worker is replaced"
+    );
+    let known = crashed_keys(|keys| !keys.insert(p.key.clone()));
+    if !known && let Some(dir) = super::library::folder() {
+        use std::io::Write;
+        let file = std::fs::OpenOptions::new().create(true).append(true).open(dir.join(CRASHED_FILE));
+        if let Ok(mut f) = file {
+            let _ = writeln!(f, "{} ended the compiler in a run: {:?}", p.key, p.shaders);
+        }
+    }
+    let _ = p.made.set(None);
+    {
+        let (lock, done) = &DONE;
+        let _held = lock.lock().unwrap_or_else(|e| e.into_inner());
+        done.notify_all();
+    }
+    if WAITING.fetch_sub(1, Ordering::Relaxed) == 1 {
+        drained();
+    }
+    if !spawn_worker() {
+        tracing::warn!("no pipeline worker to take the place of the one the compiler crashed under");
     }
 }
 
@@ -304,33 +532,50 @@ fn workers() -> bool {
     *RUNNING.get_or_init(|| {
         let mut running = false;
         let workers = std::thread::available_parallelism().map_or(2, |n| (n.get() / 2).clamp(2, 8));
-        for i in 0..workers {
-            let spawned = std::thread::Builder::new()
-                .name(format!("leonida-pipelines-{i}"))
-                .spawn(|| {
-                    // Below the title's own threads (loading, recording).
-                    // SAFETY: a plain call on our own thread.
-                    unsafe {
-                        use windows::Win32::System::Threading::*;
-                        let _ = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
-                    }
-                    loop {
-                        next().make();
-                        if WAITING.fetch_sub(1, Ordering::Relaxed) == 1 {
-                            drained();
-                        } else {
-                            super::library::save(false);
-                        }
-                    }
-                });
-            if let Err(e) = spawned {
-                tracing::warn!(error = %e, "no pipeline worker");
-            } else {
+        guard_start();
+        for _ in 0..workers {
+            if spawn_worker() {
                 running = true;
             }
         }
         running
     })
+}
+
+/// Starts one pipeline worker.
+fn spawn_worker() -> bool {
+    let slot = NEXT_SLOT.fetch_add(1, Ordering::Relaxed);
+    let spawned = std::thread::Builder::new()
+        .name(format!("leonida-pipelines-{slot}"))
+        .spawn(move || {
+            WORKER_SLOT.set(slot);
+            // Below the title's own threads (loading, recording).
+            // SAFETY: a plain call on our own thread.
+            unsafe {
+                use windows::Win32::System::Threading::*;
+                let _ = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
+            }
+            loop {
+                let p = next();
+                {
+                    // (If the compiler crashes in here this thread never
+                    // returns: `lost` does what follows for it.)
+                    let _compile = Compile::begin(slot, &p);
+                    p.make();
+                }
+                if WAITING.fetch_sub(1, Ordering::Relaxed) == 1 {
+                    drained();
+                } else {
+                    super::library::save(false);
+                }
+            }
+        });
+    if let Err(e) = spawned {
+        tracing::warn!(error = %e, "no pipeline worker");
+        false
+    } else {
+        true
+    }
 }
 
 /// The most pipelines waiting at once since the workers last ran out.
@@ -401,5 +646,17 @@ mod tests {
         assert_eq!(queue.push(&promoted, REQUESTED), None);
         assert!(Arc::ptr_eq(&queue.pop().unwrap(), &earlier));
         assert!(queue.pop().is_none());
+    }
+
+    /// A pipeline the driver's compiler crashed on is not compiled again.
+    #[test]
+    fn a_pipeline_the_compiler_crashed_on_is_not_made_again() {
+        let mut p = Pending::new(Vec::new(), None);
+        p.key = "compiler-crashed-test".to_owned();
+        crashed_keys(|keys| keys.insert(p.key.clone()));
+        let before = SKIPPED_CRASHED.load(Ordering::Relaxed);
+        p.make();
+        assert!(matches!(p.made.get(), Some(None)));
+        assert!(SKIPPED_CRASHED.load(Ordering::Relaxed) > before);
     }
 }
