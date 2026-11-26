@@ -12,6 +12,16 @@ runtime services, a Direct3D 12 back end and a shader recompiler (console GPU co
 The goal is a console-like experience on PC: straight into play, a steady 30 fps (33 ms a frame) or better, the
 console's picture, no stutter, no crashes.
 
+**For everyone's PC, not just yours.** Many projects like this one are tuned on the developer's own machine and
+run badly everywhere else. This one aims to run as well as it can on whatever hardware the user has, and to be usable
+by people who can't code and have no AI assistant. In practice:
+
+- A switch that helped on your card goes into `gpu-profiles.json` as a profile that matches your card (or opt-in),
+  with its figures, not into `base` and not into the run scripts. `base` holds only what helps on every card measured.
+- Never make another card slower or less stable to make yours faster. If you could only measure on one card, say so.
+- Whatever a user has to do goes in the README in plain steps they can copy: one script to run, no environment
+  variables to set by hand, no knowledge of Rust, git internals or the code assumed. Error messages say what to do.
+
 It is a fork of [fxceless/victory-gta6](https://github.com/fxceless/victory-gta6), itself a fork of
 [Marvisak/VIctory](https://github.com/Marvisak/VIctory), renamed to Leonida Legacy. GPL-3.0-or-later.
 
