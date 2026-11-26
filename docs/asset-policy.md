@@ -47,7 +47,9 @@ user's dump), `test_titles`, and `cache_dir` for everything derived
    `cargo xtask install-hooks`) is an allowlist: files must have an allowed
    type, be under 512 KiB, contain no binary data or known binary
    signatures, and hold no long hex/base64 runs. Exceptions need an entry
-   with a reason in `xtask/src/policy.rs`.
+   with a reason in `xtask/src/policy.rs`. A symbolic link passes when it
+   points inside the repository by a relative path; what it points at is
+   checked as a file of its own.
 3. At runtime, everything that writes derived data calls
    `leonida_core::ensure_outside_repo`.
 4. Tests that need real files take their paths from environment variables

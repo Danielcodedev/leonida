@@ -58,7 +58,7 @@ It is a fork of [fxceless/victory-gta6](https://github.com/fxceless/victory-gta6
 | `scripts/rename-from-upstream.ps1` | renames code taken from upstream (`victory` to `leonida`) |
 | `run-gta6.ps1` | builds and starts the game with the measured frame-rate switches |
 | `docs/` | architecture, asset policy, ray tracing, the fork's measurement log |
-| `.claude/skills/` | agent skills: `boot-triage`, `missing-imports`, `trace-import`, `renderdoc-gpu-debug` (each `SKILL.md` reads on its own) |
+| `.claude/skills/` | agent skills, copied in `.agents/skills/` for other agents; [AGENTS.md](AGENTS.md) lists them. Edit both copies |
 
 ## Commands
 

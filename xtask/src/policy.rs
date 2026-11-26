@@ -3,8 +3,10 @@
 //!
 //! This is an allowlist, not a blocklist: a file passes only if its name is
 //! on the list, it is not too big, it is text, and it does not smuggle data
-//! inside text (long hex/base64 runs).
+//! inside text (long hex/base64 runs). A symbolic link carries no data of
+//! its own: it passes when it points inside the repository.
 
+use std::collections::HashSet;
 use std::path::Path;
 use std::process::Command;
 
@@ -50,12 +52,16 @@ const FORBIDDEN_MAGIC: &[(&[u8], &str)] = &[
 
 pub fn run(root: &Path, staged: bool) -> Result<()> {
     let files = list_files(root, staged)?;
+    let links = symlinks(root)?;
     let mut violations = Vec::new();
     for path in &files {
         if EXCEPTIONS.iter().any(|(p, _)| p == path) {
             continue;
         }
-        let content = if staged {
+        let link = links.contains(path);
+        // A link's blob in the index is its target, whether or not this
+        // clone made a real link of it.
+        let content = if staged || link {
             let out = Command::new("git")
                 .args(["show", &format!(":{path}")])
                 .current_dir(root)
@@ -70,7 +76,12 @@ pub fn run(root: &Path, staged: bool) -> Result<()> {
                 Err(_) => continue,
             }
         };
-        for problem in check(path, &content) {
+        let problems = if link {
+            check_link(path, &content)
+        } else {
+            check(path, &content)
+        };
+        for problem in problems {
             violations.push(format!("{path}: {problem}"));
         }
     }
@@ -142,6 +153,59 @@ fn list_files(root: &Path, staged: bool) -> Result<Vec<String>> {
         .collect())
 }
 
+/// The paths the index holds as symbolic links (mode 120000).
+fn symlinks(root: &Path) -> Result<HashSet<String>> {
+    let out = Command::new("git")
+        .args(["ls-files", "-s", "-z"])
+        .current_dir(root)
+        .output()
+        .context("running git")?;
+    if !out.status.success() {
+        return Ok(HashSet::new());
+    }
+    Ok(out
+        .stdout
+        .split(|&b| b == 0)
+        .filter_map(|entry| {
+            let entry = String::from_utf8_lossy(entry);
+            let (meta, path) = entry.split_once('\t')?;
+            meta.starts_with("120000 ").then(|| path.replace('\\', "/"))
+        })
+        .collect())
+}
+
+/// All problems with a symbolic link at `path` whose target is `target`.
+/// Only a relative path to a place inside the repository passes; what it
+/// points at is checked as a file of its own. Pure, for testing.
+pub fn check_link(path: &str, target: &[u8]) -> Vec<String> {
+    let Ok(target) = std::str::from_utf8(target) else {
+        return vec!["symbolic link target is not text".to_owned()];
+    };
+    if target.is_empty() || target.len() > 1024 || target.chars().any(char::is_control) {
+        return vec!["symbolic link target is not a plain path".to_owned()];
+    }
+    if target.starts_with(['/', '\\']) || target.contains(':') {
+        return vec![format!("symbolic link to an absolute path ({target})")];
+    }
+    let mut place: Vec<&str> = path.split('/').collect();
+    place.pop(); // the link's own name
+    for part in target.split(['/', '\\']) {
+        match part {
+            "" | "." => {}
+            ".." => {
+                if place.pop().is_none() {
+                    return vec![format!("symbolic link leaves the repository ({target})")];
+                }
+            }
+            name => place.push(name),
+        }
+    }
+    if place.is_empty() {
+        return vec![format!("symbolic link to the repository root ({target})")];
+    }
+    Vec::new()
+}
+
 /// All problems with one file. Pure, for testing.
 pub fn check(path: &str, content: &[u8]) -> Vec<String> {
     let mut problems = Vec::new();
@@ -183,7 +247,7 @@ fn longest_encoded_run(content: &[u8]) -> Option<usize> {
 
 #[cfg(test)]
 mod tests {
-    use super::check;
+    use super::{check, check_link};
 
     /// Enforces the policy wherever tests run, even in clones without the hook.
     #[test]
@@ -213,6 +277,21 @@ mod tests {
             !check("a.rs", &vec![b'a'; 600 * 1024]).is_empty(),
             "too big"
         );
+    }
+
+    #[test]
+    fn accepts_links_inside_the_repository() {
+        assert!(check_link(".agents/skills", b"../.claude/skills").is_empty());
+        assert!(check_link("a/b/link.md", b"../c/./d.md").is_empty());
+    }
+
+    #[test]
+    fn rejects_links_that_leave_the_repository() {
+        assert!(!check_link(".agents/skills", b"../../outside").is_empty());
+        assert!(!check_link("link", b"/etc/passwd").is_empty());
+        assert!(!check_link("link", b"C:\\Windows").is_empty());
+        assert!(!check_link("link", b".").is_empty(), "the root itself");
+        assert!(!check_link("link", b"a\0b").is_empty());
     }
 
     #[test]
