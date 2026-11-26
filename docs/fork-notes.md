@@ -5,6 +5,57 @@ The status summary is in [README.md](../README.md).
 
 ## Newest (2026-11-26)
 
+**P-5: less clock work in emulated wait hints.**
+Each `monitorx` / `mwaitx` pair previously read and converted the performance
+counter three times: once for each rate-line check and once for wait
+accounting. The `mwaitx` rate line now reuses its wait-accounting sample,
+leaving two reads per pair. The wait's sample stays at the same point;
+only that instruction's rate-line timestamp moves earlier, before the
+accounting and spin hint. Other instructions still sample after their work.
+At a 10 MHz counter frequency, microseconds are exactly `ticks / 10`, so
+that conversion avoids the wide multiply/divide. Other frequencies retain
+the wide calculation. Emulation, counters and wait boundaries are unchanged.
+
+Measured baseline `e39a313` against `abe9bf8` on an Intel Core i9-14900KS,
+Pop!_OS 22.04, Proton 11's Wine 11.0 through Steam's Flatpak runtime,
+Rust 1.98.1 release builds. The measured QPC frequency was 10,000,000 Hz.
+The PC has an RTX 5090, driver 580.173.02; this benchmark does no GPU work.
+Both revisions ran the same original synthetic wait-hint benchmark through
+the production exception handler, with exact exception-count and unchanged
+watched-memory assertions. The baseline received only the same benchmark
+frequency print and longer warmup/timed loops, with no runtime changes.
+
+Eight runs per version alternated order in one fresh, offline Wine prefix,
+with only benchmark clients pinned to physical P-cores 0, 2, 4 and 6. Each
+worker warmed up for 20,000 pairs and timed 500,000 pairs; one process per
+version also warmed up before the measured runs. No measured samples were
+removed. Medians and full ranges, in nanoseconds per exception:
+
+| Workers | Before, median (range) | After, median (range) | Median time reduction |
+|---------|------------------------|-----------------------|-----------------------|
+| 1 | 1228.7 (1197.3-1392.3) | 1209.1 (1177.2-1432.2) | 1.6% |
+| 2 | 841.7 (751.8-904.3) | 740.2 (681.5-857.0) | 12.1% |
+| 4 | 594.9 (503.2-692.7) | 572.8 (516.9-603.0) | 3.7% |
+
+Multiple workers measure aggregate throughput, not individual exception
+latency. Two workers improved in seven of eight paired runs; one and four
+workers each improved in five, with small median gains and substantial
+variation. A preliminary series with 50,000 timed pairs per worker had
+median reductions of 3.9%, 8.4% and 4.6%; the longer series above was run
+because those short samples varied widely. These are synthetic Wine
+measurements, not measured Windows gameplay or frame-rate gains. P-5 stays
+open: unsupported instructions still take exceptions.
+
+Regression tests compare conversion against wide arithmetic across nine
+frequencies and long uptimes, preserve wait transitions at the 2 ms boundary
+and on monitor changes, and check that both hints preserve the entire saved
+CPU context except the instruction pointer. To repeat the longer benchmark
+on an Intel CPU without native MONITORX, run it alone in release mode:
+
+```powershell
+cargo test -p leonida-loader --lib --release --locked benchmark_monitor_wait_exceptions -- --ignored --nocapture --test-threads=1
+```
+
 **P-5: repeated console-instruction warnings no longer take a shared lock.**
 Every decoded console-only instruction used to lock a vector just to check
 whether its kind had already been logged. A bit per kind now records that
