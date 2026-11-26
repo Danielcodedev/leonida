@@ -5,6 +5,26 @@ The status summary is in [README.md](../README.md).
 
 ## Newest (2026-11-26)
 
+**UP-1: keep a shader-cache miss's translation.**
+Adapted from upstream VIctory
+[`bca3ecd`](https://github.com/Marvisak/VIctory/commit/bca3ecd00a3e0cf4814e0061cafc510f0a286ba2).
+A cache miss keeps the shader it translated instead of reading and decoding
+the entry it just wrote. If publication fails, the usable translation is
+returned with one warning per process about the cache problem. Previously,
+that I/O failure discarded the shader and could prevent its pipeline from
+being created. Translation failures still return errors; cache hits still
+decode and validate the stored entry, with damaged entries translated again.
+The cache format and its atomic publication are unchanged. The existing build
+fingerprint includes this source file, so this update invalidates old entries
+once; warm the cache again before comparing gameplay performance.
+
+Original synthetic regression tests cover a cache folder replaced by a file,
+a directory blocking publication at the entry's destination, staging-file
+cleanup, translation errors, cache hits and corrupt-entry recovery. Both
+publication regressions fail on `a141614` before the fix. No game data is used
+and no gameplay or frame-rate improvement is claimed. UP-1 remains open for
+other useful upstream changes.
+
 **U-3: graphics profiles are selected by the executable.**
 Direct `leonida run` and translation warm-up now resolve the same measured
 base profile that the launch scripts used, before the runtime caches its
