@@ -98,6 +98,16 @@ thread_local! {
     static WAIT: Cell<(u64, u64, usize, u64, u32)> = const { Cell::new((0, 0, 0, 0, 0)) };
 }
 
+/// Exact integer microseconds; the common 10 MHz counter needs only a narrow division.
+/// Other counter frequencies retain the wide multiply so a long uptime cannot overflow.
+fn counter_us(ticks: u64, per_second: u64) -> u64 {
+    if per_second == 10_000_000 {
+        ticks / 10
+    } else {
+        (ticks as u128 * 1_000_000 / per_second as u128) as u64
+    }
+}
+
 /// Microseconds on the performance counter.
 fn clock_us() -> u64 {
     static PER_SECOND: std::sync::OnceLock<i64> = std::sync::OnceLock::new();
@@ -110,7 +120,7 @@ fn clock_us() -> u64 {
     let mut now = 0i64;
     // SAFETY: a valid out pointer.
     unsafe { windows_sys::Win32::System::Performance::QueryPerformanceCounter(&mut now) };
-    (now as u128 * 1_000_000 / per_second as u128) as u64
+    counter_us(now as u64, per_second as u64)
 }
 
 /// Whether events are said one by one now: four seconds of every two minutes of the wall
@@ -147,8 +157,7 @@ fn wait_ended(begin: u64, last: u64, address: usize, wanted: u64, spins: u32) {
 }
 
 /// A `mwaitx` of this thread: part of the wait under way, or the first of a new one.
-fn wait_step() {
-    let now = clock_us();
+fn wait_step(now: u64) {
     let (address, wanted) = MONITOR.with(Cell::get);
     let (begin, last, was_at, was_for, spins) = WAIT.with(Cell::get);
     if begin != 0 && was_at == address && was_for == wanted && now.saturating_sub(last) < 2_000 {
@@ -162,8 +171,8 @@ fn wait_step() {
 }
 
 /// A line every five seconds: exceptions a second by kind, and the waits that ended.
-fn line() {
-    let now = clock_us() / 1000;
+fn line(now_us: u64) {
+    let now = now_us / 1000;
     let last = LINE_AT.load(Relaxed);
     if now < last + 5_000 || LINE_AT.compare_exchange(last, now, Relaxed, Relaxed).is_err() {
         return;
@@ -367,6 +376,7 @@ pub(crate) unsafe fn emulate(ctx: &mut CONTEXT) -> i32 {
     if first_observation(&SEEN, what) {
         tracing::warn!(instruction = ?what, at = format_args!("{rip:#x}"), "a console CPU instruction this CPU lacks: emulated (logged once)");
     }
+    let mut wait_at = None;
     match what {
         ConsoleOnly::Ud2 => return 0,
         ConsoleOnly::Clwb => {
@@ -387,7 +397,10 @@ pub(crate) unsafe fn emulate(ctx: &mut CONTEXT) -> i32 {
         }
         ConsoleOnly::Mwaitx => {
             KINDS[K_MWAITX].fetch_add(1, Relaxed);
-            wait_step();
+            let now = clock_us();
+            wait_step(now);
+            // The rate line can use this same sample; it needs no second counter read.
+            wait_at = Some(now);
             std::hint::spin_loop()
         }
         ConsoleOnly::Clzero | ConsoleOnly::ClzeroStep { .. } => {
@@ -404,7 +417,7 @@ pub(crate) unsafe fn emulate(ctx: &mut CONTEXT) -> i32 {
                 ctx.Rip += len as u64;
                 EMULATED.fetch_add(1, Relaxed);
                 KINDS[K_LOOP15].fetch_add(1, Relaxed);
-                line();
+                line(clock_us());
                 return CONTINUE_EXECUTION;
             }
             KINDS[K_CLZERO].fetch_add(1, Relaxed);
@@ -497,7 +510,7 @@ pub(crate) unsafe fn emulate(ctx: &mut CONTEXT) -> i32 {
     ) {
         KINDS[K_OTHER].fetch_add(1, Relaxed);
     }
-    line();
+    line(wait_at.unwrap_or_else(clock_us));
     ctx.Rip += len as u64;
     // How often this runs at all (each one is an exception: a trip into Windows and back).
     let emulated = EMULATED.fetch_add(1, Relaxed) + 1;
@@ -515,6 +528,116 @@ pub(crate) unsafe fn emulate(ctx: &mut CONTEXT) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn counter_microseconds_match_wide_arithmetic() {
+        // Tick boundaries, long uptimes, and counters that cannot use the 10 MHz path.
+        let frequencies = [
+            1,
+            3,
+            32_768,
+            1_000_000,
+            3_579_545,
+            10_000_000,
+            24_000_000,
+            3_000_000_000,
+            i64::MAX as u64,
+        ];
+        let check = |ticks: u64, frequency: u64| {
+            let expected = (ticks as u128 * 1_000_000 / frequency as u128) as u64;
+            assert_eq!(
+                counter_us(ticks, frequency),
+                expected,
+                "{ticks} / {frequency}"
+            );
+        };
+        for frequency in frequencies {
+            for ticks in [
+                0,
+                1,
+                9,
+                10,
+                11,
+                frequency - 1,
+                frequency,
+                frequency + 1,
+                u64::MAX / 1_000_000,
+                u64::MAX / 1_000_000 + 1,
+                i64::MAX as u64,
+            ] {
+                check(ticks, frequency);
+            }
+            let mut ticks = 7u64;
+            for _ in 0..10_000 {
+                ticks = ticks
+                    .wrapping_mul(6_364_136_223_846_793_005)
+                    .wrapping_add(1);
+                check(ticks & i64::MAX as u64, frequency);
+            }
+        }
+    }
+
+    #[test]
+    fn wait_tracking_uses_sampled_time_and_preserves_boundaries() {
+        let old_monitor = MONITOR.with(|m| m.replace((1, 7)));
+        let old_wait = WAIT.with(|w| w.replace((0, 0, 0, 0, 0)));
+        wait_step(100);
+        assert_eq!(WAIT.with(Cell::get), (100, 100, 1, 7, 1));
+        wait_step(2_099); // A gap strictly below 2 ms continues the same wait.
+        assert_eq!(WAIT.with(Cell::get), (100, 2_099, 1, 7, 2));
+        wait_step(4_099); // Exactly 2 ms starts another wait.
+        assert_eq!(WAIT.with(Cell::get), (4_099, 4_099, 1, 7, 1));
+        MONITOR.with(|m| m.set((2, 7)));
+        wait_step(4_100);
+        assert_eq!(WAIT.with(Cell::get), (4_100, 4_100, 2, 7, 1));
+        MONITOR.with(|m| m.set((2, 8)));
+        wait_step(4_101);
+        assert_eq!(WAIT.with(Cell::get), (4_101, 4_101, 2, 8, 1));
+        wait_step(4_100); // Keep the existing saturating treatment of a backwards sample.
+        assert_eq!(WAIT.with(Cell::get), (4_101, 4_100, 2, 8, 2));
+        MONITOR.with(|m| m.set(old_monitor));
+        WAIT.with(|w| w.set(old_wait));
+    }
+
+    #[test]
+    fn monitor_wait_emulation_preserves_saved_context() {
+        #[repr(align(16))]
+        struct Saved(std::mem::MaybeUninit<CONTEXT>);
+
+        let old_monitor = MONITOR.with(|m| m.replace((0, 0)));
+        let old_wait = WAIT.with(|w| w.replace((0, 0, 0, 0, 0)));
+        let old_code = CODE.with(|c| c.replace([(0, 0); 8]));
+        let watched = AtomicU64::new(0x1234_5678_9abc_def0);
+        for opcode in [0xfa, 0xfb] {
+            let mut code = [0xccu8; 16];
+            code[..3].copy_from_slice(&[0x0f, 0x01, opcode]);
+            let mut saved = Saved(std::mem::MaybeUninit::uninit());
+            let context = saved.0.as_mut_ptr();
+            let size = size_of::<CONTEXT>();
+            // SAFETY: CONTEXT contains integers and their arrays/unions, so every bit pattern
+            // is valid. Initialize all storage, including padding, and never move a typed
+            // CONTEXT value. Each temporary mutable reference ends before a byte snapshot.
+            // The decoder reads our live code; MONITORX/MWAITX do not write watched memory.
+            unsafe {
+                std::ptr::write_bytes(context.cast::<u8>(), 0xa5, size);
+                (*context).Rip = code.as_ptr() as u64;
+                (*context).Rax = std::ptr::from_ref(&watched) as u64;
+                let mut expected = std::slice::from_raw_parts(context.cast::<u8>(), size).to_vec();
+                let rip = std::mem::offset_of!(CONTEXT, Rip);
+                expected[rip..rip + 8].copy_from_slice(&((*context).Rip + 3).to_ne_bytes());
+                assert_eq!(emulate(&mut *context), CONTINUE_EXECUTION);
+                assert_eq!(
+                    std::slice::from_raw_parts(context.cast::<u8>(), size),
+                    expected,
+                    "opcode {opcode:#x}: only the saved instruction pointer may change"
+                );
+            }
+            assert_eq!(watched.load(Relaxed), 0x1234_5678_9abc_def0);
+        }
+        MONITOR.with(|m| m.set(old_monitor));
+        WAIT.with(|w| w.set(old_wait));
+        CODE.with(|c| c.set(old_code));
+    }
 
     const WARNING_KINDS: [ConsoleOnly; 10] = [
         ConsoleOnly::Clwb,
@@ -591,6 +714,13 @@ mod tests {
             return;
         }
         crate::report_crashes();
+        let mut frequency = 0i64;
+        // SAFETY: a valid out pointer for the current performance-counter frequency.
+        let available = unsafe {
+            windows_sys::Win32::System::Performance::QueryPerformanceFrequency(&mut frequency)
+        };
+        assert!(available != 0 && frequency > 0, "QPC frequency must be available");
+        eprintln!("wait exceptions: QPC frequency={frequency} Hz");
         const WARMUP: u64 = 2_000;
         const PAIRS: u64 = 50_000;
         for threads in [1, 2, 4] {
