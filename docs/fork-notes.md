@@ -501,6 +501,11 @@ refresh threads. A refresh needs its own mapped bytes to stay put, while
 the current lock also makes it wait for changes elsewhere in the title's
 address space. A remap can temporarily unmap a whole view to replace one
 page, so any narrower lock has to cover the full span of that view.
+`LEONIDA_TEXTURE_RANGE_LOCK=1` enables range protection for texture
+refreshes. It keeps overlapping views locked through the remap and its
+notifications. Reads of unrelated ranges can continue, unless they share
+a lock in the fixed table. The switch is off by default while the picture
+and timings are tested.
 
 **The passes over copies in the card's memory hash a piece with 64
 threads.** The compare after a submission and the rehash after ranges go

@@ -24,7 +24,8 @@
 //! system call writing into a guarded block fails (none is known to).
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::Mutex;
+use std::ops::Range;
+use std::sync::{Mutex, OnceLock, RwLock, RwLockReadGuard, RwLockWriteGuard, TryLockError};
 
 /// The unit tracked and copied: 64 KiB, the console's page (the kernel's
 /// 4 KiB pages fold into it). Finer units made the checks of the world's
@@ -1058,33 +1059,76 @@ pub(crate) fn views_mapped(section: usize, offset: u64, len: usize) {
 /// had asked whether the texture was all mapped and been told yes. Asking
 /// cannot help; not changing the mapping while such a read is under way
 /// does.
-static MAPPING: std::sync::RwLock<()> = std::sync::RwLock::new(());
+static MAPPING: RwLock<()> = RwLock::new(());
+
+// Texture staging only reads its own range. One lock covers a 2 MiB block;
+// blocks that share a lock may still wait for each other. Every caller takes
+// locks in table order, including ranges that wrap or cover the whole table.
+const MAPPING_BLOCK: usize = 2 << 20;
+const MAPPING_LOCK_COUNT: usize = 128;
+static MAPPING_LOCKS: [RwLock<()>; MAPPING_LOCK_COUNT] =
+    [const { RwLock::new(()) }; MAPPING_LOCK_COUNT];
+
+/// `LEONIDA_TEXTURE_RANGE_LOCK=1` lets a texture refresh read in place
+/// during a remap of unrelated memory. Off until tested in the title.
+fn texture_range_lock() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LEONIDA_TEXTURE_RANGE_LOCK").is_some_and(|v| v == "1"))
+}
+
+fn mapping_locks(range: Range<usize>) -> impl Iterator<Item = &'static RwLock<()>> {
+    let first = range.start / MAPPING_BLOCK;
+    let count = if range.is_empty() {
+        0
+    } else {
+        ((range.end - 1) / MAPPING_BLOCK - first + 1).min(MAPPING_LOCK_COUNT)
+    };
+    let start = first % MAPPING_LOCK_COUNT;
+    let end = start + count;
+    MAPPING_LOCKS[..end.saturating_sub(MAPPING_LOCK_COUNT)]
+        .iter()
+        .chain(&MAPPING_LOCKS[start..end.min(MAPPING_LOCK_COUNT)])
+}
 
 /// What the runtime holds while it changes what title memory shows
 /// ([`title_memory_remapping`]).
-pub struct Remapping(#[allow(dead_code)] std::sync::RwLockWriteGuard<'static, ()>, std::time::Instant);
+pub struct Remapping {
+    _range_locks: Vec<RwLockWriteGuard<'static, ()>>,
+    _mapping: RwLockWriteGuard<'static, ()>,
+    asked: std::time::Instant,
+}
 
 impl Drop for Remapping {
     fn drop(&mut self) {
         // From asking for the lock until it is let go (the frame log).
-        crate::framelog::add(crate::framelog::T::RemapUs, self.1.elapsed().as_micros() as u64);
+        crate::framelog::add(crate::framelog::T::RemapUs, self.asked.elapsed().as_micros() as u64);
     }
 }
 
-/// The runtime is about to map, unmap or move physical pages of title
-/// memory: until what it returns is dropped, no read of title memory in
-/// place is under way and none begins ([`title_memory_reading`]). Taken
-/// around the whole change, the unmapping and the mapping again.
-pub fn title_memory_remapping() -> Remapping {
+/// Protects all addresses that can become unmapped, including any portions of
+/// the old views that the runtime will temporarily unmap and then restore.
+/// Held from before unmapping until the replacement mappings are ready.
+pub fn title_memory_remapping(range: Range<usize>) -> Remapping {
+    lock_remapping(range, texture_range_lock())
+}
+
+fn lock_remapping(range: Range<usize>, ranged: bool) -> Remapping {
     let asked = std::time::Instant::now();
-    let held = MAPPING.write().unwrap_or_else(|e| e.into_inner());
+    // Readers that may follow aliases keep using the global lock.
+    let mapping = MAPPING.write().unwrap_or_else(|e| e.into_inner());
+    let mut range_locks = Vec::new();
+    if ranged {
+        range_locks.extend(
+            mapping_locks(range).map(|lock| lock.write().unwrap_or_else(|e| e.into_inner())),
+        );
+    }
     crate::framelog::add(crate::framelog::T::Remaps, 1);
     crate::framelog::add(crate::framelog::T::RemapWaitUs, asked.elapsed().as_micros() as u64);
-    Remapping(held, asked)
+    Remapping { _range_locks: range_locks, _mapping: mapping, asked }
 }
 
 /// What a read of title memory in place holds ([`title_memory_reading`]).
-pub struct Reading(#[allow(dead_code)] std::sync::RwLockReadGuard<'static, ()>);
+pub struct Reading(#[allow(dead_code)] RwLockReadGuard<'static, ()>);
 
 /// For reading title memory in place: until what it returns is dropped,
 /// the runtime changes no mapping, so memory found mapped stays mapped.
@@ -1098,11 +1142,48 @@ pub fn title_memory_reading() -> Reading {
 /// runtime changes a mapping (or waits to), for a caller that has another
 /// way to read and would rather not wait.
 pub fn title_memory_reading_now() -> Option<Reading> {
-    match MAPPING.try_read() {
-        Ok(guard) => Some(Reading(guard)),
-        Err(std::sync::TryLockError::Poisoned(e)) => Some(Reading(e.into_inner())),
-        Err(std::sync::TryLockError::WouldBlock) => None,
+    try_read_mapping(&MAPPING).map(Reading)
+}
+
+fn try_read_mapping(lock: &'static RwLock<()>) -> Option<RwLockReadGuard<'static, ()>> {
+    match lock.try_read() {
+        Ok(guard) => Some(guard),
+        Err(TryLockError::Poisoned(e)) => Some(e.into_inner()),
+        Err(TryLockError::WouldBlock) => None,
     }
+}
+
+pub(crate) enum TextureReading {
+    Global { _guard: Reading },
+    Range { _guards: Vec<RwLockReadGuard<'static, ()>> },
+}
+
+pub(crate) fn texture_memory_reading(
+    range: Range<usize>,
+    try_only: bool,
+) -> Option<TextureReading> {
+    if texture_range_lock() {
+        lock_texture_range(range, try_only).map(|guards| TextureReading::Range { _guards: guards })
+    } else if try_only {
+        title_memory_reading_now().map(|guard| TextureReading::Global { _guard: guard })
+    } else {
+        Some(TextureReading::Global { _guard: title_memory_reading() })
+    }
+}
+
+fn lock_texture_range(
+    range: Range<usize>,
+    try_only: bool,
+) -> Option<Vec<RwLockReadGuard<'static, ()>>> {
+    mapping_locks(range)
+        .map(|lock| {
+            if try_only {
+                try_read_mapping(lock)
+            } else {
+                Some(lock.read().unwrap_or_else(|e| e.into_inner()))
+            }
+        })
+        .collect()
 }
 
 /// The runtime mapped or unmapped title memory `[at, at + len)`: what it
@@ -1702,10 +1783,35 @@ mod tests {
 
 #[cfg(test)]
 mod mapping_tests {
-    use super::{title_memory_reading, title_memory_remapping};
+    use super::{
+        MAPPING_BLOCK, MAPPING_LOCK_COUNT, lock_remapping, lock_texture_range, mapping_locks,
+        title_memory_reading, title_memory_reading_now, title_memory_remapping,
+    };
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, mpsc};
     use std::time::Duration;
+
+    #[test]
+    fn a_disjoint_texture_read_can_start_during_a_remap() {
+        let boundary = MAPPING_BLOCK;
+        let changing = lock_remapping(boundary - 16..boundary + 16, true);
+        assert!(lock_texture_range(2 * boundary..2 * boundary + 16, true).is_some());
+        assert!(lock_texture_range(boundary - 32..boundary, true).is_none());
+        assert!(lock_texture_range(boundary..boundary + 32, true).is_none());
+        assert!(title_memory_reading_now().is_none());
+        drop(changing);
+        assert!(lock_texture_range(boundary - 16..boundary + 16, true).is_some());
+    }
+
+    #[test]
+    fn a_wide_or_wrapping_range_locks_each_block_in_table_order() {
+        let wrap = MAPPING_BLOCK * MAPPING_LOCK_COUNT;
+        let wrapped: Vec<_> = mapping_locks(wrap - 1..wrap + 1).map(std::ptr::from_ref).collect();
+        let all: Vec<_> = mapping_locks(0..wrap).map(std::ptr::from_ref).collect();
+        assert_eq!(wrapped, [all[0], all[MAPPING_LOCK_COUNT - 1]]);
+        assert!(mapping_locks(wrap..wrap).next().is_none());
+        assert!(mapping_locks(MAPPING_BLOCK..usize::MAX).map(std::ptr::from_ref).eq(all));
+    }
 
     /// A change of mapping waits for a read in place that is under way, and
     /// a read in place waits for a change of mapping.
@@ -1719,7 +1825,7 @@ mod mapping_tests {
             let changed = changed.clone();
             std::thread::spawn(move || {
                 began.send(()).unwrap();
-                let _changing = title_memory_remapping();
+                let _changing = title_memory_remapping(0..MAPPING_BLOCK);
                 changed.store(true, Ordering::SeqCst);
             })
         };
@@ -1731,7 +1837,7 @@ mod mapping_tests {
         assert!(changed.load(Ordering::SeqCst));
         // A change holds; the read does not begin until it is done.
         let read = Arc::new(AtomicBool::new(false));
-        let changing = title_memory_remapping();
+        let changing = title_memory_remapping(0..MAPPING_BLOCK);
         let (began, wait) = mpsc::channel();
         let reader = {
             let read = read.clone();
