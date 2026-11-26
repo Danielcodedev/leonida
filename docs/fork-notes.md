@@ -12,7 +12,8 @@ switches. The catalog is embedded at build time; an optional
 `gpu-profiles.local.json` beside the selected config is applied afterwards.
 The base profile still contains the same eight values, and `card-windows`
 and the optional one-record clamp remain opt-in. This moves existing
-optimizations into direct Windows/Wine launches; it adds no measured FPS gain.
+optimizations into direct Windows/Wine launches. No new gameplay frame-rate
+measurement is claimed.
 
 `[graphics]` in `leonida.toml` provides typed settings for the eleven
 options in the catalog. Explicit environment values override TOML, and
@@ -37,6 +38,22 @@ their temporary environment changes afterwards. `-SpeedSwitches off`
 disables both profile and TOML settings through `LEONIDA_GRAPHICS_OFF=1`
 and clears runtime overrides, preserving adapter and capture-hook selection.
 Shareable switch reports redact paths and other arbitrary string values.
+
+Validation uses original synthetic inputs: 32 core tests and 13 default /
+14 diagnostics CLI integration tests, run on native Windows and through
+Wine. Each integration suite runs three generated PE programs through the
+real loader, checking that profile, TOML and environment values reach the
+title. The PowerShell checks also cover Unicode profile names, empty
+overrides, state restoration, report redaction and baseline selection.
+They inspect the complete environment block: Windows PowerShell 5.1's
+single-variable lookup can mistake an empty value for an absent one.
+
+On an Intel Core i9-14900KS / RTX 5090, NVIDIA 580.173.02, Pop!_OS 22.04
+and Proton 11's Wine 11.0 in Steam's offline Flatpak runtime, the physical
+adapter parity test passed and a direct CLI query selected exactly the
+eight base settings. DXVK reports an AMD vendor ID for this NVIDIA card;
+profiles intentionally use the adapter identity exposed to Direct3D.
+No game files were used in these checks.
 
 **P-5: less clock work in emulated wait hints.**
 Each `monitorx` / `mwaitx` pair previously read and converted the performance
