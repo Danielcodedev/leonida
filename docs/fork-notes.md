@@ -286,6 +286,21 @@ use):
   the title holds (2.2 to 3.0 GB of the copies were levels it does not
   hold). Ran on an RTX 3080 12 GB (3.1 GB saved) and on an RTX 5060 Laptop
   8 GB with 16 GB of RAM (two runs into the first cutscene, no device loss).
+- A skin-bake draw's own textures can be uploaded before it
+  (`LEONIDA_BAKE_SOURCES=1`, **off by default**; fxceless/victory-fork pull
+  request #1264 by UwUCammie, which had it on). RTX 3080 12 GB, driver
+  621.24, Ryzen 7 7800X3D, one unattended run each on `main` with #33
+  (`scripts/measure-run.ps1`): the most textures one bake draw was missing
+  fell from 18 to 4, bake draws that uploaded their own textures first
+  0 -> 3 of 8 logged, textures still waiting at the end 13,353 -> 9,302;
+  usual frame 157 -> 150 ms (the run without it had a spike in preparing,
+  so no speed is claimed). In the shot 600 frames into the world, hands
+  that were missing were drawn, but one face had wrong colours it did not
+  have without the switch. Cause not known. A guess: the forced pass also
+  uploads a bake's texture that is only partly mapped (`draw.rs`, the
+  `partly` path lets a bake's own texture through when its slot shows
+  something else), so the bake reads bytes that are not there yet and
+  keeps what it made. Off until that is found.
 - Refused texture slots are held back for a few seconds so that a pass
   reaches the slots behind them (`LEONIDA_FULL_CARD_PASS=0` = as before);
   room can be kept for the card copies of title buffers
