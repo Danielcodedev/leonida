@@ -39,6 +39,64 @@ To reproduce on Windows, run the ignored test alone in release mode:
 cargo test -p leonida-loader --lib --release --locked benchmark_monitor_wait_exceptions -- --ignored --nocapture --test-threads=1
 ```
 
+**P-2: an opt-in single-record indirect clamp.** With
+`LEONIDA_INDIRECT_SINGLE=1`, a clamp of one record uses a cached one-thread
+pipeline instead of launching 64 threads, filling shared arrays, and
+synchronizing the group twice. The shared source keeps the same argument
+limits and stores; the single thread charges the same saturating budget
+and mesh diagnostics. Multi-record windows and gathered records keep the
+grouped shader. The resource and UAV barriers are unchanged. If the new
+pipeline cannot compile, the existing one remains available.
+
+Measured on an RTX 5090 32 GB, NVIDIA 580.173.02, Intel Core i9-14900KS,
+Pop!_OS 22.04, with Rust 1.98.1 Windows MSVC release binaries. The isolated,
+offline Steam Flatpak runtime uses Proton 11's Wine 11.0, bundled DXVK and
+vkd3d-proton, and Microsoft's `d3dcompiler_47.dll` from Windows SDK package
+10.0.28000.2957. Wine's built-in compiler could not compile the baseline
+shader. The physical Vulkan device and DXGI adapter name were verified as
+the RTX 5090; these are hardware GPU timestamps, not software-renderer times.
+
+The synthetic benchmark executes 3,200 of our own triangle draws per frame,
+with the current grouped shader and its specialization in the same binary.
+It keeps barriers and budget placement equal, resets the budget before the
+timestamp pair, and verifies the exact GPU work charge after each frame.
+Each process warms every case, then takes nine samples per case, reversing
+case order on alternate rounds. Eight process runs produced 72 samples per
+case. Times below are the median of the eight per-run medians, in ms; ranges
+are the smallest and largest of those medians.
+
+| Clamp / budget | Grouped shader, ms (range) | Specialization, ms (range) |
+|----------------|----------------------------|----------------------------|
+| One record / GPU memory | 26.532 (26.217-28.281) | 21.392 (20.178-23.175) |
+| One record / CPU-mapped | 26.236 (26.227-28.445) | 26.553 (26.218-28.319) |
+| Windows of 32 / GPU memory | 0.857 (0.847-0.874) | 0.854 (0.847-0.882) |
+| Windows of 32 / CPU-mapped | 1.026 (0.991-1.048) | 1.007 (0.993-1.224) |
+
+The one-record GPU-memory case took 19.4% less GPU time (5.14 ms less per
+synthetic frame); CPU recording stayed about 4.9 ms. There was no clear gain
+with a CPU-mapped budget. Both window controls execute the grouped shader.
+Individual samples had outliers, as high as 208 ms in the
+CPU-mapped case; no samples were discarded. This does not establish a
+gameplay frame-rate gain or results on other cards, so the switch stays off
+by default and no automatic graphics-card profile is changed. P-2 remains
+open. See the README's optional-clamp testing steps for a local profile.
+
+The hardware parity test executes both pipelines for 1,624 generated cases
+covering draw, indexed draw, compute and mesh records, count buffers,
+ahead-of-draw clamping, budget boundaries, zero-cost work and diagnostic
+wraparound. It compares every output and budget byte, untouched source and
+count buffers, inactive records, and padding sentinels. The same suite runs
+on Windows WARP. The explicit hardware test and benchmark fail if a hardware
+adapter or the specialized pipeline is unavailable; they cannot silently
+skip or fall back. No game files are needed:
+
+```powershell
+cargo test -p leonida-gpu --lib --release --locked `
+  host_single_records_match_grouped_arguments_and_budget -- --ignored --nocapture
+cargo test -p leonida-gpu --lib --release --locked `
+  bench_single_record_clamp -- --ignored --nocapture --test-threads=1
+```
+
 **The passes over copies in the card's memory hash a piece with 64
 threads.** The compare after a submission and the rehash after ranges go
 up walked each 64 KiB piece with one thread, 4,096 steps one after the
