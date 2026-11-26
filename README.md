@@ -144,6 +144,13 @@ chooses another location outside the repository. For symlinks to files in anothe
 pass `--read-only-dir` for each target directory. `--bind-only` checks imports without starting
 the title.
 
+On this NVIDIA test PC, Proton 11.0's vkd3d-proton 3.0.0 exited while creating compute pipelines
+during world loading. If you see that failure, use vkd3d-proton 3.2.0 or newer from the
+[official package workflow][vkd3d-proton]. Extract the package outside this repository and add
+`--vkd3d-dir "/path/to/vkd3d-proton/x64"` to the command above. That folder must contain the
+matching x64 `d3d12.dll` and `d3d12core.dll`; the launcher copies them only into its dedicated
+Wine prefix. Omit the option to use Proton's bundled pair.
+
 The script grants [Flatpak's PulseAudio socket][flatpak-sockets] and checks for its presence inside
 Steam's sandbox before starting the game. If the check fails, restore your desktop's
 PulseAudio-compatible audio service and Steam's audio permission. The title stays offline. This
@@ -153,6 +160,7 @@ to Wine. Only run game files you trust.
 [sdk-d3dcompiler]: https://learn.microsoft.com/en-us/windows/desktop/directx-sdk--august-2009-
 [cargo-xwin]: https://github.com/rust-cross/cargo-xwin
 [flatpak-sockets]: https://docs.flatpak.org/en/latest/flatpak-command-reference.html
+[vkd3d-proton]: https://github.com/HansKristian-Work/vkd3d-proton/actions/workflows/artifacts.yml
 
 ### Graphics settings
 

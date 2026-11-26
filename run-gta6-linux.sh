@@ -17,6 +17,7 @@ Required:
 Options:
   --exe EXE            Windows Leonida build (default: target/.../leonida.exe)
   --config FILE        Leonida settings (default: beside this script, if present)
+  --vkd3d-dir DIR      x64 DLL folder from a separate vkd3d-proton build
   --state-dir DIR      Prefix, cache and saves (default: ~/.local/share/leonida/proton)
   --read-only-dir DIR  Also expose a symlink target inside Steam Flatpak (repeatable)
   --bind-only          Bind imports without starting the title
@@ -59,6 +60,7 @@ proton_dir=''
 compiler=''
 exe="$script_dir/target/x86_64-pc-windows-msvc/release/leonida.exe"
 config=''
+vkd3d_dir=''
 [[ ! -f "$script_dir/leonida.toml" ]] || config="$script_dir/leonida.toml"
 state_dir="${XDG_DATA_HOME:-$HOME/.local/share}/leonida/proton"
 read_only_dirs=()
@@ -66,7 +68,7 @@ bind_only=false
 
 while (($#)); do
     case "$1" in
-        --game-dir|--proton|--compiler|--exe|--config|--state-dir|--read-only-dir)
+        --game-dir|--proton|--compiler|--exe|--config|--vkd3d-dir|--state-dir|--read-only-dir)
             (($# >= 2)) || fail "$1 needs a path"
             case "$1" in
                 --game-dir) game_dir=$2 ;;
@@ -74,6 +76,7 @@ while (($#)); do
                 --compiler) compiler=$2 ;;
                 --exe) exe=$2 ;;
                 --config) config=$2 ;;
+                --vkd3d-dir) vkd3d_dir=$2 ;;
                 --state-dir) state_dir=$2 ;;
                 --read-only-dir) read_only_dirs+=("$2") ;;
             esac
@@ -116,10 +119,17 @@ done
 wine=$(require_file 'Proton Wine' "$proton_dir/files/bin/wine")
 dxgi=$(require_file 'Proton DXVK DXGI' \
     "$proton_dir/files/lib/wine/dxvk/x86_64-windows/dxgi.dll")
-d3d12=$(require_file 'Proton vkd3d D3D12' \
-    "$proton_dir/files/lib/wine/vkd3d-proton/x86_64-windows/d3d12.dll")
-d3d12core=$(require_file 'Proton vkd3d D3D12Core' \
-    "$proton_dir/files/lib/wine/vkd3d-proton/x86_64-windows/d3d12core.dll")
+if [[ -n "$vkd3d_dir" ]]; then
+    vkd3d_dir=$(require_dir 'vkd3d-proton x64 DLL folder' "$vkd3d_dir")
+    require_outside_source "$vkd3d_dir" 'vkd3d-proton DLL folder'
+    d3d12=$(require_file 'vkd3d-proton D3D12' "$vkd3d_dir/d3d12.dll")
+    d3d12core=$(require_file 'vkd3d-proton D3D12Core' "$vkd3d_dir/d3d12core.dll")
+else
+    d3d12=$(require_file 'Proton vkd3d D3D12' \
+        "$proton_dir/files/lib/wine/vkd3d-proton/x86_64-windows/d3d12.dll")
+    d3d12core=$(require_file 'Proton vkd3d D3D12Core' \
+        "$proton_dir/files/lib/wine/vkd3d-proton/x86_64-windows/d3d12core.dll")
+fi
 if [[ -n "$config" ]]; then
     config=$(require_file 'Leonida config' "$config")
 fi
@@ -134,7 +144,7 @@ case "$game_dir/" in
 esac
 mkdir -p -- "$state_dir"
 state_dir=$(require_dir 'state directory' "$state_dir")
-for path in "$game_dir" "$proton_dir" "$compiler" "$exe" "$config" "$state_dir"; do
+for path in "$game_dir" "$proton_dir" "$compiler" "$exe" "$config" "$vkd3d_dir" "$state_dir"; do
     [[ "$path" != *:* ]] || fail "colon in path is unsupported by Flatpak/Wine: $path"
 done
 
