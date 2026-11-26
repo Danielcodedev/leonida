@@ -6502,19 +6502,27 @@ impl<'a> Lower<'a> {
 
     /// The sample `r` (made in `c` with the first sampler of `choice`) again
     /// with each other sampler `choice` can be, and the condition that picks it.
-    fn resampled(&mut self, c: usize, choice: &Option<(V, Vec<(u32, V)>)>, r: V) -> Vec<(V, V)> {
+    fn resampled(
+        &mut self,
+        c: usize,
+        choice: &Option<(V, Vec<(u32, V)>)>,
+        r: V,
+    ) -> Result<Vec<(V, V)>, Why> {
         let Some((n, handles)) = choice else {
-            return Vec::new();
+            return Ok(Vec::new());
         };
         let from = handles[0].1;
         let mut out = Vec::new();
         for &(k, h) in &handles[1..] {
-            if let Some(again) = self.s.m.call_with(c, r, from, h) {
-                let k = self.s.m.i32(k);
-                out.push((self.s.m.cmp(c, pred::EQ, *n, k), again));
-            }
+            let again = self
+                .s
+                .m
+                .call_with(c, r, from, h)
+                .ok_or("a sampler chosen by control flow")?;
+            let k = self.s.m.i32(k);
+            out.push((self.s.m.cmp(c, pred::EQ, *n, k), again));
         }
-        out
+        Ok(out)
     }
 
     /// The bytes per element of the buffer view `src` names, if the program
@@ -9848,6 +9856,9 @@ impl<'a> Lower<'a> {
                 }
             }
             if op == 81 {
+                if choice.is_some() {
+                    return Err("a sampler chosen by control flow");
+                }
                 // The clamped then the unclamped level of detail.
                 let Operand::Vector { reg, .. } = *data else {
                     return Err("an image result");
@@ -10202,7 +10213,12 @@ impl<'a> Lower<'a> {
         } else {
             (0..4).filter(|ch| dmask >> ch & 1 != 0).collect()
         };
-        let alts = self.resampled(c, &choice, r);
+        // The four texel reads of a gather take no sampler.
+        let alts = if gathered.is_some() {
+            Vec::new()
+        } else {
+            self.resampled(c, &choice, r)?
+        };
         let mut xs = Vec::new();
         for ch in channels {
             let x = match gathered {
