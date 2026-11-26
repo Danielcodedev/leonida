@@ -39,7 +39,6 @@ The goal: a console-like experience on PC. The game starts straight into play, h
 | P-5 | The title paces itself with `monitorx` / `mwaitx`, which only AMD processors have: about 280,000 emulated exceptions a second on an Intel processor. Find a cheaper way. | `leonida-loader` | game; an Intel CPU to measure |
 | P-6 | Translated shaders are too expensive: about 50 ms of a 97 ms frame are the title's own passes as translated. With every pass of the layer's gone, the first rooms would still be near 20 fps. On an RTX 3080, after #23 took the layer's own hash and compare passes from about 21 to 3.6 ms of card time a frame, the title's passes are about 95 ms of it. | `leonida-shader` | game, GPU |
 | P-8 | About 24 GB of memory is in use during play. | all | game |
-| P-9 | Wine/vkd3d rejects an empty host pipeline library at first launch, so host pipelines are not kept for later runs. | `leonida-gpu` | GPU, Wine |
 
 ## Stability
 

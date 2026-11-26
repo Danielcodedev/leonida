@@ -471,10 +471,21 @@ fn library() -> Option<&'static Library> {
 /// adapter or driver change, damage).
 fn open(device: &ID3D12Device1, blob: Blob) -> Option<Library> {
     let make = |bytes: &[u8]| -> windows::core::Result<ID3D12PipelineLibrary1> {
-        // SAFETY: the bytes outlive the library (kept beside it).
-        unsafe {
-            device.CreatePipelineLibrary::<ID3D12PipelineLibrary>(bytes)?.cast()
-        }
+        // SAFETY: the bytes outlive the library (kept beside it). For an empty library,
+        // vkd3d requires a null blob pointer; the Windows slice wrapper passes a non-null
+        // dangling pointer even when the length is zero. `raw` receives the owned interface.
+        let library: ID3D12PipelineLibrary = unsafe {
+            if bytes.is_empty() {
+                let mut raw = std::ptr::null_mut();
+                (device.vtable().CreatePipelineLibrary)(
+                    device.as_raw(), std::ptr::null(), 0, &ID3D12PipelineLibrary::IID, &mut raw,
+                )
+                .and_then(|| windows::core::Type::from_abi(raw))?
+            } else {
+                device.CreatePipelineLibrary(bytes)?
+            }
+        };
+        library.cast()
     };
     let mut rejected = false;
     if !blob.bytes().is_empty() {
@@ -754,6 +765,17 @@ mod tests {
         assert_ne!(a, name("mesh", b"root", &[b"vs", b"ps"], "state"));
         // Parts do not run into each other.
         assert_ne!(a, name("graphics", b"root", &[b"vsp", b"s"], "state"));
+    }
+
+    #[test]
+    fn a_new_cache_creates_an_empty_library() {
+        let Some(device) = crate::host::host().and_then(|h| h.device.cast::<ID3D12Device1>().ok()) else {
+            return; // no host GPU here
+        };
+        let library = open(&device, Blob::None).expect("an empty library");
+        // SAFETY: a plain query on a live library.
+        assert!(unsafe { library.library.GetSerializedSize() } > 0);
+        assert!(matches!(library._blob, Blob::None));
     }
 
     #[test]
