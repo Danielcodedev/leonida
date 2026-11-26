@@ -16,7 +16,7 @@ Required:
 
 Options:
   --exe EXE            Windows Leonida build (default: target/.../leonida.exe)
-  --config FILE        Leonida settings (default: ./leonida.toml if present)
+  --config FILE        Leonida settings (default: beside this script, if present)
   --state-dir DIR      Prefix, cache and saves (default: ~/.local/share/leonida/proton)
   --read-only-dir DIR  Also expose a symlink target inside Steam Flatpak (repeatable)
   --bind-only          Bind imports without starting the title
