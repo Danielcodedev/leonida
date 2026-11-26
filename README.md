@@ -100,7 +100,23 @@ powershell -ExecutionPolicy Bypass -File .\run-gta6.ps1
 ```
 
 `measure-gta6.ps1` does the same with the diagnostics build, the frame log and the card meter on, and saves
-everything the game prints to `%LOCALAPPDATA%\leonida\logs`.
+everything the game prints to `%LOCALAPPDATA%\leonida\logs`. `-SpeedSwitches off` runs it without the frame-rate
+switches, for a comparison in the same place.
+
+### Testing for the project, with no programming experience
+
+1. Download this repository (Code, Download ZIP) and unpack it, or clone it.
+2. Double-click `start-measure.cmd`. If the Visual Studio C++ build tools or Rust are missing, it offers to install
+   them with winget (about 3 GB, 5 to 15 minutes, asks first). The first build takes about 5 to 10 minutes.
+3. Give it the folder of your copy of the game, answer its questions, and play until the place you want to test.
+4. Close the game window. The script offers a short test report: your graphics card, driver, CPU, RAM, Windows
+   version, the switches that were on and the frame rates. It shows all of it before anything is shared, and never
+   includes log files, game files, paths or your user name.
+5. If you agree, it copies the report and opens `#test-results` on our [Discord](https://discord.gg/dxMD2XqyEJ).
+   Paste it with Ctrl+V and send it. Nothing is uploaded unless you post it yourself.
+
+Run it once with the speed switches on and once with them off, in the same place: the pair is what lets us add a
+profile for your card to `gpu-profiles.json`. Reports are kept in `%LOCALAPPDATA%\leonida\reports`.
 
 `shot-run.ps1` runs the game unattended and takes frame shots (`-ShotAt`, with `-Keys` to get through the menus) into
 `%LOCALAPPDATA%\leonida\shots`. Shots come from your game: keep them on your PC.
