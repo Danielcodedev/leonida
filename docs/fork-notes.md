@@ -138,6 +138,21 @@ eight base settings. DXVK reports an AMD vendor ID for this NVIDIA card;
 profiles intentionally use the adapter identity exposed to Direct3D.
 No game files were used in these checks.
 
+**R-7: untranslated shaders counted again; ordered-pixel shaders translate.**
+`leonida translate --list` on this tree: 26,148 programs, 282 failures
+(614 duplicates skipped). 195 are `GS_VoxelizeGeneric` geometry programs
+("an address in an SGPR that is no root parameter"); they drop no draws,
+since only vertex, pixel, compute and mesh programs are translated. 40 are
+"a descriptor chosen by control flow", 29 containers have no DXIL part.
+The 10 "a hardware SGPR input" were pixel shaders that wait for earlier
+waves of overlapping pixels (POPS): they read the SGPR after the primitive
+mask and `src_pops_exiting_wave_id`. Both now read as "no overlap"
+(`shortcut:`: the host orders nothing), and all 10 translate and validate.
+The 5 `CS_TraceShadowRays_*` ("a descriptor read only as data") load a
+buffer view from the resource heap at a computed index and walk the memory
+behind its address; that needs view addresses by heap slot from the host,
+as `SLOT_STRIDES` gives strides (not done).
+
 **P-5: less clock work in emulated wait hints.**
 Each `monitorx` / `mwaitx` pair previously read and converted the performance
 counter three times: once for each rate-line check and once for wait
