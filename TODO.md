@@ -65,6 +65,7 @@ The goal: a console-like experience on PC. The game starts straight into play, h
 | U-1 | One step from download to playing: build, warm the cache (P-7) and run, with no terminal knowledge needed. | `run-gta6.ps1` | - |
 | U-2 | Fullscreen and borderless window, and a choice of output resolution. | `leonida-gpu` | GPU |
 | U-4 | Pad first: after launch, the game is playable without touching the keyboard. | `leonida-hle` (input) | game |
+| U-7 | Provide a tested Linux/Proton launch path, including a working audio socket for Steam Flatpak. | Linux launcher, README | game, GPU |
 
 ## Code health
 
