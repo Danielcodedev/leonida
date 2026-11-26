@@ -10,10 +10,31 @@ mod decode;
 
 use decode::ConsoleOnly;
 use std::cell::Cell;
-use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
+use std::sync::atomic::{AtomicU16, AtomicU64, Ordering::Relaxed};
 use windows_sys::Win32::System::Diagnostics::Debug::CONTEXT;
 
 const CONTINUE_EXECUTION: i32 = -1;
+
+/// Claims the first warning for a kind of instruction, regardless of its operands.
+/// Seen kinds take only a load: the exception handler need not lock on every wait hint.
+fn first_observation(seen: &AtomicU16, instruction: ConsoleOnly) -> bool {
+    let bit = match instruction {
+        ConsoleOnly::Clwb => 1 << 0,
+        ConsoleOnly::Clzero => 1 << 1,
+        ConsoleOnly::ClzeroLoop { .. } => 1 << 2,
+        ConsoleOnly::ClzeroStep { .. } => 1 << 3,
+        ConsoleOnly::Rdpru => 1 << 4,
+        ConsoleOnly::Monitorx => 1 << 5,
+        ConsoleOnly::Mwaitx => 1 << 6,
+        ConsoleOnly::Rdpid(_) => 1 << 7,
+        ConsoleOnly::Extrq { .. } => 1 << 8,
+        ConsoleOnly::Insertq { .. } => 1 << 9,
+        ConsoleOnly::Ud2 => return false, // the title's own trap is not emulated or logged
+    };
+    // Only warning ownership is shared, not data published by another thread. The RMW
+    // chooses exactly one caller when several threads first see the same kind together.
+    seen.load(Relaxed) & bit == 0 && seen.fetch_or(bit, Relaxed) & bit == 0
+}
 
 /// Whether what Windows said about memory is remembered per thread (the regions it found
 /// writable, the code bytes it found readable) and not asked again at every emulated
@@ -342,14 +363,9 @@ pub(crate) unsafe fn emulate(ctx: &mut CONTEXT) -> i32 {
     // SAFETY: `n` bytes at `rip` are readable.
     let code = unsafe { std::slice::from_raw_parts(rip as *const u8, n) };
     let Some((what, len)) = decode::decode(code) else { return 0 };
-    static SEEN: std::sync::Mutex<Vec<std::mem::Discriminant<ConsoleOnly>>> = std::sync::Mutex::new(Vec::new());
-    if let Ok(mut seen) = SEEN.lock()
-        && !seen.contains(&std::mem::discriminant(&what))
-    {
-        seen.push(std::mem::discriminant(&what));
-        if what != ConsoleOnly::Ud2 {
-            tracing::warn!(instruction = ?what, at = format_args!("{rip:#x}"), "a console CPU instruction this CPU lacks: emulated (logged once)");
-        }
+    static SEEN: AtomicU16 = AtomicU16::new(0);
+    if first_observation(&SEEN, what) {
+        tracing::warn!(instruction = ?what, at = format_args!("{rip:#x}"), "a console CPU instruction this CPU lacks: emulated (logged once)");
     }
     match what {
         ConsoleOnly::Ud2 => return 0,
@@ -499,6 +515,128 @@ pub(crate) unsafe fn emulate(ctx: &mut CONTEXT) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const WARNING_KINDS: [ConsoleOnly; 10] = [
+        ConsoleOnly::Clwb,
+        ConsoleOnly::Clzero,
+        ConsoleOnly::ClzeroLoop { end_reg: 1 },
+        ConsoleOnly::ClzeroStep { ptr_reg: 2, end_reg: 3 },
+        ConsoleOnly::Rdpru,
+        ConsoleOnly::Monitorx,
+        ConsoleOnly::Mwaitx,
+        ConsoleOnly::Rdpid(0),
+        ConsoleOnly::Extrq { dst: 0, src: None, len: 8, idx: 16 },
+        ConsoleOnly::Insertq { dst: 0, src: 1, reg: false, len: 8, idx: 16 },
+    ];
+
+    #[test]
+    fn instruction_warnings_are_once_per_kind_not_per_operand() {
+        let seen = AtomicU16::new(0);
+        assert!(!first_observation(&seen, ConsoleOnly::Ud2));
+        for instruction in WARNING_KINDS {
+            assert!(first_observation(&seen, instruction), "{instruction:?}");
+            assert!(!first_observation(&seen, instruction), "{instruction:?}");
+        }
+        for instruction in [
+            ConsoleOnly::ClzeroLoop { end_reg: 15 },
+            ConsoleOnly::ClzeroStep { ptr_reg: 10, end_reg: 11 },
+            ConsoleOnly::Rdpid(15),
+            ConsoleOnly::Extrq { dst: 15, src: Some(14), len: 0, idx: 0 },
+            ConsoleOnly::Insertq { dst: 15, src: 14, reg: true, len: 0, idx: 0 },
+            ConsoleOnly::Ud2,
+        ] {
+            assert!(!first_observation(&seen, instruction), "{instruction:?}");
+        }
+    }
+
+    #[test]
+    fn concurrent_instruction_observers_claim_each_warning_once() {
+        let seen = AtomicU16::new(0);
+        let start = std::sync::Barrier::new(8);
+        std::thread::scope(|scope| {
+            let workers: Vec<_> = (0..8)
+                .map(|_| scope.spawn(|| {
+                    let mut claimed = [0; WARNING_KINDS.len()];
+                    for (count, instruction) in claimed.iter_mut().zip(WARNING_KINDS) {
+                        start.wait();
+                        for _ in 0..128 {
+                            *count += u32::from(first_observation(&seen, instruction));
+                        }
+                    }
+                    claimed
+                }))
+                .collect();
+            let mut total = [0; WARNING_KINDS.len()];
+            for worker in workers {
+                for (total, claimed) in total.iter_mut().zip(worker.join().unwrap()) {
+                    *total += claimed;
+                }
+            }
+            assert_eq!(total, [1; WARNING_KINDS.len()]);
+        });
+    }
+
+    /// Synthetic wait hints through the real vectored exception handler, with no game data.
+    /// Run this test alone on a CPU without MONITORX, in release mode, on both revisions:
+    /// `cargo test -p leonida-loader --release benchmark_monitor_wait_exceptions`,
+    /// followed by `-- --ignored --nocapture --test-threads=1`.
+    #[test]
+    #[ignore = "manual CPU performance measurement; run alone on a CPU without MONITORX"]
+    fn benchmark_monitor_wait_exceptions() {
+        // The extended feature bit reports MONITORX/MWAITX.
+        let native_wait = std::arch::x86_64::__cpuid(0x8000_0000).eax >= 0x8000_0001
+            && std::arch::x86_64::__cpuid(0x8000_0001).ecx & (1 << 29) != 0;
+        if native_wait {
+            eprintln!("skipped: this CPU supports MONITORX/MWAITX without emulation");
+            return;
+        }
+        crate::report_crashes();
+        const WARMUP: u64 = 2_000;
+        const PAIRS: u64 = 50_000;
+        for threads in [1, 2, 4] {
+            let start = std::sync::Barrier::new(threads);
+            let before = EMULATED.load(Relaxed);
+            let elapsed = std::thread::scope(|scope| {
+                let workers: Vec<_> = (0..threads).map(|_| scope.spawn(|| {
+                    let watched = AtomicU64::new(0);
+                    let pair = || {
+                        // SAFETY: the monitor address is ours and stays alive; the registered
+                        // handler emulates these unsupported wait hints without changing it.
+                        unsafe {
+                            std::arch::asm!(
+                                ".byte 0x0f, 0x01, 0xfa",
+                                ".byte 0x0f, 0x01, 0xfb",
+                                in("rax") std::ptr::from_ref(&watched),
+                                in("ecx") 0,
+                                in("edx") 0,
+                                in("rsi") 1u64,
+                                options(nostack),
+                            );
+                        }
+                    };
+                    for _ in 0..WARMUP {
+                        pair();
+                    }
+                    start.wait();
+                    let began = std::time::Instant::now();
+                    for _ in 0..PAIRS {
+                        pair();
+                    }
+                    let elapsed = began.elapsed();
+                    assert_eq!(watched.load(Relaxed), 0);
+                    elapsed
+                })).collect();
+                workers.into_iter().map(|worker| worker.join().unwrap()).max().unwrap()
+            });
+            assert_eq!(EMULATED.load(Relaxed) - before, 2 * (WARMUP + PAIRS) * threads as u64);
+            let exceptions = 2 * PAIRS * threads as u64;
+            eprintln!(
+                "wait exceptions: threads={threads} count={exceptions} \
+                 elapsed={elapsed:?} ns/exception={:.1}",
+                elapsed.as_nanos() as f64 / exceptions as f64,
+            );
+        }
+    }
 
     /// What the title's loop leaves, run line by line as the processor would: the lines it
     /// zeroed and the registers (rax, ptr) at the end, from the state at its first `clzero`.
