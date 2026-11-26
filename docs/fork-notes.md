@@ -5,6 +5,40 @@ The status summary is in [README.md](../README.md).
 
 ## Newest (2026-11-26)
 
+**P-5: repeated console-instruction warnings no longer take a shared lock.**
+Every decoded console-only instruction used to lock a vector just to check
+whether its kind had already been logged. A bit per kind now records that
+first observation atomically; repeated instructions only load the bits.
+Different operands of the same kind still share one warning, concurrent
+first observers still produce one warning, and `ud2` stays unlogged.
+Instruction emulation and wait accounting are unchanged.
+
+Measured on an Intel Core i9-14900KS, Pop!_OS 22.04, Proton 11's Wine 11.0
+through Steam's Flatpak runtime, Rust 1.98.1 release builds. The same
+synthetic benchmark was added to baseline `0a1a17b` and the changed tree.
+It executes real `monitorx` / `mwaitx` instructions through the production
+exception handler, checks the exact exception count and unchanged watched
+memory, and uses no game files. Each worker warms up for 2,000 pairs before
+50,000 timed pairs. Eight runs per version alternated their order, with
+both processes restricted to the same four physical P-cores.
+
+| Workers | Before, median ns/exception (range) | After, median ns/exception (range) |
+|---------|------------------------------------|-----------------------------------|
+| 1 | 1243.8 (1224.5-1718.5) | 1251.7 (1219.0-1278.7) |
+| 2 | 790.6 (749.2-1309.6) | 742.0 (728.5-891.0) |
+| 4 | 667.8 (589.0-1014.8) | 538.0 (499.2-855.6) |
+
+The multi-worker numbers describe aggregate throughput, not individual
+exception latency. Median time per exception fell 6.1% with two workers
+and 19.4% with four; one worker was essentially unchanged (+0.6%). These
+are synthetic measurements under Wine, not a frame-rate claim. P-5 stays
+open: the exceptions themselves remain, and Windows gameplay is unmeasured.
+To reproduce on Windows, run the ignored test alone in release mode:
+
+```powershell
+cargo test -p leonida-loader --lib --release --locked benchmark_monitor_wait_exceptions -- --ignored --nocapture --test-threads=1
+```
+
 **The passes over copies in the card's memory hash a piece with 64
 threads.** The compare after a submission and the rehash after ranges go
 up walked each 64 KiB piece with one thread, 4,096 steps one after the
