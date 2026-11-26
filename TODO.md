@@ -25,7 +25,7 @@ The goal: a console-like experience on PC. The game starts straight into play, h
 | R-4 | An indirect compute pass asks for about 77,500 thread groups in x, where one dispatch runs 65,535. The rest is cut off; split the dispatch. | `leonida-gpu` | game, GPU |
 | R-5 | Real queries, depth bounds, HDR output and scaling are missing. | `leonida-gpu` | game, GPU |
 | R-6 | Render-target metadata planes are not handled. | `leonida-formats`, `leonida-gpu` | game, GPU |
-| R-7 | Shaders that don't translate drop their draws. Count them again on this tree with `leonida translate --list` (the upstream counts in the fork notes are from 2026-11-23) and work down the list. | `leonida-shader` | game |
+| R-7 | Shaders that don't translate drop their draws. Count them again on this tree with `leonida translate --list` (the upstream counts in the fork notes are from 2026-11-23) and work down the list. Counted 2026-11-26 in the fork notes: the 195 `GS_VoxelizeGeneric` failures drop no draws (geometry programs are never translated); the 5 `CS_TraceShadowRays_*` need view addresses by heap slot from `leonida-gpu`. | `leonida-shader` | game |
 | R-8 | Mapping pool pages in a row as one view made remaps cheaper but broke texture streaming (black or red faces, garbage in 3 of 3 runs). Find out why before trying it again; see P-4. | `leonida-hle` (`xmem`) | game, GPU |
 
 ## Performance: a steady 30 fps
