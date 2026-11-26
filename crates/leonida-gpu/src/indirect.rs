@@ -2231,10 +2231,6 @@ void main() {
         for i in 0..RECORDS as usize {
             let rec = &out_words[i * 6..(i + 1) * 6];
             if rec[0] == (1 << 22) && rec[1] == 16 {
-                assert!(
-                    i == 1 || i == 2,
-                    "the first two real draws fit the budget: {survivors:?}, order={order:?}"
-                );
                 kept += 1;
             } else {
                 assert_eq!((rec[0], rec[1]), (0, 0), "excess draw must be zeroed");
@@ -2246,6 +2242,20 @@ void main() {
             assert_eq!(rec[5], 0xCAFE_0000 | (i as u32));
         }
         assert_eq!((kept, zeroed), (2, (RECORDS as usize) - 2));
+
+        // A group reserves its records' budget atomically, then admits them in lane
+        // order. There is no execution order between groups in one dispatch: either
+        // group can take the whole budget. Separate dispatches force each alternative.
+        let allowed: &[[usize; 2]] = match order {
+            None => &[[1, 2], [64, 65]],
+            Some([0, 64]) => &[[1, 2]],
+            Some([64, 0]) => &[[64, 65]],
+            _ => unreachable!("only the two complete groups may be submitted"),
+        };
+        assert!(
+            allowed.iter().any(|pair| survivors == *pair),
+            "one group's first two real draws must fit: {survivors:?}, order={order:?}"
+        );
     }
 
     /// Exercises `HostList::indirect_scratch`, `bound`, the scratch buffer's
