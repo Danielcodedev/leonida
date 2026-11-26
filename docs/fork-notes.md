@@ -75,7 +75,7 @@ are the smallest and largest of those medians.
 The one-record GPU-memory case took 19.4% less GPU time (5.14 ms less per
 synthetic frame); CPU recording stayed about 4.9 ms. There was no clear gain
 with a CPU-mapped budget. Both window controls execute the grouped shader.
-Individual samples had scheduling outliers, as high as 208 ms in the
+Individual samples had outliers, as high as 208 ms in the
 CPU-mapped case; no samples were discarded. This does not establish a
 gameplay frame-rate gain or results on other cards, so the switch stays off
 by default and no automatic graphics-card profile is changed. P-2 remains
