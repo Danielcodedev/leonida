@@ -73,7 +73,6 @@ The goal: a console-like experience on PC. The game starts straight into play, h
 
 | ID | Task | Where | Needs |
 |----|------|-------|-------|
-| C-1 | CI is red on clippy: `resource.rs:2553` (`placed_filler_twins` unused), `indirect.rs:2453` (`depth_written` never read), `fpsbox.rs:174` (`contains_key` then `insert`), `draw.rs:2577` (`sort_unstable_by_key`), `queue.rs:672`, `shadow.rs:2803` and `shadow.rs:3325` (`is_multiple_of`). All in `leonida-gpu`, all inherited from victory-gta6. | `leonida-gpu` | - |
 | C-2 | Failing test `indirect::tests::warp_budget_saturates_without_wraparound_and_preserves_draw_fields`, inherited from victory-gta6. Upstream VIctory `4ab20fc` ("the indirect budget is charged in record order and no longer wraps") may fix it; not checked. | `leonida-gpu` | - |
 | C-3 | `cargo fmt --check` reports about 1,420 differences. Run `cargo fmt` once, in a pull request of its own, at a moment when no other pull request is open (it touches almost every file), then add the check to CI. | all | - |
 | C-4 | 163 `shortcut:` markers where the code approximates the console (79 in `leonida-gpu`, 55 in `leonida-shader`, 23 in `leonida-hle`, 4 in `leonida-formats`, 2 in `leonida-loader`). Replace them with the console's real behaviour, one per pull request. | all | game |
