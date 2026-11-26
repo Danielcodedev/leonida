@@ -32,12 +32,12 @@ The goal: a console-like experience on PC. The game starts straight into play, h
 
 | ID | Task | Where | Needs |
 |----|------|-------|-------|
-| P-1 | Measure the frame-rate switches that `run-gta6.ps1` sets on more cards (AMD, NVIDIA 30 and 40 series, Intel). Turn on by default the ones that help everywhere without a device loss. | `leonida-gpu` | game, GPU |
+| P-1 | Measure the frame-rate switches that `run-gta6.ps1` sets on more cards (AMD, NVIDIA 30 and 40 series, Intel). Turn on by default the ones that help everywhere without a device loss. Since #24 the run scripts take their switches from `gpu-profiles.json` by graphics card: add a profile for each card measured, with its figures. | `leonida-gpu`, `gpu-profiles.json` | game, GPU |
 | P-2 | The per-record clamp before indirect draws is most of the card's time. About 2,400 indirect commands a frame still get a clamp pass, and about 1,000 mesh records sit scattered through a 100 MB argument buffer. | `leonida-gpu` | game, GPU |
 | P-3 | Copies between the PC's memory and the card's are most of the submit thread's time. | `leonida-gpu` | game, GPU |
 | P-4 | While the camera moves, about half the time goes to frames of about 490 ms in which the card is idle for about 330 ms. The title's page-mapping copies (`CopyPageMappingsBatchX` to `xmem::map_alias`) cost 32 ms of every cutscene frame and 246 ms of a streaming frame. | `leonida-hle` | game |
 | P-5 | The title paces itself with `monitorx` / `mwaitx`, which only AMD processors have: about 280,000 emulated exceptions a second on an Intel processor. Find a cheaper way. | `leonida-loader` | game; an Intel CPU to measure |
-| P-6 | Translated shaders are too expensive: about 50 ms of a 97 ms frame are the title's own passes as translated. With every pass of the layer's gone, the first rooms would still be near 20 fps. | `leonida-shader` | game, GPU |
+| P-6 | Translated shaders are too expensive: about 50 ms of a 97 ms frame are the title's own passes as translated. With every pass of the layer's gone, the first rooms would still be near 20 fps. On an RTX 3080, after #23 took the layer's own hash and compare passes from about 21 to 3.6 ms of card time a frame, the title's passes are about 95 ms of it. | `leonida-shader` | game, GPU |
 | P-8 | About 24 GB of memory is in use during play. | all | game |
 | P-9 | A 12 GB card is full from the first world frame (9.2 of a 10.3 GB budget), and thousands of textures are dropped and made again. Levels on demand (`LEONIDA_LEVELS_ON_DEMAND=1`) saved 3.1 GB in one run; test it more and make it the default if it holds. | `leonida-gpu` | game, GPU |
 
@@ -65,7 +65,7 @@ The goal: a console-like experience on PC. The game starts straight into play, h
 |----|------|-------|-------|
 | U-1 | One step from download to playing: build, warm the cache (P-7) and run, with no terminal knowledge needed. | `run-gta6.ps1` | - |
 | U-2 | Fullscreen and borderless window, and a choice of output resolution. | `leonida-gpu` | GPU |
-| U-3 | The frame-rate switches as settings in `leonida.toml` instead of environment variables, with the tested ones on by default. | `leonida-core` (config) | - |
+| U-3 | The frame-rate switches as settings in `leonida.toml` instead of environment variables, with the tested ones on by default. Since #24 the run scripts pick them by graphics card from `gpu-profiles.json`; this item moves that choice into the program itself. | `leonida-core` (config) | - |
 | U-4 | Pad first: after launch, the game is playable without touching the keyboard. | `leonida-hle` (input) | game |
 | U-5 | Clear messages for the common failures: no AVX2, missing title DLLs, Windows error 1455 (not enough commit). Upstream VIctory has commits for the first two; see UP-1. | `apps/leonida` | - |
 
