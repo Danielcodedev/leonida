@@ -64,6 +64,22 @@ cargo test -p leonida-gpu --lib --release --locked benchmark_copyback_pieces -- 
   --ignored --nocapture --test-threads=1
 ```
 
+**AMD's shader compiler crashing on a pipeline worker is caught**
+(`LEONIDA_COMPILER_GUARD=0`: not; after Belobug/VIctory-Belobug-AMD
+81ebb7bdc). A tester's RX 7700 XT (Adrenalin 26.11.2) ended the run in the
+loading screen with an access violation reading 0x8 inside `amdxc64.dll`,
+called from `D3D12Core.dll` while a pipeline was made; Belobug saw the same
+on an RX 9070 XT, not on the same pipelines in every run. A worker whose
+compile reads one of the first 64 KiB is now parked for good, its pipeline
+is answered with no host pipeline (its draws are dropped, as an
+untranslated one's), the key goes into `compiler-crashed.txt` beside the
+pipeline library so later runs skip it, and another worker starts.
+Crashes outside a worker's compile, or at other addresses, end the run as
+before. Risks: a crash inside a library load leaves that name's load lock
+held, and any lock the driver held stays held; deleting
+`compiler-crashed.txt` gives the listed pipelines another try. Not yet run
+on an AMD card; on an RTX 3080 the guard never fires.
+
 **P-5: repeated console-instruction warnings no longer take a shared lock.**
 Every decoded console-only instruction used to lock a vector just to check
 whether its kind had already been logged. A bit per kind now records that
