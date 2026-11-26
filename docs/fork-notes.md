@@ -623,7 +623,63 @@ numbers come from.
 On the same RTX 3080 textures stayed black while the card windows were on
 and the AMD fork's `play.ps1` had left `LEONIDA_TEXTURE_NO_WAIT=1` and
 `LEONIDA_RELAY=2` in the window; they came back once both were gone.
-Which of the two did it was not separated.
+Which of the two did it was not separated. `LEONIDA_RELAY=2` is what the
+code does when the switch is not set (the relay is on by default, at
+stage 2), so of the two only `LEONIDA_TEXTURE_NO_WAIT=1` changed
+anything. That is read from the code, not measured with card windows on.
+
+Switches measured one at a time on top of `base` (RTX 3080 12 GB, Ryzen 7
+7800X3D, driver 621.24, 2026-11-26): one unattended diagnostics run each,
+Enter pressed every 8 s from 20 s on (the world from about 70 s), the
+frame-rate lines from 170 s to 330 s, 4,650 to 4,950 draws a frame. One
+run each, so read differences of a few ms as nothing.
+
+| On top of `base` | Usual frame (ms) | Card | Preparing | Copying back |
+|---|---|---|---|---|
+| nothing | 126 | 48.8 | 58.4 | 34.8 |
+| `LEONIDA_TEXTURE_NO_WAIT=1` | 125.5 | 52.0 | 58.7 | 35.4 |
+| `LEONIDA_JOIN_COPIES=1` | 127 | 51.7 | 58.3 | 34.7 |
+| `LEONIDA_LEVELS_ON_DEMAND=1` | 127 | 50.0 | 58.8 | 35.2 |
+| `LEONIDA_JOIN_MOST=8` | 126 | 51.5 | 56.4 | 35.2 |
+| `LEONIDA_RELAY=0` | 274 | 96.2 | 68.0 | 92.8 |
+| `LEONIDA_WIDE_BACK=0` | 126 | 49.5 | 59.5 | 34.2 |
+
+No run lost the device or wrote a crash report.
+
+- The relay (on by default) pays: without it the frame takes twice as
+  long. Wide copy-back (on by default) measured at nothing here, but
+  costs nothing either, so it stays on.
+- `TEXTURE_NO_WAIT`, `JOIN_COPIES` and `JOIN_MOST=8` (the AMD fork joins
+  up to 8 parts) gave nothing on this card and stay off.
+- Levels on demand made no frame faster but changed the picture: card
+  memory in use 9,818 -> 9,206 MB, host copies of filled textures alive
+  11,714 -> 17,417 (4,799 -> 3,689 MB), made again since the start
+  2,948 -> 1,877 MB. Near-black pixels in the shot of frame 2600 fell
+  from 15.9 % to 1.6 %, and a wall the tester had never seen drawn
+  showed during that run. On by default since #33 (which also measured
+  an RTX 5060 Laptop 8 GB).
+
+More runs the same way, with levels on demand on (same PC, same day):
+
+- `--console series-s`: a display driver entry, then the device was
+  removed about 70 s in, at the world's first frames (7 submissions in
+  the air). Series S stays out (TODO A-5).
+- `card-windows`, with levels on demand and without `TEXTURE_NO_WAIT`:
+  usual frame 124 ms (127 without), but host copies of filled textures
+  alive fell from 17,417 to 9,247, 387 passes made none for lack of room,
+  and near-black pixels in the frame 2600 shot rose from 1.6 % to 17.7 %.
+  Textures still go missing with card windows, so `TEXTURE_NO_WAIT` was
+  not the only cause; card windows stay opt-in.
+- `LEONIDA_DISPLAY_MODE=1920x1080`: the title is told of a 1080p display
+  but draws its scene into the same 2560x1440 targets as at 4K; usual
+  frame 127 ms, card time the same. Its inner size does not follow the
+  display mode, so a smaller output does not make the card's work less.
+- `LEONIDA_BVH_HOLD=1`, only to name the dearest list: 16 walks held a
+  frame, usual frame 124 ms, and the picture goes dark (near-black 1.6 %
+  to 63 %), as found before. The card meter's dearest list, about 16 ms
+  a frame of compute (64 pipelines, first bound when the world starts),
+  stays at 15.4 ms (60 pipelines) with it: it is not the ray walk. What
+  it is, is still open.
 
 ## Debugging
 
