@@ -834,6 +834,36 @@ More runs the same way, with levels on demand on (same PC, same day):
   stays at 15.4 ms (60 pipelines) with it: it is not the ray walk. What
   it is, is still open.
 
+## Texture keep rule (2026-11-26)
+
+`LEONIDA_TEXTURE_KEEP=1` (off; opt-in profile `texture-keep`): the
+sweep of host copies of textures the title fills lets go only what the
+card needs. Under 85 % of its budget only copies idle for ten minutes go;
+from 85 % those idle for 5 s, the longest idle first, until 80 %; from
+93 % those idle for 3 s until 84 % (`host::vram_keep`, after
+Belobug/VIctory-Belobug-AMD 8d79927). Without it every copy idle for 1 s
+goes from 85 % on, and a 12 GB card sits there all the time in the first
+rooms.
+
+RTX 3080 12 GB, Ryzen 7 7800X3D, driver 621.24, two pairs of unattended
+runs (`scripts/measure-run.ps1`), on `e8aa6152`:
+
+| Run | Usual frame (ms) | Median (ms) | Made again | No room |
+|---|---|---|---|---|
+| `main` | 156.5 | 160 | 14,986 | 96 |
+| keep | 142 | 152 | 8,545 | 319 |
+| `main` | 145 | 158 | 17,149 | 12 |
+| keep | 130.5 | 132.5 | 5,674 | 390 |
+
+"Made again": host copies of filled textures let go and made again since
+the start; "no room": passes that made none for lack of room. Frames
+were 14 to 15 ms shorter in both pairs, and copies made again fell by 43
+and 67 %. But passes without room grew, and the first keep run's shot of
+world frame 600 had 4.6 % near-black pixels against 2.0 %; in the second
+pair the shots were alike (0.6 % against 0.0 %). No run lost the device
+or wrote a crash report. Opt-in until it is measured on more cards and
+the passes without room are understood.
+
 ## Debugging
 
 A release build has no debugging aids. Build them in with

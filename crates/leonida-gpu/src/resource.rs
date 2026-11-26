@@ -1759,12 +1759,36 @@ pub(crate) fn let_go_idle() {
     if !*ON.get_or_init(|| std::env::var_os("LEONIDA_TEXTURE_SWEEP").is_none_or(|v| v != "0")) {
         return;
     }
-    let idle_ms = crate::host::vram_idle_ms(crate::host::host().and_then(|h| h.video_memory()));
+    // `most`: the bytes that may go in this look (`LEONIDA_TEXTURE_KEEP=1`,
+    // `crate::host::vram_keep`), the longest idle first.
+    let memory = crate::host::host().and_then(|h| h.video_memory());
+    let (idle_ms, most) = match memory {
+        Some([budget, used, ..]) if crate::host::texture_keep() => {
+            crate::host::vram_keep(budget, used)
+        }
+        _ => (crate::host::vram_idle_ms(memory), u64::MAX),
+    };
     // For the trail (`crate::host::trail`): how many went, their bytes,
     // and the first one.
     let (mut went, mut bytes, mut first) = (0u64, 0u64, None);
     let all = textures();
-    for &at in all.iter() {
+    let mut by_age = Vec::new();
+    if most != u64::MAX {
+        for &at in all.iter() {
+            // SAFETY: as below.
+            let r = unsafe { &*(at as *const Resource) };
+            let used = r.host.used.load(Relaxed);
+            if used != 0 && fills(&r.desc) && crate::host::long_ago(used, idle_ms, IDLE_FRAMES) {
+                by_age.push((used & 0xffff_ffff, at));
+            }
+        }
+        by_age.sort_unstable();
+    }
+    let whole = if most == u64::MAX { usize::MAX } else { 0 };
+    for at in all.iter().copied().take(whole).chain(by_age.iter().map(|&(_, at)| at)) {
+        if bytes >= most {
+            break;
+        }
         // SAFETY: a texture leaves the table before it is freed, under the
         // lock held here (`Drop for Resource`).
         let r = unsafe { &*(at as *const Resource) };

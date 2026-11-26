@@ -143,6 +143,39 @@ pub(crate) fn vram_idle_ms(video_memory: Option<[u64; 4]>) -> u64 {
     }
 }
 
+/// With `LEONIDA_TEXTURE_KEEP=1` (off by default): how long host copies of
+/// textures the title fills must have been idle to be let go, in
+/// milliseconds, and how many bytes of them go at most (the longest idle
+/// first). Under 85 % of the card's budget only those idle for ten minutes;
+/// under 93 % those idle for 5 s, enough to come down to 80 %; above that
+/// those idle for 3 s, enough to come down to 84 %. After
+/// Belobug/VIctory-Belobug-AMD (`vram_keep`). [`vram_idle_ms`] lets every
+/// copy idle for 1 s go from 85 % on: 55,370 let go and 14,986 made again
+/// in a 330 s run on an RTX 3080 12 GB that sat at 86 % of its budget.
+pub(crate) fn vram_keep(budget: u64, used: u64) -> (u64, u64) {
+    const KEPT_MS: u64 = 600_000;
+    const IDLE_MS: u64 = 5_000;
+    const SHORT_MS: u64 = 3_000;
+    if budget == 0 {
+        return (IDLE_MS, u64::MAX);
+    }
+    let share = |percent: u64| budget / 100 * percent;
+    if used < share(85) {
+        (KEPT_MS, u64::MAX)
+    } else if used < share(93) {
+        (IDLE_MS, used - share(80))
+    } else {
+        (SHORT_MS, used - share(84))
+    }
+}
+
+/// Whether [`vram_keep`] decides what the texture sweep lets go
+/// (`LEONIDA_TEXTURE_KEEP=1`; off by default).
+pub(crate) fn texture_keep() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LEONIDA_TEXTURE_KEEP").is_some_and(|v| v == "1"))
+}
+
 /// Effective idle timeout (in milliseconds) for system-RAM caches (staging
 /// buffers, loose shadows, and the mapped pipeline library), scaled down
 /// when free physical RAM is low. Never returns less than 2,000 ms.
@@ -8902,6 +8935,23 @@ mod batch {   // Batch::texture_due lives here; `mod tests` is already taken at 
         // Missing or zero budget falls back to normal
         assert_eq!(vram_idle_ms(None), 5_000);
         assert_eq!(vram_idle_ms(Some([0, 100, 0, 0])), 5_000);
+    }
+
+    #[test]
+    fn vram_keep_lets_go_only_what_the_card_needs() {
+        use super::vram_keep;
+        let budget = 10_000;
+        // Under 85 %: only copies idle for ten minutes, as many as there are.
+        assert_eq!(vram_keep(budget, 0), (600_000, u64::MAX));
+        assert_eq!(vram_keep(budget, 8_499), (600_000, u64::MAX));
+        // 85 % to 93 %: idle for 5 s, down to 80 %.
+        assert_eq!(vram_keep(budget, 8_500), (5_000, 500));
+        assert_eq!(vram_keep(budget, 9_299), (5_000, 1_299));
+        // From 93 % (and over the budget): idle for 3 s, down to 84 %.
+        assert_eq!(vram_keep(budget, 9_300), (3_000, 900));
+        assert_eq!(vram_keep(budget, 12_000), (3_000, 3_600));
+        // No budget: the old idle time, no limit.
+        assert_eq!(vram_keep(0, 100), (5_000, u64::MAX));
     }
 
     #[test]
