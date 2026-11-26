@@ -2558,8 +2558,7 @@ pub(crate) fn placed_filler_twins() -> u64 {
     PLACED_TWINS.load(std::sync::atomic::Ordering::Relaxed)
 }
 
-<<<<<<< HEAD
-=======
+
 /// Width, height and format of texture `this` (`None` for a buffer), for
 /// `crate::texback`'s kinds.
 #[cfg(windows)]
@@ -2591,7 +2590,6 @@ pub(crate) fn title_texture(this: This) -> Option<(leonida_formats::texture::Lay
     };
     Some((plane.layout.clone(), r.data() as usize, t.size as usize))
 }
->>>>>>> f5524640e6068050effb46f75c43575d9167994e
 
 /// The bytes of title memory a texture with the resource description
 /// `desc` (as words) takes where the title placed it; `None` for a buffer
