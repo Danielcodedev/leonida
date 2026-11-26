@@ -1,5 +1,5 @@
 # Builds Leonida Legacy and starts the game with the frame-rate switches measured to help
-# (all off by default). Remove LEONIDA_INDIRECT_WINDOW if the device gets lost.
+# for this PC's graphics card (gpu-profiles.json; all off by default in the code).
 #
 # The first time, it asks for the folder of your copy of the game (the one with
 # MicrosoftGame.config in it) and offers to remember it in leonida.toml, which git ignores.
@@ -58,14 +58,9 @@ try {
     }
     $env:LEONIDA_GAME_DIR = $dir
 
-    $env:LEONIDA_ASYNC_SUBMIT = '1'
-    $env:LEONIDA_QUEUE2 = '1'
-    $env:LEONIDA_INDIRECT_WINDOW = '1'
-    $env:LEONIDA_COPY_PLAIN = '1'
-    $env:LEONIDA_JOIN_PARTS = '1'
-    $env:LEONIDA_BACK_OWN_VIEW = '1'
-    $env:LEONIDA_INDIRECT_GATHER = '1'
-    $env:LEONIDA_CARD_REHASH_RUNS = '1'
+    # The frame-rate switches for this PC's graphics card (gpu-profiles.json).
+    . (Join-Path $PSScriptRoot 'scripts\leonida-settings.ps1')
+    Set-LeonidaProfiles $PSScriptRoot
 
     # Shaders not in the cache are translated the first time the game uses them, mid-play.
     if ($WarmUp -eq 'ask') {

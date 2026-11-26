@@ -33,18 +33,13 @@ try {
     New-Item -ItemType Directory -Force $run | Out-Null
     $wanted = @($ShotAt -split ',' | Where-Object { $_.Trim() -ne '' }).Count
 
+    # The frame-rate switches for this PC's graphics card (gpu-profiles.json).
+    . (Join-Path $PSScriptRoot 'scripts\leonida-settings.ps1')
+    Set-LeonidaProfiles $PSScriptRoot
     $env:LEONIDA_SHOT = $run
     $env:LEONIDA_SHOT_AT = $ShotAt
     if ($Keys -ne '') { $env:LEONIDA_KEYS = $Keys }
     $env:LEONIDA_LOG = 'warn'
-    $env:LEONIDA_ASYNC_SUBMIT = '1'
-    $env:LEONIDA_QUEUE2 = '1'
-    $env:LEONIDA_INDIRECT_WINDOW = '1'
-    $env:LEONIDA_COPY_PLAIN = '1'
-    $env:LEONIDA_JOIN_PARTS = '1'
-    $env:LEONIDA_BACK_OWN_VIEW = '1'
-    $env:LEONIDA_INDIRECT_GATHER = '1'
-    $env:LEONIDA_CARD_REHASH_RUNS = '1'
 
     Write-Host "shots go to $run; the game is closed after $Seconds s or when $wanted shot(s) are written"
     $log = Join-Path $run 'run.log'
