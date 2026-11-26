@@ -351,6 +351,32 @@ What each part does today and what it still needs:
 | Textures | Console tiled layouts and detiling for the modes the title uses | Render-target metadata planes |
 | Series S mode | Runs through the menus to the loading screen | The world, as above |
 
+## Run scripts: switches by graphics card (2026-11-26)
+
+`run-gta6.ps1`, `measure-gta6.ps1` and `shot-run.ps1` no longer set the
+frame-rate switches themselves. `scripts/leonida-settings.ps1` reads the
+card with the most memory from the display adapters' registry keys,
+clears every `LEONIDA_*` switch an earlier run left in the PowerShell
+window (the paths, `LEONIDA_PROFILE` and `LEONIDA_LOG` stay;
+`LEONIDA_KEEP_WINDOW=1` keeps them all), and applies the profiles of
+`gpu-profiles.json` that match the card. Each profile says where its
+numbers come from.
+
+- `base`, every card: the switches the scripts set before.
+- `card-windows`, opt-in (`LEONIDA_PROFILE=card-windows`): windows of
+  title memory in the card's memory. RTX 3080 12 GB, Ryzen 7 7800X3D,
+  first rooms: usual frame 169-173 -> 149-158 ms, card time 103 -> 88 ms.
+  But the windows take about 3.7 GB of the card, and host copies of
+  textures picked by index fell from about 12,100 to 6,500.
+- `LEONIDA_PROFILE=<name>[,<name>...]` applies `base` and those whatever
+  the card; `LEONIDA_PROFILE=none` applies none. Local changes go in
+  `gpu-profiles.local.json`, which git ignores.
+
+On the same RTX 3080 textures stayed black while the card windows were on
+and the AMD fork's `play.ps1` had left `LEONIDA_TEXTURE_NO_WAIT=1` and
+`LEONIDA_RELAY=2` in the window; they came back once both were gone.
+Which of the two did it was not separated.
+
 ## Debugging
 
 A release build has no debugging aids. Build them in with
