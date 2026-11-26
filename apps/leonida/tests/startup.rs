@@ -425,6 +425,7 @@ fn inspection_reports_missing_static_dependencies_without_initializing_dlls() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(output.status.success(), "{stdout}\n{stderr}");
     assert!(stdout.contains("u6-b.dll"), "{stdout}\n{stderr}");
+    assert!(stdout.contains("missing dlls   "), "{stdout}\n{stderr}");
     assert!(stdout.contains("not executing"), "{stdout}\n{stderr}");
     assert!(!stdout.contains("title exited with"), "{stdout}\n{stderr}");
 }
