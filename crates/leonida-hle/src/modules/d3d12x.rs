@@ -49,6 +49,13 @@ pub fn warm_shader(container: &[u8]) -> Result<bool, String> {
     }
 }
 
+pub use leonida_gpu::adapter::Description as GraphicsAdapter;
+
+/// Describes the default graphics adapter without starting the GPU runtime.
+pub fn graphics_adapter() -> Result<GraphicsAdapter, String> {
+    leonida_gpu::adapter::describe()
+}
+
 /// See `leonida_gpu::probe_translation_host`.
 pub fn probe_translation_host() -> bool {
     #[cfg(windows)]

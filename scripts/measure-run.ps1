@@ -33,6 +33,9 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+. (Join-Path $PSScriptRoot 'leonida-settings.ps1')
+$environmentBefore = Save-LeonidaEnvironment
+
 function Get-Median([double[]]$xs) {
     if ($xs.Count -eq 0) { return [double]::NaN }
     $s = $xs | Sort-Object
@@ -52,10 +55,13 @@ $crashBefore = (@(Get-ChildItem (Join-Path $env:LOCALAPPDATA 'leonida\data\*\cra
 # leonida.toml is read from the current folder.
 Push-Location $repo
 try {
-    if ($Profile) { $env:LEONIDA_PROFILE = $Profile } else { Remove-Item Env:LEONIDA_PROFILE -ErrorAction SilentlyContinue }
-    . (Join-Path $PSScriptRoot 'leonida-settings.ps1')
-    Set-LeonidaProfiles $repo
-    $switches = @(Get-ChildItem Env:LEONIDA_* | Where-Object { $_.Name -ne 'LEONIDA_PROFILE' } | ForEach-Object { '{0}={1}' -f ($_.Name -replace '^LEONIDA_', ''), $_.Value })
+    if ($PSBoundParameters.ContainsKey('Profile')) {
+        if ($Profile) { $env:LEONIDA_PROFILE = $Profile }
+        else { Remove-Item Env:LEONIDA_PROFILE -ErrorAction SilentlyContinue }
+    }
+    $graphics = Get-LeonidaGraphics $exe
+    Show-LeonidaGraphics $graphics
+    $switches = @(Get-LeonidaGraphicsSwitches $graphics -Short)
     $env:LEONIDA_KEYS = ((0..20) | ForEach-Object { '{0}:Enter' -f (20 + 8 * $_) }) -join ','
     $env:LEONIDA_CAPTURE = Join-Path $run 'cap'
     # Shots a fixed number of frames after the world's first frame; the every-8th-frame world
@@ -72,6 +78,7 @@ try {
     if ($p.WaitForExit($Seconds * 1000)) { $end = "exit $($p.ExitCode)" } else { taskkill /pid $p.Id /t /f | Out-Null; $end = 'timeout (closed)' }
     $null = $p.WaitForExit(15000)
 } finally {
+    Restore-LeonidaEnvironment $environmentBefore
     Pop-Location
 }
 
@@ -123,7 +130,7 @@ if ($null -ne $first) {
 
 $summary = [ordered]@{
     label = $Label
-    profile = if ($Profile) { $Profile } else { '(by the card only)' }
+    profile = if (@($graphics.profiles).Count) { $graphics.profiles -join ', ' } else { 'none' }
     console = $Console
     end = $end
     world_at_s = if ($world) { [Math]::Round($world) } else { 'never' }

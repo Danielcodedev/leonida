@@ -1,13 +1,13 @@
 {
   "about": [
-    "LEONIDA_* switches the run scripts set, by graphics card (scripts/leonida-settings.ps1).",
+    "LEONIDA_* switches the executable selects by its Direct3D adapter; this catalog is embedded at build time.",
     "Every profile whose match fits the PC's card is applied, in this order; a later one overrides an earlier one.",
-    "match: vendor (nvidia, amd, intel), min_vram_mb, max_vram_mb, name (a wildcard on the card's name); empty matches every card.",
-    "opt_in: true: never applied by its match, only when LEONIDA_PROFILE names it.",
-    "A value of null unsets the switch. LEONIDA_* switches left in the PowerShell window by earlier runs are cleared first (LEONIDA_KEEP_WINDOW=1 keeps them; paths, LEONIDA_PROFILE and LEONIDA_LOG always stay).",
+    "match: vendor (nvidia, amd, intel, other), min_vram_mb, max_vram_mb, name (a wildcard on the card's name); empty matches every card.",
+    "opt_in: true: never applied by its match, only when [graphics].profiles or LEONIDA_PROFILE names it.",
+    "A value of null cancels an earlier profile value. Explicit environment values override TOML graphics settings, which override profiles.",
     "Add a profile only with a measurement: the card, the CPU, the scene and the frame times before and after.",
-    "Your own changes go in gpu-profiles.local.json (same form, applied after this file; git ignores it).",
-    "LEONIDA_PROFILE=<name>[,<name>...] applies base and those profiles whatever the card; LEONIDA_PROFILE=none applies none."
+    "Your own changes go in gpu-profiles.local.json beside the selected config (current folder without one); same form, applied after this catalog; git ignores it.",
+    "LEONIDA_PROFILE=<name>[,<name>...] overrides [graphics].profiles: base and those profiles whatever the card; none disables profiles while keeping explicit settings. The existing value 1 is reserved for the diagnostics CPU sampler."
   ],
   "profiles": [
     {

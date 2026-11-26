@@ -5,6 +5,56 @@ The status summary is in [README.md](../README.md).
 
 ## Newest (2026-11-26)
 
+**U-3: graphics profiles are selected by the executable.**
+Direct `leonida run` and translation warm-up now resolve the same measured
+base profile that the launch scripts used, before the runtime caches its
+switches. The catalog is embedded at build time; an optional
+`gpu-profiles.local.json` beside the selected config is applied afterwards.
+The base profile still contains the same eight values, and `card-windows`
+and the optional one-record clamp remain opt-in. This moves existing
+optimizations into direct Windows/Wine launches. No new gameplay frame-rate
+measurement is claimed.
+
+`[graphics]` in `leonida.toml` provides typed settings for the eleven
+options in the catalog. Explicit environment values override TOML, and
+TOML overrides profiles. `profiles = []` or `["none"]` disables profile
+selection while retaining explicit settings. Named selections include
+base and apply in catalog order, with null cancelling earlier profile
+values. `LEONIDA_PROFILE` still overrides selection; its existing value
+`1` remains the diagnostics CPU sampler and does not select a graphics
+profile. Malformed settings and unknown profile names report errors.
+
+Adapter discovery uses the first DXGI adapter, matching the runtime's
+`D3D12CreateDevice(None)`, rather than the scripts' largest-VRAM heuristic.
+It respects diagnostics WARP selection and loads an explicitly requested
+RenderDoc hook before querying DXGI. If discovery fails, only unqualified
+profiles match. Profiles cannot set paths used for config/game/cache/data,
+logging, adapter selection, or RenderDoc's startup controls.
+
+`leonida config --graphics` reports the effective plan and each value's
+source as JSON without game files. Launchers use this result for reporting
+and let the child apply it. They preserve caller overrides and restore
+their temporary environment changes afterwards. `-SpeedSwitches off`
+disables both profile and TOML settings through `LEONIDA_GRAPHICS_OFF=1`
+and clears runtime overrides, preserving adapter and capture-hook selection.
+Shareable switch reports redact paths and other arbitrary string values.
+
+Validation uses original synthetic inputs: 32 core tests and 13 default /
+14 diagnostics CLI integration tests, run on native Windows and through
+Wine. Each integration suite runs three generated PE programs through the
+real loader, checking that profile, TOML and environment values reach the
+title. The PowerShell checks also cover Unicode profile names, empty
+overrides, state restoration, report redaction and baseline selection.
+They inspect the complete environment block: Windows PowerShell 5.1's
+single-variable lookup can mistake an empty value for an absent one.
+
+On an Intel Core i9-14900KS / RTX 5090, NVIDIA 580.173.02, Pop!_OS 22.04
+and Proton 11's Wine 11.0 in Steam's offline Flatpak runtime, the physical
+adapter parity test passed and a direct CLI query selected exactly the
+eight base settings. DXVK reports an AMD vendor ID for this NVIDIA card;
+profiles intentionally use the adapter identity exposed to Direct3D.
+No game files were used in these checks.
+
 **P-5: less clock work in emulated wait hints.**
 Each `monitorx` / `mwaitx` pair previously read and converted the performance
 counter three times: once for each rate-line check and once for wait
