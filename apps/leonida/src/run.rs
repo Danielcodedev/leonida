@@ -12,10 +12,24 @@ pub fn run(
     execute: bool,
     console: Console,
 ) -> Result<()> {
+    run_title(exe, unimplemented, strict, execute, console).map_err(explain_commit_limit)
+}
+
+#[cfg(windows)]
+fn run_title(
+    exe: &Path,
+    unimplemented: Unimplemented,
+    strict: bool,
+    execute: bool,
+    console: Console,
+) -> Result<()> {
     use std::sync::Arc;
     use leonida_hle::{HleResolver, HostPolicy};
     use leonida_loader::{BindReport, UnimplementedPolicy, WithTitleDlls};
 
+    if execute {
+        check_avx2(has_avx2())?;
+    }
     // A title that relaunched itself: the old process must be gone first.
     leonida_hle::modules::lifecycle::wait_for_previous();
     let cfg = leonida_core::Config::load()?;
@@ -75,6 +89,23 @@ pub fn run(
     for (name, dll) in &dlls {
         println!("title dll      {name} at {:#x}", dll.base());
         leonida_hle::runtime::set_image_path(dll.base(), &title_dir.join(name));
+    }
+    let imported: Vec<&str> = image
+        .info()
+        .imports
+        .iter()
+        .map(|m| m.dll.as_str())
+        .collect();
+    let mapped: Vec<&str> = dlls.iter().map(|(name, _)| name.as_str()).collect();
+    let absent = absent_title_dlls(&imported, &mapped, &wanted);
+    if !absent.is_empty() {
+        let message = missing_dlls_message(&absent, title_dir);
+        println!("missing dlls   {message}");
+        // None of their imports can be bound, so the title would stop at its
+        // first call into one with nothing saying why. Stubs only if asked for.
+        if execute && matches!(unimplemented, Unimplemented::Trap) {
+            anyhow::bail!("{message}");
+        }
     }
 
     let policy = match unimplemented {
@@ -189,6 +220,83 @@ fn watch(base: usize, size: usize) {
 #[cfg(windows)]
 fn title_dll(host: &leonida_hle::HostPolicy, dll: &str) -> bool {
     !host.allows(dll) && !leonida_hle::registry().iter().any(|m| m.serves(dll))
+}
+
+#[cfg(all(windows, target_arch = "x86_64"))]
+fn has_avx2() -> bool {
+    std::arch::is_x86_feature_detected!("avx2")
+}
+
+#[cfg(all(windows, not(target_arch = "x86_64")))]
+fn has_avx2() -> bool {
+    true
+}
+
+/// Xbox Series code is built for Zen 2 and uses AVX2 throughout: without it
+/// the title dies on its first such instruction with nothing saying why.
+#[cfg(any(windows, test))]
+fn check_avx2(has_avx2: bool) -> Result<()> {
+    anyhow::ensure!(
+        has_avx2,
+        "this processor does not support AVX2, which the game needs: it cannot run on this PC. \
+         Leonida Legacy needs an Intel processor from 2013 (Haswell) or later, or an AMD \
+         processor from 2015 (Excavator) or later."
+    );
+    Ok(())
+}
+
+/// The DLLs among `imported` (the main image's static imports) that must
+/// come from the title's folder (`wanted`) but were not mapped from it:
+/// none of their imports can be bound. Each named once, case ignored.
+#[cfg(any(windows, test))]
+fn absent_title_dlls(
+    imported: &[&str],
+    mapped: &[&str],
+    wanted: &dyn Fn(&str) -> bool,
+) -> Vec<String> {
+    let mut absent: Vec<String> = Vec::new();
+    for &dll in imported {
+        let known = |list: &[&str]| list.iter().any(|m| m.eq_ignore_ascii_case(dll));
+        if wanted(dll) && !known(mapped) && !absent.iter().any(|a| a.eq_ignore_ascii_case(dll)) {
+            absent.push(dll.to_owned());
+        }
+    }
+    absent
+}
+
+#[cfg(any(windows, test))]
+fn missing_dlls_message(absent: &[String], title_dir: &Path) -> String {
+    format!(
+        "the game's own {} {} missing from the game folder {}. Copy every file of your copy of \
+         the game into that folder, or point LEONIDA_GAME_DIR (or game_dir in leonida.toml) at \
+         the folder that has them. `--unimplemented zero` runs it anyway.",
+        absent.join(", "),
+        if absent.len() == 1 { "is" } else { "are" },
+        title_dir.display(),
+    )
+}
+
+/// Windows error 1455 (`ERROR_COMMITMENT_LIMIT`): the paging file is too
+/// small for what the title reserves. The loader's errors carry it as an
+/// `io::Error` or only in their text (`os error 1455`).
+#[cfg(any(windows, test))]
+fn explain_commit_limit(error: anyhow::Error) -> anyhow::Error {
+    const ERROR_COMMITMENT_LIMIT: i32 = 1455;
+    let hit = error.chain().any(|cause| {
+        cause
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|e| e.raw_os_error() == Some(ERROR_COMMITMENT_LIMIT))
+            || cause.to_string().contains("os error 1455")
+    });
+    if !hit {
+        return error;
+    }
+    error.context(
+        "Windows ran out of memory to give the game (error 1455: the paging file is too small). \
+         Close other programs, then make the paging file bigger: System > About > Advanced \
+         system settings > Performance Settings > Advanced > Virtual memory > Change, and pick \
+         'System managed size' or a custom size of at least 32 GB. Restart Windows and try again.",
+    )
 }
 
 /// Title DLLs the title loads itself (`LoadLibrary`) that nothing imports,
@@ -312,6 +420,65 @@ impl LoaderLock {
             self.free.notify_one();
         }
         result
+    }
+}
+
+#[cfg(test)]
+mod message_tests {
+    use std::path::Path;
+
+    use super::{absent_title_dlls, check_avx2, explain_commit_limit, missing_dlls_message};
+
+    #[test]
+    fn no_avx2_says_the_pc_cannot_run_it() {
+        assert!(check_avx2(true).is_ok());
+        let message = check_avx2(false).unwrap_err().to_string();
+        assert!(message.contains("AVX2"), "{message}");
+        assert!(message.contains("Haswell"), "{message}");
+    }
+
+    #[test]
+    fn title_dlls_missing_from_the_folder_are_named_once() {
+        let wanted = |dll: &str| {
+            !["KERNEL32.dll", "d3d12_xs.dll"]
+                .iter()
+                .any(|h| h.eq_ignore_ascii_case(dll))
+        };
+        let imported = [
+            "KERNEL32.dll",
+            "d3d12_xs.dll",
+            "One.dll",
+            "two.dll",
+            "Three.dll",
+            "one.dll",
+        ];
+        let absent = absent_title_dlls(&imported, &["TWO.DLL"], &wanted);
+        assert_eq!(absent, ["One.dll", "Three.dll"]);
+        let message = missing_dlls_message(&absent, Path::new("D:\\Game"));
+        assert!(
+            message.contains("One.dll, Three.dll are missing"),
+            "{message}"
+        );
+        assert!(message.contains("D:\\Game"), "{message}");
+        assert!(message.contains("LEONIDA_GAME_DIR"), "{message}");
+        assert!(absent_title_dlls(&["One.dll"], &["one.dll"], &wanted).is_empty());
+    }
+
+    #[test]
+    fn error_1455_explains_the_paging_file() {
+        let io = std::io::Error::from_raw_os_error(1455);
+        let typed = explain_commit_limit(anyhow::Error::new(io).context("reserving"));
+        let text = explain_commit_limit(anyhow::anyhow!("reserving: x (os error 1455)"));
+        for error in [typed, text] {
+            let message = format!("{error:#}");
+            assert!(
+                message.starts_with("Windows ran out of memory"),
+                "{message}"
+            );
+            assert!(message.contains("paging file"), "{message}");
+        }
+        let other = explain_commit_limit(anyhow::anyhow!("reading x (os error 2)"));
+        assert_eq!(other.to_string(), "reading x (os error 2)");
     }
 }
 
