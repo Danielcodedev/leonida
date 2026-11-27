@@ -10,6 +10,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use super::UserData;
 use super::bitcode::{Attr, Bin, Cast, Rmw, Tag, Term, V, pred};
+use super::code_table::CodeTable;
 use super::container::SigElement;
 use super::shader::{Shader, flags};
 use crate::ShaderError;
@@ -287,9 +288,8 @@ struct Lower<'a> {
     sections: HashMap<usize, HashMap<usize, super::wave::Section>>,
     /// Values written in a section that code outside it reads.
     section_out: HashSet<Value>,
-    /// The program's constant table (the code from the first byte read
-    /// through `s_getpc_b64` on): global, first byte, dwords.
-    code_table: Option<(V, u32, u32)>,
+    /// The program's constant table, including any instruction bytes its addresses can name.
+    code_table: Option<CodeTable>,
     /// Loop headers' iteration counters (see [`LOOP_LIMIT`]): the phi by
     /// IR block, and its incoming (value, DXIL block) pairs.
     counters: HashMap<usize, (V, Vec<(V, usize)>)>,
@@ -1597,58 +1597,49 @@ impl<'a> Lower<'a> {
     // shortcut: an index outside the table reads its last dword (the
     // console would read whatever memory follows the code).
     fn code_dword(&mut self, byte: V) -> Result<V, Why> {
-        let (g, base, len) = match self.code_table {
-            Some(t) => t,
-            None => {
-                let first = self
-                    .x
-                    .res
-                    .scalar
-                    .iter()
-                    .map(|s| s.1)
-                    .chain(self.x.res.descriptors.iter().flat_map(|d| {
-                        d.source.leaves().into_iter().filter_map(|l| match l {
-                            Source::Built { address, .. } => Some(*address),
-                            _ => None,
-                        })
-                    }))
-                    .filter(|a| a.param == CODE)
-                    .map(|a| a.offset & !3)
-                    .min()
-                    .ok_or("a code table")?;
-                let code = &self.x.native.code;
-                let words: Vec<u32> = code
-                    .get(first as usize..)
-                    .ok_or("a code table past the code")?
-                    .chunks(4)
-                    .map(|c| {
-                        let mut w = [0u8; 4];
-                        w[..c.len()].copy_from_slice(c);
-                        u32::from_le_bytes(w)
+        if self.code_table.is_none() {
+            let first = self
+                .x
+                .res
+                .scalar
+                .iter()
+                .map(|s| s.1)
+                .chain(self.x.res.descriptors.iter().flat_map(|d| {
+                    d.source.leaves().into_iter().filter_map(|l| match l {
+                        Source::Built { address, .. } => Some(*address),
+                        _ => None,
                     })
-                    .collect();
-                if words.is_empty() {
-                    return Err("a code table past the code");
-                }
-                let elems: Vec<V> = words.iter().map(|&w| self.s.m.i32(w)).collect();
-                let arr = self.s.m.array(words.len() as u32, self.s.t.i32);
-                let init = self.s.m.aggregate(arr, &elems);
-                let g = self.s.m.constant_global("code", init);
-                let t = (g, first, words.len() as u32);
-                self.code_table = Some(t);
-                t
+                }))
+                .filter(|a| a.param == CODE)
+                .map(|a| a.offset & !3)
+                .min()
+                .ok_or("a code table")?;
+            let code = &self.x.native.code;
+            let words: Vec<u32> = code
+                .get(first as usize..)
+                .ok_or("a code table past the code")?
+                .chunks(4)
+                .map(|c| {
+                    let mut w = [0u8; 4];
+                    w[..c.len()].copy_from_slice(c);
+                    u32::from_le_bytes(w)
+                })
+                .collect();
+            if words.is_empty() {
+                return Err("a code table past the code");
             }
-        };
-        let c = self.cur;
-        let k = self.s.m.i32(base);
-        let rel = self.s.m.bin(c, Bin::Sub, byte, k);
-        let two = self.s.m.i32(2);
-        let index = self.s.m.bin(c, Bin::LShr, rel, two);
-        let last = self.s.m.i32(len - 1);
-        let over = self.s.m.cmp(c, pred::IUGT, index, last);
-        let index = self.s.m.select(c, over, last, index);
-        let at = self.s.m.element(c, g, index);
-        Ok(self.s.m.load(c, at))
+            self.code_table = Some(CodeTable::new(
+                &mut self.s.m,
+                first,
+                &words,
+                super::code_table::enabled(),
+            ));
+        }
+        Ok(self
+            .code_table
+            .as_ref()
+            .expect("created above")
+            .read(&mut self.s.m, self.cur, byte))
     }
 
     /// A global memory load (`global_load_*`): from the program's constant
@@ -9903,6 +9894,10 @@ impl<'a> Lower<'a> {
                     return Err("an image result");
                 };
                 let f32t = self.s.t.f32;
+                // The validator wants undef past the spatial coordinates
+                // (an array's slice): the level ignores it.
+                let at = |k: usize| if k < spatial { cs[k] } else { fu };
+                let (x, y, z) = (at(0), at(1), at(2));
                 for (k, ch) in (0..2u32).filter(|ch| dmask >> ch & 1 != 0).enumerate() {
                     let clamped = self.s.m.bool(ch == 0);
                     let lod = self.s.op(
@@ -9911,7 +9906,7 @@ impl<'a> Lower<'a> {
                         Attr::ReadOnly,
                         f32t,
                         81,
-                        &[h, sh, cs[0], cs[1], cs[2], clamped],
+                        &[h, sh, x, y, z, clamped],
                     );
                     let x = self.as_int(lod);
                     self.write(inst, Reg::V(reg + k as u8), x, guard);
@@ -11475,6 +11470,10 @@ fn interp_mode(kind: Barycentric) -> Option<u8> {
 mod view_address_tests;
 
 #[cfg(test)]
+#[path = "lod_tests.rs"]
+mod lod_tests;
+
+#[cfg(test)]
 mod tests {
     use super::{Lowered, Numeric, Parts, buffer_format, half_shift, lower};
     use crate::native::{
@@ -11903,7 +11902,7 @@ mod tests {
     }
 
     /// Tables of 2D textures at s0 and samplers at s1.
-    fn texture_tables() -> (Vec<RootParam>, Vec<UsedResource>) {
+    pub(super) fn texture_tables() -> (Vec<RootParam>, Vec<UsedResource>) {
         let range = |kind, user_data, slot| UsedResource {
             kind,
             root: RootType::Table,

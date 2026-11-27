@@ -192,6 +192,20 @@ Only the options you write change. To disable automatic profiles, use `profiles 
 in that section. Other settings you explicitly write still apply. To choose profiles yourself, use a list such
 as `profiles = ["base", "my-test"]`; named profiles include the base settings and apply in catalog order.
 
+For the optional NVIDIA shader compatibility fix, select `nvidia-code-tables`:
+
+```toml
+[graphics]
+profiles = ["nvidia-code-tables"]
+```
+
+If you already have a `[graphics]` section, add or update its `profiles` line instead of adding
+another section. Keep any profile names you already selected, then launch normally. Remove
+`nvidia-code-tables` to disable it. This option is off by default. On the tested RTX 5090 with
+Proton 11.0, it restored creation of six refused compute
+pipelines; it does not establish correct gameplay or a frame-rate improvement. See the
+[validation details](docs/fork-notes.md#r-7-large-code-literal-tables-on-nvidia-2026-11-26).
+
 Environment overrides take precedence over TOML settings, which take precedence over profiles. For example,
 an explicit `LEONIDA_QUEUE2=0` still wins. `LEONIDA_PROFILE` overrides the profile list, except the existing
 diagnostics value `1`, which enables the CPU sampler and leaves graphics selection to the config. Run
