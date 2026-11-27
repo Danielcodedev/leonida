@@ -90,6 +90,9 @@ mod intersect_tests;
 #[cfg(all(windows, any(test, feature = "host")))]
 pub mod host;
 mod lower;
+mod independent;
+#[cfg(test)]
+mod independent_tests;
 mod own_bits;
 mod rect;
 mod sampler;
@@ -110,6 +113,7 @@ use crate::native::{HwStage, NativeProgram, RootType};
 use crate::{ShaderError, io, ir, resource, structure};
 
 pub use bitcode::census;
+pub use independent::{INDEPENDENT_WAVE_SPACE, IndependentWaves};
 pub use sampler::StaticSampler;
 pub use lower::set_host_max_wave;
 pub use rect::rect_list_gs;
@@ -249,6 +253,8 @@ pub struct HostShader {
     pub stage: HwStage,
     /// The DXIL container, hashed as D3D12 expects.
     pub dxil: Vec<u8>,
+    /// One original Wave64 per physical thread group, replayed by the host with its wave index.
+    pub independent_waves: Option<IndependentWaves>,
     /// The user-data dwords the shader reads.
     pub user_data: Vec<UserData>,
     /// Immediate samplers: the four sampler words of `s<n>`.
@@ -366,6 +372,20 @@ pub fn emit(
     // (a mask with lanes elsewhere is only helped by the exact forms: not by each half-wave
     // on its own)
     let exact_only = matches!(&original, Err(ShaderError::Unsupported { what, .. }) if *what == lower::MASK_ELSEWHERE);
+    if stuck && let Some(plan) = independent::admit(native, p, res) {
+        let with_waits = independent::program(native)?;
+        let why = std::env::var_os("LEONIDA_WAVE_WHY").is_some();
+        let again = widen_with_plan(c, native, &with_waits, why, Some(plan));
+        if why {
+            match &again {
+                Ok((_, wave)) => eprintln!("WAVE64-RETRY independent groups: wave {wave:?}"),
+                Err(e) => eprintln!("WAVE64-RETRY independent groups: {e}"),
+            }
+        }
+        if matches!(&again, Ok((_, Some(32)))) {
+            return again.map(|(shader, _)| shader);
+        }
+    }
     if stuck && native.stage == HwStage::Cs && native.wave64 && lower::host_max_wave() == 32 {
         let why = std::env::var_os("LEONIDA_WAVE_WHY").is_some();
         let report = |what: &str, r: &Result<(HostShader, Option<u32>), ShaderError>| {
@@ -553,11 +573,23 @@ fn widen(
     p: &ir::Program,
     why: bool,
 ) -> Result<(HostShader, Option<u32>), ShaderError> {
+    widen_with_plan(c, native, p, why, None)
+}
+
+fn widen_with_plan(
+    c: &Container,
+    native: &NativeProgram,
+    p: &ir::Program,
+    why: bool,
+    independent_waves: Option<IndependentWaves>,
+) -> Result<(HostShader, Option<u32>), ShaderError> {
     const NOT: ShaderError = ShaderError::Unsupported {
         offset: 0,
         what: "wave-wide branches in a thread group of several console waves",
     };
     match native.io {
+        crate::native::StageIo::Cs(cs)
+            if independent_waves.is_some_and(|plan| plan.original_threads() == cs.threads) => {}
         // (a program whose waves are the host's meets no one: no barrier, any group)
         crate::native::StageIo::Cs(_) if !(native.wave64 && lower::host_max_wave() == 32) => {}
         crate::native::StageIo::Cs(cs) if cs.threads.iter().product::<u32>() == 64 => {}
@@ -571,11 +603,21 @@ fn widen(
     }
     let mut wide = std::collections::HashSet::new();
     loop {
-        let st = structure::structure_wide(p, &wide)?;
+        let st = if independent_waves.is_some() {
+            independent::structure(p)?
+        } else {
+            structure::structure_wide(p, &wide)?
+        };
         let io = io::raise(p, native)?;
         let res = resource::track(p, &native.layout, native.stage, Some(&st))?;
+        if independent_waves.is_some() && !independent::scalar_resources(p, &res) {
+            return Err(ShaderError::Unsupported {
+                offset: 0,
+                what: "independent Wave64 resource reconstruction without scalar uniformity",
+            });
+        }
         lower::take_needs();
-        let r = emit_program(c, native, p, &st, &io, &res);
+        let r = emit_program_with_plan(c, native, p, &st, &io, &res, independent_waves);
         let needs = lower::take_needs();
         // (or translated for 64-lane waves still: shared memory read and written where not
         // every lane runs, whose blocks the lowering names too)
@@ -584,7 +626,7 @@ fn widen(
             || matches!(&r, Ok((_, Some(64)))) && !needs.is_empty();
         if !stuck {
             if why {
-                eprintln!("WAVE64-WIDE {} branches taken wave-wide", wide.len());
+                eprintln!("WAVE64-WIDE {} branches taken wave-wide", st.wide.len());
             }
             return r;
         }
@@ -611,6 +653,19 @@ fn emit_program(
     st: &structure::Structured,
     io: &io::Io,
     res: &resource::Resources,
+) -> Result<(HostShader, Option<u32>), ShaderError> {
+    emit_program_with_plan(c, native, p, st, io, res, None)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn emit_program_with_plan(
+    c: &Container,
+    native: &NativeProgram,
+    p: &ir::Program,
+    st: &structure::Structured,
+    io: &io::Io,
+    res: &resource::Resources,
+    independent_waves: Option<IndependentWaves>,
 ) -> Result<(HostShader, Option<u32>), ShaderError> {
     let sig = |fourcc| -> Result<Vec<container::SigElement>, ShaderError> {
         match c.part(fourcc) {
@@ -691,6 +746,7 @@ fn emit_program(
         outputs,
         prims,
         mesh_stride,
+        independent_waves,
     })?;
     let wave_size = l.wave_size;
     let shader = HostShader {
@@ -714,6 +770,7 @@ fn emit_program(
         root_srvs: l.root_srvs,
         root_uavs: l.root_uavs,
         root_indexed_views: res.root_indexed_views.clone(),
+        independent_waves,
     };
     Ok((shader, wave_size))
 }
@@ -1089,6 +1146,7 @@ mod tests {
             root_srvs: Vec::new(),
             root_uavs: Vec::new(),
             root_indexed_views: Vec::new(),
+            independent_waves: None,
         };
         let file = |var: &str, stage| {
             std::env::var(var).ok().map(|p| super::HostShader {
@@ -1101,6 +1159,7 @@ mod tests {
                 root_srvs: Vec::new(),
                 root_uavs: Vec::new(),
                 root_indexed_views: Vec::new(),
+                independent_waves: None,
             })
         };
         let ps = file("LEONIDA_REF_PS", crate::HwStage::Ps).unwrap_or(ps);
@@ -1369,6 +1428,7 @@ mod tests {
             outputs: Vec::new(),
             prims: Vec::new(),
             mesh_stride: 0,
+            independent_waves: None,
         })
         .unwrap();
         let mut dxil = l.dxil;
@@ -1390,6 +1450,7 @@ mod tests {
                 root_srvs: l.root_srvs,
                 root_uavs: l.root_uavs,
                 root_indexed_views: Vec::new(),
+                independent_waves: None,
             };
             let (root, pso) = host.compute_pipeline(&cs).unwrap();
             let inputs: Vec<u32> = [

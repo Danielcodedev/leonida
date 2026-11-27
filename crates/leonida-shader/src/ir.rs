@@ -127,6 +127,33 @@ impl Inst {
 /// count. Fails on instructions the IR cannot express yet
 /// ([`ShaderError::Unsupported`]).
 pub fn build(code: &[u8], wave64: bool, vgprs: u16) -> Result<Program, ShaderError> {
+    build_with_waits(code, wave64, vgprs, false)
+}
+
+/// The independent-Wave64 fallback keeps the console wave's memory-completion boundaries.
+/// The ordinary IR path still drops them; only this execution mode supplies their rendezvous.
+pub(crate) fn build_with_wave_waits(
+    code: &[u8],
+    wave64: bool,
+    vgprs: u16,
+) -> Result<Program, ShaderError> {
+    build_with_waits(code, wave64, vgprs, true)
+}
+
+pub(crate) fn wave_memory_wait(name: &str) -> bool {
+    matches!(
+        name,
+        "s_waitcnt" | "s_waitcnt_vscnt" | "s_waitcnt_vmcnt" | "s_waitcnt_lgkmcnt"
+            | "s_waitcnt_expcnt"
+    )
+}
+
+fn build_with_waits(
+    code: &[u8],
+    wave64: bool,
+    vgprs: u16,
+    keep_wave_waits: bool,
+) -> Result<Program, ShaderError> {
     let mut list = gfx10::decode(code)?;
     let lanes = 1 + u8::from(wave64);
     let isa = |offset, reason| ShaderError::Isa { offset, reason };
@@ -198,7 +225,12 @@ pub fn build(code: &[u8], wave64: bool, vgprs: u16) -> Result<Program, ShaderErr
                 Flow::Stop => Exit::End,
             };
         }
-        if let Some((mut reads, writes)) = effects(&machine, &fields, name, lanes, vgprs)? {
+        let effects = if keep_wave_waits && wave_memory_wait(name) {
+            Some((Vec::new(), Vec::new()))
+        } else {
+            effects(&machine, &fields, name, lanes, vgprs)?
+        };
+        if let Some((mut reads, writes)) = effects {
             // Lanes disabled in EXEC keep the old value.
             for w in writes.iter().filter(|w| matches!(w, Reg::V(_))) {
                 if !reads.contains(w) {

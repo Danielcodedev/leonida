@@ -366,6 +366,8 @@ impl Stage {
 pub(crate) struct HostPipeline {
     /// A compute pipeline (else graphics).
     pub(crate) compute: bool,
+    /// A compiler-proven logical wave replay, with its private root parameter.
+    pub(crate) independent_waves: Option<crate::independent::Replay>,
     /// A mesh pipeline (graphics without vertex input).
     pub(crate) mesh: bool,
     pub(crate) pso: ID3D12PipelineState,
@@ -565,6 +567,39 @@ impl HostPipeline {
             }
             bound.push(stage);
         }
+        let independent_waves = match stages
+            .iter()
+            .find_map(|(s, _)| s.translated()?.host.independent_waves)
+        {
+            None => None,
+            Some(waves) => {
+                if compute.is_none() || stages.len() != 1 {
+                    return refuse(
+                        "independent waves are only supported by compute pipelines", shaders,
+                    );
+                }
+                let cost = root_dwords(&params)?;
+                let Some(replay) = crate::independent::Replay::new(
+                    waves, params.len() as u32, cost,
+                ) else {
+                    return refuse(
+                        "independent-wave constants exceed the root signature budget", shaders,
+                    );
+                };
+                params.push(D3D12_ROOT_PARAMETER1 {
+                    ParameterType: D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS,
+                    Anonymous: D3D12_ROOT_PARAMETER1_0 {
+                        Constants: D3D12_ROOT_CONSTANTS {
+                            ShaderRegister: 0,
+                            RegisterSpace: leonida_shader::emit::INDEPENDENT_WAVE_SPACE,
+                            Num32BitValues: 4,
+                        },
+                    },
+                    ShaderVisibility: D3D12_SHADER_VISIBILITY_ALL,
+                });
+                Some(replay)
+            }
+        };
         let (root, root_blob) = match root_signature(&host.device, &params, &samplers, compute.is_some()) {
             Ok(root) => root,
             Err(e) => {
@@ -608,6 +643,7 @@ impl HostPipeline {
             crate::host::name(&pso, || format!("{shaders:?}"));
             return Some(HostPipeline {
                 compute: true,
+                independent_waves,
                 mesh: false,
                 pso,
                 root,
@@ -661,6 +697,7 @@ impl HostPipeline {
             crate::host::name(&pso, || format!("{shaders:?}"));
             return Some(HostPipeline {
                 compute: false,
+                independent_waves: None,
                 mesh: true,
                 pso,
                 root,
@@ -777,6 +814,7 @@ impl HostPipeline {
         );
         Some(HostPipeline {
             compute: false,
+            independent_waves: None,
             mesh: false,
             pso,
             root,
@@ -988,6 +1026,67 @@ fn code_bytes(code: &D3D12_SHADER_BYTECODE) -> Vec<u8> {
     }
     // SAFETY: a translation's own bytes, alive while its shader is.
     unsafe { std::slice::from_raw_parts(code.pShaderBytecode.cast::<u8>(), code.BytecodeLength) }.to_vec()
+}
+
+/// The actual parameters, including one-view tables, determine the DWORD cost.
+fn root_dwords(params: &[D3D12_ROOT_PARAMETER1]) -> Option<u32> {
+    params.iter().try_fold(0u32, |sum, p| {
+        let cost = match p.ParameterType {
+            D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE => 1,
+            D3D12_ROOT_PARAMETER_TYPE_CBV
+            | D3D12_ROOT_PARAMETER_TYPE_SRV
+            | D3D12_ROOT_PARAMETER_TYPE_UAV => 2,
+            D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS => {
+                // SAFETY: this discriminant selects the Constants union member.
+                unsafe { p.Anonymous.Constants.Num32BitValues }
+            }
+            _ => return None,
+        };
+        sum.checked_add(cost)
+    })
+}
+
+#[cfg(test)]
+mod independent_root_tests {
+    use super::*;
+
+    #[test]
+    fn independent_constants_use_the_actual_native_parameter_cost() {
+        let constants = |n| D3D12_ROOT_PARAMETER1 {
+            ParameterType: D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS,
+            Anonymous: D3D12_ROOT_PARAMETER1_0 {
+                Constants: D3D12_ROOT_CONSTANTS {
+                    Num32BitValues: n,
+                    ..Default::default()
+                },
+            },
+            ..Default::default()
+        };
+        let mut params = vec![constants(53)];
+        for kind in [
+            D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
+            D3D12_ROOT_PARAMETER_TYPE_CBV,
+            D3D12_ROOT_PARAMETER_TYPE_SRV,
+            D3D12_ROOT_PARAMETER_TYPE_UAV,
+        ] {
+            params.push(D3D12_ROOT_PARAMETER1 {
+                ParameterType: kind,
+                ..Default::default()
+            });
+        }
+        let waves = leonida_shader::emit::IndependentWaves::new([128, 1, 1]).unwrap();
+        let cost = root_dwords(&params).unwrap();
+        let replay = crate::independent::Replay::new(waves, params.len() as u32, cost).unwrap();
+        assert_eq!(cost, 60);
+        assert_eq!(replay.parameter(), 5);
+        params[0] = constants(54);
+        let cost = root_dwords(&params).unwrap();
+        assert!(crate::independent::Replay::new(waves, params.len() as u32, cost).is_none());
+        params[0] = constants(u32::MAX);
+        assert!(root_dwords(&params).is_none());
+        params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE(i32::MAX);
+        assert!(root_dwords(&params).is_none());
+    }
 }
 
 fn root_signature(

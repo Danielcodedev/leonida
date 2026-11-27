@@ -185,6 +185,24 @@ impl Host {
                 ShaderVisibility: D3D12_SHADER_VISIBILITY_ALL,
             });
         }
+        for &(shader, visibility) in stages {
+            if shader.independent_waves.is_some() {
+                if stages.len() != 1 || shader.stage != crate::native::HwStage::Cs {
+                    return Err("independent waves require one compute stage".into());
+                }
+                params.push(D3D12_ROOT_PARAMETER1 {
+                    ParameterType: D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS,
+                    Anonymous: D3D12_ROOT_PARAMETER1_0 {
+                        Constants: D3D12_ROOT_CONSTANTS {
+                            ShaderRegister: 0,
+                            RegisterSpace: super::INDEPENDENT_WAVE_SPACE,
+                            Num32BitValues: 4,
+                        },
+                    },
+                    ShaderVisibility: visibility,
+                });
+            }
+        }
         let mut samplers = Vec::new();
         for &(s, vis) in stages {
             for (n, d) in s.static_samplers.iter().enumerate() {
@@ -600,6 +618,7 @@ fn stub(pixel: bool, outputs: Vec<SigElement>) -> HostShader {
         root_srvs: Vec::new(),
         root_uavs: Vec::new(),
         root_indexed_views: Vec::new(),
+        independent_waves: None,
     }
 }
 
@@ -1031,6 +1050,33 @@ impl Host {
         pso: &ID3D12PipelineState,
         d: &Dispatch,
     ) -> Result<Vec<Vec<u32>>, String> {
+        self.dispatch_with_replay(root, pso, d, None, None)
+    }
+
+    /// Authored independent-wave tests only: replay with the hidden wave index and a
+    /// bounded wait, terminating without unwinding resources on submission failure.
+    pub fn dispatch_independent(
+        &self,
+        root: &ID3D12RootSignature,
+        pso: &ID3D12PipelineState,
+        shader: &HostShader,
+        d: &Dispatch,
+    ) -> Result<Vec<Vec<u32>>, String> {
+        let plan = shader.independent_waves.ok_or("missing independent-wave contract")?;
+        let views = shader.root_cbvs.len() + shader.root_srvs.len() + shader.root_uavs.len();
+        let param = 1 + views as u32;
+        self.dispatch_with_replay(root, pso, d, Some(std::time::Duration::from_secs(5)),
+            Some((param, plan)))
+    }
+
+    fn dispatch_with_replay(
+        &self,
+        root: &ID3D12RootSignature,
+        pso: &ID3D12PipelineState,
+        d: &Dispatch,
+        timeout: Option<std::time::Duration>,
+        replay: Option<(u32, super::IndependentWaves)>,
+    ) -> Result<Vec<Vec<u32>>, String> {
         let dev = &self.device;
         // SAFETY: D3D12 calls with descriptions that outlive them; resources
         // stay alive until the fence says the GPU is done.
@@ -1393,7 +1439,15 @@ impl Host {
                 }
             }
             let [x, y, z] = d.groups;
-            list.Dispatch(x, y, z);
+            if let Some((param, plan)) = replay {
+                for wave in 0..plan.wave_count() {
+                    let constants = [wave, 0, 0, 0];
+                    list.SetComputeRoot32BitConstants(param, 4, constants.as_ptr().cast(), 0);
+                    list.Dispatch(x, y, z);
+                }
+            } else {
+                list.Dispatch(x, y, z);
+            }
             for (r, size, n, rb) in &uavs {
                 // (Buffers were promoted from the common state by the dispatch.)
                 list.ResourceBarrier(&[transition(
@@ -1414,12 +1468,30 @@ impl Host {
                 }
             }
             list.Close().map_err(err)?;
-            queue.ExecuteCommandLists(&[Some(list.cast().map_err(err)?)]);
             let fence: ID3D12Fence = dev.CreateFence(0, D3D12_FENCE_FLAG_NONE).map_err(err)?;
-            queue.Signal(&fence, 1).map_err(err)?;
-            while fence.GetCompletedValue() < 1 {
+            let submitted = list.cast().map_err(err)?;
+            queue.ExecuteCommandLists(&[Some(submitted)]);
+            let fail = |why: String| -> ! {
+                eprintln!("test dispatch did not complete: {why}");
+                std::process::abort();
+            };
+            if let Err(e) = queue.Signal(&fence, 1) {
+                fail(format!("Signal: {}", err(e)));
+            }
+            let deadline = timeout.map(|t| std::time::Instant::now() + t);
+            loop {
+                let completed = fence.GetCompletedValue();
+                if completed == u64::MAX {
+                    fail("fence reported device removal".into());
+                }
                 if let Err(e) = dev.GetDeviceRemovedReason() {
-                    return Err(format!("device removed: {}", err(e)));
+                    fail(format!("device removed: {}", err(e)));
+                }
+                if completed >= 1 {
+                    break;
+                }
+                if deadline.is_some_and(|d| std::time::Instant::now() >= d) {
+                    fail("fence timeout".into());
                 }
                 std::thread::yield_now();
             }
