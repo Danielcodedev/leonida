@@ -5,6 +5,26 @@ The status summary is in [README.md](../README.md).
 
 ## Newest (2026-11-26)
 
+**R-7: signature interpolation modes from the console's `PSV0`.**
+The translated signatures took their interpolation modes from a table keyed
+by type: every float linear, every integer constant. The console packs a
+constant float (`TEXCOORD9`, `COLOR3`, beside `SV_IsFrontFace` or a uint)
+into one register, which the table split into two modes, and the DXIL
+validator refused the program ("interpolation mode that differs from
+another element packed into the same row"). The console container's `PSV0`
+lists each element's real mode; `container::take_modes` now applies it to
+the vertex or mesh outputs and the pixel inputs, by register and column,
+and `rect.rs` keeps it for the rectangle-list geometry stage. No register or
+mask changes, and both stages of a link read the modes the console linked
+them with. On `f3c94ca` that refusal stopped 70 programs (36 pixel, 21 mesh,
+13 vertex); 67 now pass it. A full `translate --list --validate` against
+`f3c94ca` shows 61 more programs validated and none failing that passed; the
+6 others then fail with "Container part 'Program Input/Output Signature'
+does not match", the refusal R-7's sort by register (#64) addresses. Not
+fixed: 3 pixel programs (`PS_RasterizeWaterVolumeExposedSurface`,
+`PS_RasterizeVehicle*InterfaceDepth`). A unit test reads back the modes of a
+`PSV0` written by `psv`.
+
 **R-7: signature rows in the order the DXIL validator expects.**
 `container::signature` sorted the rows of one register by column. The
 validator expects them in element order, as the console's containers list
