@@ -26,6 +26,13 @@ work; core and synchronization validation report only the runtime's deliberate i
 canary. An initial test fixture had reversed LOD bounds; the recorded comparison uses the corrected
 finite range 0..4 and valid sampler enums in both executables.
 
-The tests use the normal explicit skip-if-no-device convention for CI. Strict Windows default and
-all-features Clippy checks pass. Exact made keys validate descriptor synchronization, not rendered
-sampler output. No game image improvement or performance result is claimed.
+The tests use the normal explicit skip-if-no-device convention for CI. Native Windows CI passed
+both strict workspace Clippy modes and the full workspace suite: 774 passed, none failed, and
+19 explicitly ignored. The validation branch used identical production source and changed only the
+workflow trigger. Local Windows cross-check and compilation of all 16 workspace test executables
+also passed. Exact made keys validate descriptor synchronization, not rendered sampler output.
+
+A bounded unattended game run with the fix completed. Rectangular corruption was still visible
+before fog and through temporal processing. The baseline camera pan differed, so the captures do
+not support a quantitative or severity comparison. No game image improvement, frame-rate benefit
+or long-run stability result is claimed.
