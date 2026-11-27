@@ -42,5 +42,23 @@ What it shows:
   darkness and missing detail the tester saw read like the RTX 3060 Ti 8 GB without the warm-up
   (R-2, same fork-notes section); a guess until a run after the warm-up shows otherwise.
 
+The tester also sent screenshots from these runs, without saying which run each came from. They
+are described here, not added. Frame figures are the title bar's:
+
+- Prison, looking out of a window at the yard, 195.0 ms a frame, 5,030 draws: the yard, the
+  buildings, a watchtower and the people in it are drawn in evening light and look whole. The
+  room inside is almost black.
+- Robbery, 263.3 ms, 4,447 draws: most of the picture is a white, washed-out blur. Characters
+  show only as soft shapes, with scattered black and blue blotches and a few sharp fragments.
+  This is the "severe corruption and blur" the tester describes. It reads like the washed-out
+  prologue on the RTX 3060 Ti 8 GB (R-3, same fork-notes section). A guess: the shapes are there
+  but smeared, so a full-screen pass going wrong fits better than missing textures.
+- Boat, 201.7 ms, 4,621 draws: the sky, clouds, shore, a bridge, the boat and the people on it
+  are drawn; the water is flat white with a few dark specks. That is the "poorly rendered
+  water" the tester saw.
+
+So how bad the picture is depends on the place: the prison yard looked whole and the robbery
+did not, at similar draw counts.
+
 Not measured: any run with all eight on, in the same place on the same day; any run after the
 warm-up; the `nvidia-8gb` profile.
