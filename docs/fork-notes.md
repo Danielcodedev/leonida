@@ -19,7 +19,11 @@ changes, and the elements it changes are not read, so the picture cannot
 change. A unit test covers a register read one way, one read two ways (left
 alone) and an unread uint.
 
-**Wait for texture readbacks before preparing dependent submissions.**
+**Wait for texture readbacks before preparing dependent submissions
+(`LEONIDA_READBACK_ORDER=1`, opt-in profile `readback-order`).**
+Off by default until a `scripts\measure-run.ps1` pair shows no frame-time
+cost: with it on, a `Run` step waits while any readback is still pending,
+wherever it writes. With it off, submissions wait exactly as before, rectangle expansion included.
 Ordinary texture-to-buffer copies were missing from the ranges tracked while
 submissions were in flight. A later submission's CPU-side buffer copy could
 therefore consume stale title memory before the earlier texture readback landed.
@@ -56,7 +60,7 @@ overlap, disjoint, empty and overflowing ranges. This uses the same hardware and
 runtime above and no shader dispatches or game files.
 
 Run the optional tests in a fresh diagnostics test process with
-`LEONIDA_TEST_READBACK_ORDER=1`, `LEONIDA_LATE_WAIT=3`, the desired
+`LEONIDA_TEST_READBACK_ORDER=1`, `LEONIDA_READBACK_ORDER=1`, `LEONIDA_LATE_WAIT=3`, the desired
 `LEONIDA_RELAY` value, and either `LEONIDA_D3D12_WARP=1` or the explicit hardware
 opt-in `LEONIDA_TEST_READBACK_HARDWARE=1`:
 `cargo test -p leonida-gpu --features diagnostics --locked

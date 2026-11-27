@@ -2725,7 +2725,7 @@ fn blocked_by(
             // shader's broad writable view. In particular, fill_ahead must
             // not let a copy or upload consume the old readback contents.
             let access = step.readback_access();
-            if read_backs.blocks(access) {
+            if readback_order() && read_backs.blocks(access) {
                 return Some(if matches!(step, Step::Run(_)) {
                     WHY_RUN
                 } else {
@@ -2786,7 +2786,7 @@ fn blocked_by(
                 Step::HostRead(..) => {
                     // Arbitrary read-only host work has no speculative
                     // fill check; wait for the exact range it consumes.
-                    if access.blocked_by(written) {
+                    if readback_order() && access.blocked_by(written) {
                         return Some(WHY_READ);
                     }
                 }
@@ -3771,6 +3771,15 @@ pub(crate) fn walls_trace() -> bool {
     *ON.get_or_init(|| std::env::var_os("LEONIDA_WALLS_TRACE").is_some_and(|v| v == "1" || v == "2"))
 }
 
+/// Whether a submission's CPU-side steps wait for earlier texture readbacks
+/// still to land where they read or write, and those readbacks include
+/// ordinary texture-to-buffer copies (`LEONIDA_READBACK_ORDER=1`; off by
+/// default until measured: a `Run` step then waits while any is pending).
+pub(crate) fn readback_order() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LEONIDA_READBACK_ORDER").is_some_and(|v| v == "1"))
+}
+
 /// Readbacks of these lists whose destinations must remain pending until
 /// the CPU copy-back finishes, including ordinary texture-to-buffer copies.
 fn pending_read_backs(runs: &[&HostList]) -> ReadBacks {
@@ -3778,6 +3787,9 @@ fn pending_read_backs(runs: &[&HostList]) -> ReadBacks {
     for list in runs {
         let deferred = list.deferred();
         pending.extend(deferred.texture_backs.iter().map(crate::texback::Back::range));
+        if !readback_order() {
+            continue;
+        }
         for (_, at, layout) in &deferred.backs {
             if !pending.rows(*at, *layout) {
                 fail(format_args!("texture readback destination range overflow"));
@@ -9413,8 +9425,9 @@ void main() {
 }
 
 /// Optional end-to-end check, alone in a fresh process:
-/// LEONIDA_TEST_READBACK_ORDER=1 LEONIDA_D3D12_WARP=1 LEONIDA_LATE_WAIT=3
-/// LEONIDA_RELAY=0 (also 1 and 2), with diagnostics and one test thread.
+/// LEONIDA_TEST_READBACK_ORDER=1 LEONIDA_READBACK_ORDER=1 LEONIDA_D3D12_WARP=1
+/// LEONIDA_LATE_WAIT=3 LEONIDA_RELAY=0 (also 1 and 2), with diagnostics and
+/// one test thread.
 /// A hardware adapter requires LEONIDA_TEST_READBACK_HARDWARE=1 instead of WARP.
 /// No device is created without explicit test and adapter opt-ins. This tests separate
 /// submissions; dependencies inside one submission need command-list splitting.
@@ -9451,6 +9464,7 @@ mod readback_order_tests {
             .and_then(|a| unsafe { a.GetDesc1() }.ok())
             .is_some_and(|d| d.Flags & DXGI_ADAPTER_FLAG_SOFTWARE.0 as u32 != 0);
         assert!(software || hardware, "hardware execution was not explicitly requested");
+        assert!(readback_order(), "readback order test requires LEONIDA_READBACK_ORDER=1");
         assert!(
             late(),
             "readback order test requires asynchronous submissions"
