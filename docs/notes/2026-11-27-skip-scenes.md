@@ -22,9 +22,12 @@ A row is a bar when no color channel of every 4th pixel is above 12. A sample is
 
 Enter is held after two letterboxed samples in a row and let go after three open ones. Black and
 unsure samples change nothing, so a hold carries across the fade between two cutscenes. While
-holding, Enter is down for 48 presented frames and up for 3 (and at least 0.5 s), so a skip that
-wants a fresh press gets one. A hold that goes 1200 frames without a black sample stops, and is not taken
-up again before an open sample: a letterbox Enter cannot skip. The held Enter joins the keys of
+holding, Enter is down and then up for 3 presented frames (and at least 0.5 s), so a skip that
+wants a fresh press gets one. The first press lasts 48 frames and every next one of the same hold
+twice as long, up to 384: how long a skip wants Enter down is not known, and one length that is
+too short every time would never skip. A hold that goes 1200 frames without a black sample stops,
+and is not taken up again before an open or a black sample: a letterbox Enter cannot skip, and
+the cutscene after its fade is held again. The held Enter joins the keys of
 `LEONIDA_KEYS`, so it reaches both the keyboard and the pad button the stand-in pad maps Enter to.
 The log has one line when a hold starts and one when it ends, with the seconds held; no picture
 data.

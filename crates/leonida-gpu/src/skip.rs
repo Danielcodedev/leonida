@@ -30,12 +30,16 @@ const OPEN_SAMPLES: u32 = 3;
 /// While holding: frames Enter is down, then frames (and at least
 /// [`RELEASE_MS`]) it is up, so a skip that wants a fresh press gets one.
 /// A shorter release can fall inside one slow frame and never be seen.
+/// How long a skip wants Enter down is not known, so every press of a hold
+/// is twice as long as the one before, up to [`PRESS_MOST`]: one length cut
+/// short every time would never skip.
 const PRESS_FRAMES: u64 = 48;
+const PRESS_MOST: u64 = 384;
 const RELEASE_FRAMES: u64 = 3;
 const RELEASE_MS: u64 = 500;
 /// A hold that went this many frames without a black sample (the fade
 /// between two cutscenes) stops: a letterbox Enter cannot skip. It is not
-/// held again before an open sample.
+/// held again before an open or a black sample.
 const CAP_FRAMES: u64 = 1200;
 
 /// Rows read, as fractions of the height: three in the top bar, two in the
@@ -98,8 +102,9 @@ struct Hold {
     began: (u64, u64),
     /// The frame of its start or its last black sample, for [`CAP_FRAMES`].
     fresh: u64,
-    /// When Enter last went down.
+    /// When Enter last went down, and for how many frames.
     pressed: u64,
+    press: u64,
     /// When Enter last went up, while it is up.
     released: Option<(u64, u64)>,
 }
@@ -138,6 +143,7 @@ impl Skipper {
                         began: (frame, ms),
                         fresh: frame,
                         pressed: frame,
+                        press: PRESS_FRAMES,
                         released: None,
                     });
                     return Some(Event::Holding);
@@ -156,8 +162,10 @@ impl Skipper {
                     ));
                 }
             }
-            // A hold carries across a fade between two cutscenes.
+            // A hold carries across a fade between two cutscenes, and the
+            // cutscene after one Enter could not skip is held again.
             Look::Black => {
+                self.capped = false;
                 if let Some(hold) = &mut self.hold {
                     hold.fresh = frame;
                 }
@@ -188,10 +196,11 @@ impl Skipper {
                 if over {
                     hold.released = None;
                     hold.pressed = frame;
+                    hold.press = (hold.press * 2).min(PRESS_MOST);
                 }
                 over
             }
-            None if frame.saturating_sub(hold.pressed) >= PRESS_FRAMES => {
+            None if frame.saturating_sub(hold.pressed) >= hold.press => {
                 hold.released = Some((frame, ms));
                 false
             }
@@ -567,6 +576,32 @@ mod tests {
         // Three frames on, but too soon (a fast frame rate).
         assert!(!skipper.enter(8 + PRESS_FRAMES + RELEASE_FRAMES, 300).0);
         assert!(skipper.enter(9 + PRESS_FRAMES + RELEASE_FRAMES, 600).0);
+    }
+
+    #[test]
+    fn presses_grow_and_a_fade_ends_a_cap() {
+        let mut skipper = Skipper::new();
+        skipper.look(0, 0, Look::Letterbox);
+        skipper.look(8, 0, Look::Letterbox);
+        let mut presses = Vec::new();
+        let mut length = 0;
+        let mut capped = None;
+        for frame in 8..8 + CAP_FRAMES + 1 {
+            let (down, event) = skipper.enter(frame, frame * 1000 / 6);
+            if down {
+                length += 1;
+            } else if length > 0 {
+                presses.push(std::mem::take(&mut length));
+            }
+            capped = capped.or(event);
+        }
+        assert_eq!(presses[..5], [48, 96, 192, 384, 384]);
+        assert!(matches!(capped, Some(Event::Capped(..))), "{capped:?}");
+        // The next cutscene, after a fade, is held again.
+        let end = 8 + CAP_FRAMES + 8;
+        assert_eq!(skipper.look(end, 0, Look::Letterbox), None);
+        skipper.look(end + 8, 0, Look::Black);
+        assert_eq!(skipper.look(end + 16, 0, Look::Letterbox), Some(Event::Holding));
     }
 
     #[test]

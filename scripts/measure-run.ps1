@@ -69,7 +69,8 @@ try {
     $env:LEONIDA_KEYS = ((0..20) | ForEach-Object { '{0}:Enter' -f (20 + 8 * $_) }) -join ','
     # The taps get through the start screen; a cutscene wants Enter held, and for how long
     # depends on the frame rate, so the game's picture says when (letterbox bars).
-    if (-not $NoSkipScenes) { $env:LEONIDA_SKIP_SCENES = '1' }
+    if ($NoSkipScenes) { Remove-Item Env:LEONIDA_SKIP_SCENES -ErrorAction SilentlyContinue }
+    else { $env:LEONIDA_SKIP_SCENES = '1' }
     $env:LEONIDA_CAPTURE = Join-Path $run 'cap'
     # Shots a fixed number of frames after the world's first frame; the every-8th-frame world
     # pictures are pushed out of reach (each costs about 235 ms of its frame).
