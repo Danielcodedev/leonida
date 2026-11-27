@@ -1272,6 +1272,15 @@ Validation: the public emitter accepts the authored fixture, and a CPU evaluator
 its emitted integer expressions for 6,912 lane results across 64/128-thread groups, six
 row masks, two bank masks, native Wave32/Wave64 and the split Wave64 path. The baseline
 fails and the corrected lowering passes. The native shader suite passes 191 tests with
-two ignored; strict library Clippy and asset policy pass. The evaluator models the
-entry allocator's logical wave base, so this is not a GPU synchronization or gameplay
-claim. Hardware validation is still pending.
+two ignored; strict native and Windows Clippy and asset policy pass. The evaluator
+models the entry allocator's logical wave base; separate hardware validation covers
+the actual emitted shaders.
+
+Twelve authored baseline/fixed programs pass Microsoft DXIL validation. On a Wave32
+NVIDIA host through Proton and official vkd3d-proton ec207, three asymmetric-mask cases
+each return 32 wrong lanes before the fix; the symmetric-mask and native Wave32 controls
+pass. All six cases pass after the fix, with all twelve submission fences completed.
+Vulkan core/synchronization validation reports the same runtime initialization warning
+in both runs and no further errors. A private census finds no eligible asymmetric
+Wave64 compute DPP row-mask sites among 26,148 native programs, so this is a translator
+correctness fix without a demonstrated current-title rendering or performance gain.
