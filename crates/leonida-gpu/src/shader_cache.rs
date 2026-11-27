@@ -269,6 +269,16 @@ fn encode(s: &HostShader) -> Vec<u8> {
             word(&mut out, value);
         }
     }
+    match s.independent_waves {
+        None => word(&mut out, 0),
+        Some(waves) => {
+            word(&mut out, 1);
+            for n in waves.original_threads().into_iter().chain(waves.native_threads()) {
+                word(&mut out, n);
+            }
+            word(&mut out, waves.wave_count());
+        }
+    }
     out
 }
 
@@ -337,6 +347,20 @@ fn decode(bytes: &[u8]) -> Option<HostShader> {
             shift: u8::try_from(r.word()?).ok().filter(|&s| s < 32)?,
         });
     }
+    let independent_waves = match r.word()? {
+        0 => None,
+        1 if stage == HwStage::Cs => {
+            let original = [r.word()?, r.word()?, r.word()?];
+            let native = [r.word()?, r.word()?, r.word()?];
+            let count = r.word()?;
+            let waves = leonida_shader::emit::IndependentWaves::new(original)?;
+            if native != waves.native_threads() || count != waves.wave_count() {
+                return None;
+            }
+            Some(waves)
+        }
+        _ => return None,
+    };
     r.0.is_empty().then_some(HostShader {
         stage,
         dxil,
@@ -347,6 +371,7 @@ fn decode(bytes: &[u8]) -> Option<HostShader> {
         root_srvs,
         root_uavs,
         root_indexed_views,
+        independent_waves,
     })
 }
 
@@ -381,7 +406,47 @@ mod tests {
                 byte_offset: 32,
                 shift: 5,
             }],
+            independent_waves: None,
         }
+    }
+
+    #[test]
+    fn independent_wave_execution_layout_survives_a_disk_cache_hit() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Cache::open(dir.path()).unwrap();
+        let mut wanted = shader();
+        wanted.stage = HwStage::Cs;
+        wanted.independent_waves =
+            leonida_shader::emit::IndependentWaves::new([8, 16, 1]);
+        let first = cached(&cache, &[5; 32], b"authored layout", |_| Ok(wanted.clone())).unwrap();
+        assert_eq!(first, wanted);
+        let loaded = cached(&cache, &[5; 32], b"authored layout", |_| {
+            panic!("an undamaged entry must load without translating")
+        }).unwrap();
+        assert_eq!(loaded, wanted, "cache loss must not silently dispatch the wrong geometry");
+    }
+
+    #[test]
+    fn malformed_execution_layouts_cannot_be_loaded_from_cache() {
+        let mut wanted = shader();
+        wanted.stage = HwStage::Cs;
+        wanted.independent_waves = leonida_shader::emit::IndependentWaves::new([8, 16, 1]);
+        let valid = encode(&wanted);
+        assert_eq!(decode(&valid), Some(wanted));
+        // The tagged layout tail contains original and native dimensions,
+        // then wave count. Corruption must not create a different dispatch.
+        let tail = valid.len() - 32;
+        for (offset, replacement) in [(tail, 2u32), (tail + 4, 0),
+            (tail + 16, 32), (tail + 28, 3)]
+        {
+            let mut bad = valid.clone();
+            bad[offset..offset + 4].copy_from_slice(&replacement.to_le_bytes());
+            assert!(decode(&bad).is_none());
+        }
+        let mut graphics = valid.clone();
+        let pixel = STAGES.iter().position(|&stage| stage == HwStage::Ps).unwrap() as u32;
+        graphics[4..8].copy_from_slice(&pixel.to_le_bytes());
+        assert!(decode(&graphics).is_none());
     }
 
     #[test]

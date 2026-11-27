@@ -95,6 +95,7 @@ fn with_program(
         outputs: vec![],
         prims: vec![],
         mesh_stride: 0,
+        independent_waves: None,
     };
     let bad = HashMap::new();
     let mut lower = Lower::new(&parts, &bad);
