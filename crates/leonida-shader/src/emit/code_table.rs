@@ -95,4 +95,3 @@ impl CodeTable {
         result.expect("a nonempty table")
     }
 }
-
