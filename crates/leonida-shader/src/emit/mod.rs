@@ -113,9 +113,9 @@ pub use sampler::StaticSampler;
 pub use lower::set_host_max_wave;
 pub use rect::rect_list_gs;
 pub use shader::{
-    MEMORY_FAULTS, MEMORY_PAGES, ROOT_CBV_SPACE, SAMPLER_SPACE, SLOT_FAULTS, SLOT_MEMORY, SLOT_STRIDES,
-    SLOT_STRIDES_COUNT, USER_DATA_SPACE, USER_MEMORY_BASE, USER_VIEW_ADDRESS, USER_VIEW_BIAS,
-    set_view_heap_limit, view_heap_limit,
+    MEMORY_FAULTS, MEMORY_PAGES, ROOT_CBV_SPACE, SAMPLER_SPACE, SLOT_FAULTS, SLOT_MEMORY,
+    SLOT_STRIDES, SLOT_STRIDES_COUNT, SLOT_STRIDES_DWORDS, SLOT_VIEW_ADDRESSES, USER_DATA_SPACE,
+    USER_MEMORY_BASE, USER_VIEW_ADDRESS, USER_VIEW_BIAS, set_view_heap_limit, view_heap_limit,
 };
 
 /// The loop limit without an override: 2^20.
@@ -635,6 +635,18 @@ fn emit_program(
             (0, _) => 1,
             _ => 0,
         };
+    }
+    // The console's own modes where its PSV0 lists them: the table above
+    // makes a constant float linear, splitting a register the console packed
+    // with one mode (the validator wants one per register). The stage it
+    // links with takes the same modes from its own PSV0.
+    if let Some(psv) = c.part(FourCC::PSV0) {
+        let (which, els) = if pixel {
+            (0, &mut inputs)
+        } else {
+            (1, &mut outputs)
+        };
+        container::take_modes(psv.data, which, els);
     }
     // With a conservative depth output (SV_DepthLessEqual, GreaterEqual) DXIL
     // wants the position centroid (or per sample), as DXC declares it then.
