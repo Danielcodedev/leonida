@@ -971,3 +971,26 @@ cargo build --profile diag -p leonida --features diagnostics   # target\diag\leo
 
 Every build appends crashes and host GPU failures to `crashes.log` in the
 title's data folder.
+
+## R-7: large code-literal tables on NVIDIA (2026-11-26)
+
+Six compute pipelines were refused by NVIDIA's Vulkan compiler under Proton even though
+Microsoft's DXIL validator and `spirv-val --target-env vulkan1.3` accepted them. Their
+runtime-indexed constant arrays were 16,640–18,368 bytes. A joined code address can have a
+zero fixed offset, so its table must retain instruction bytes as well as appended data;
+trimming to the final decoded instruction is not generally equivalent.
+
+`LEONIDA_CODE_TABLE_CHUNKS=1` splits tables larger than 16 KiB into constant arrays of at
+most 1,024 dwords. Reads preserve the original wrapping subtraction, dword indexing and
+last-word clamp. Every array load is in bounds, including unselected loads from the short
+final chunk. Tables of at most 16 KiB keep their original single-array form. The switch is
+off by default because selecting a chunk can require more loads on other cards. The
+translator's source and switch fingerprint keep its cached translations separate.
+
+On an RTX 5090, driver 580.173.02, i9-14900KS, Pop!_OS with Proton 11.0 and vkd3d-proton
+3.2.0, the six refused pipelines went from 0/6 to 6/6 created in a compile-only comparison.
+All six still passed DXIL and SPIR-V validation, and their arrays retained every original
+byte. Synthetic tests execute the emitted address/load/select instructions against an
+independent original-array oracle, including chunk edges, unaligned addresses, underflow,
+32-bit wrap and both switch modes. Pipeline creation alone does not establish correct
+rendering or improved frame times; R-7 remains open.
