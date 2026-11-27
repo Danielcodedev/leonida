@@ -1223,6 +1223,28 @@ Notes for this card:
 - Working set while the title screens are up: about 5.3 GB, on 16 GB of RAM with a 48 GB commit limit.
 - Build: release profile, commit f0e7a9b.
 
+### Where the 8 GB goes (diagnostics build, Series X, after the warm-up)
+
+`measure-gta6.ps1` in the first gameplay room, `target\diag` with the frame log and card meter:
+
+| Figure | Value |
+|---|---|
+| video memory budget / in use | 7,076 MB / 6,963 MB (98.4 %) |
+| title textures with no host copy | 15,563 (8,646 MB of title memory) |
+| "no room for new ones" lines | 70 (the line is throttled; refusals are more frequent) |
+| private memory | 22,008 MB, 1,429 MB of RAM free, 9,710 MB of commit left |
+| usual frame (mean of 17) | 312 ms |
+
+Two attempts to buy room, both worse for the picture:
+
+- `LEONIDA_TEXTURE_ROOM_PERCENT=97`: textures with no host copy rise to 17,301 (10,314 MB), the "no room" lines
+  to 191, and the usual frame falls 312 -> 271 ms. Faster and blacker, the trade the notes above describe.
+- `--console series-s`: it loads on this card (unlike A-5's note) but the first room renders black at 1 fps,
+  1,446 ms. Not usable.
+
+So on 8 GB the missing-texture count is structural: the title asks for 8.6-10.3 GB of texture data with a 7.1 GB
+card, and no exposed switch changes that. `LEVELS_ON_DEMAND` (on by default) already does the cheap part.
+
 ## Cards measured: RTX 4070 Ti SUPER 16 GB, RTX 4060 Ti 8 GB (2026-11-27)
 
 Two testers' reports, as they gave them. Nothing here quotes game data.
