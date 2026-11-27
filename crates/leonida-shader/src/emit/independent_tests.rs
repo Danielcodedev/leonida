@@ -312,7 +312,7 @@ fn independent_mode_rejects_group_communication_and_unmodelled_system_effects() 
             );
         }
     }
-    for (threads, lds) in [([64, 1, 1], 0), ([129, 1, 1], 0), ([128, 1, 1], 1)] {
+    for (threads, lds) in [([32, 1, 1], 0), ([129, 1, 1], 0), ([128, 1, 1], 1)] {
         let mut native = looping_mask();
         native.io = StageIo::Cs(ComputeIo {
             rsrc2: 5 << 1 | lds << 15,
@@ -324,11 +324,211 @@ fn independent_mode_rejects_group_communication_and_unmodelled_system_effects() 
     }
 }
 
+fn ds_inst(opcode: u32, gds: bool, offsets: [u8; 2], regs: [u8; 4]) -> [u32; 2] {
+    [
+        (0x36 << 26)
+            | (opcode << 18)
+            | (u32::from(gds) << 17)
+            | (u32::from(offsets[1]) << 8)
+            | u32::from(offsets[0]),
+        (u32::from(regs[0]) << 24)
+            | (u32::from(regs[1]) << 16)
+            | (u32::from(regs[2]) << 8)
+            | u32::from(regs[3]),
+    ]
+}
+
+fn admitted(native: &NativeProgram, enabled: bool) -> Option<super::IndependentWaves> {
+    let p = ir::build(&native.patched_code(), native.wave64, native.vgprs).ok()?;
+    let st = structure::structure(&p).ok()?;
+    let res = resource::track(&p, &native.layout, native.stage, Some(&st)).ok()?;
+    let old = lower::TEST_HOST_WAVE.replace(Some(32));
+    let previous = independent::TEST_ENABLED.replace(Some(enabled));
+    let result = independent::admit(native, &p, &res);
+    independent::TEST_ENABLED.set(previous);
+    lower::TEST_HOST_WAVE.set(old);
+    result
+}
+
+fn single_wave_lds(threads: [u32; 3], lds_granules: u32) -> NativeProgram {
+    let mut native = looping_mask();
+    let extra_tid = if threads[1] > 1 || threads[2] > 1 {
+        1 << 11
+    } else {
+        0
+    };
+    native.io = StageIo::Cs(ComputeIo {
+        rsrc2: (5 << 1) | extra_tid | (lds_granules << 15),
+        threads,
+    });
+    native.vgprs = 8;
+    // Keep looping_mask's mask-as-data reduction, then add cross-half v_readlane,
+    // v_mbcnt, private LDS write/read across halves, and intra-wave s_barrier.
+    let tail: [u32; 18] = [
+        0x7E02_0207, // v_mov_b32 v1, s7
+        0xD760_0006,
+        0x0001_4101, // v_readlane_b32 s6, v1, 32
+        0xD765_0002,
+        0x0000_0CC1, // v_mbcnt_lo_u32_b32 v2, -1, s6
+        0x4A02_0302, // v_add_nc_u32 v1, v2, v1
+        0x3406_0082, // v_lshlrev_b32 v3, 2, v0
+        0xD834_0000,
+        0x0000_0103, // ds_write_b32 v3, v1
+        0xBF8A_0000, // s_barrier
+        0x3A04_00A0, // v_xor_b32 v2, 32, v0
+        0x3404_0482, // v_lshlrev_b32 v2, 2, v2
+        0xD8D8_0000,
+        0x0100_0002, // ds_read_b32 v1, v2
+        0xBF8C_0000, // s_waitcnt vmcnt(0) expcnt(0) lgkmcnt(0)
+        0xE070_1000,
+        0x8002_0103, // buffer_store_dword v1, v3, s[8:11], 0 offen
+        0xBF81_0000, // s_endpgm
+    ];
+    native.code.truncate(17 * 4);
+    native
+        .code
+        .extend(tail.into_iter().flat_map(u32::to_le_bytes));
+    native
+}
+
+fn with_ds_before_barrier(mut native: NativeProgram, extra: [u32; 2]) -> NativeProgram {
+    let at = 26 * 4;
+    let rest = native.code.split_off(at);
+    native
+        .code
+        .extend(extra.into_iter().flat_map(u32::to_le_bytes));
+    native.code.extend(rest);
+    native
+}
+
+#[test]
+fn single_wave_lds_with_barrier_and_lane_ops_is_admitted_for_64_threads() {
+    for threads in [[64, 1, 1], [8, 8, 1]] {
+        let native = single_wave_lds(threads, 1);
+        assert!(admitted(&native, false).is_none());
+        if let Ok(shader) = emit(&native, false) {
+            assert!(shader.independent_waves.is_none());
+        }
+        let shader = emit(&native, true).unwrap();
+        check(&shader, threads);
+        assert_eq!(shader.independent_waves.unwrap().wave_count(), 1);
+    }
+    let allowed = [
+        ds_inst(0x00d, false, [0, 0], [0, 0, 1, 3]), // ds_write_b32
+        ds_inst(0x036, false, [0, 0], [4, 0, 0, 3]), // ds_read_b32
+        ds_inst(0x00e, false, [0, 1], [0, 2, 1, 3]), // ds_write2_b32
+        ds_inst(0x037, false, [0, 1], [4, 0, 0, 3]), // ds_read2_b32
+        ds_inst(0x00f, false, [0, 1], [0, 2, 1, 3]), // ds_write2st64_b32
+        ds_inst(0x038, false, [0, 1], [4, 0, 0, 3]), // ds_read2st64_b32
+        ds_inst(0x04d, false, [0, 0], [0, 0, 0, 3]), // ds_write_b64
+        ds_inst(0x076, false, [0, 0], [4, 0, 0, 3]), // ds_read_b64
+        ds_inst(0x04e, false, [0, 1], [0, 2, 0, 3]), // ds_write2_b64
+        ds_inst(0x077, false, [0, 1], [4, 0, 0, 3]), // ds_read2_b64
+        ds_inst(0x04f, false, [0, 0], [0, 2, 0, 3]), // ds_write2st64_b64
+        ds_inst(0x078, false, [0, 0], [4, 0, 0, 3]), // ds_read2st64_b64
+        ds_inst(0x0de, false, [0, 0], [0, 0, 0, 3]), // ds_write_b96
+        ds_inst(0x0fe, false, [0, 0], [4, 0, 0, 3]), // ds_read_b96
+        ds_inst(0x0df, false, [0, 0], [0, 0, 0, 3]), // ds_write_b128
+        ds_inst(0x0ff, false, [0, 0], [4, 0, 0, 3]), // ds_read_b128
+        ds_inst(0x01e, false, [0, 0], [0, 0, 1, 3]), // ds_write_b8
+        ds_inst(0x01f, false, [0, 0], [0, 0, 1, 3]), // ds_write_b16
+        ds_inst(0x0a0, false, [0, 0], [0, 0, 1, 3]), // ds_write_b8_d16_hi
+        ds_inst(0x0a1, false, [0, 0], [0, 0, 1, 3]), // ds_write_b16_d16_hi
+        ds_inst(0x039, false, [0, 0], [4, 0, 0, 3]), // ds_read_i8
+        ds_inst(0x03a, false, [0, 0], [4, 0, 0, 3]), // ds_read_u8
+        ds_inst(0x03b, false, [0, 0], [4, 0, 0, 3]), // ds_read_i16
+        ds_inst(0x03c, false, [0, 0], [4, 0, 0, 3]), // ds_read_u16
+        ds_inst(0x0a2, false, [0, 0], [1, 0, 0, 3]), // ds_read_u8_d16
+        ds_inst(0x0a3, false, [0, 0], [1, 0, 0, 3]), // ds_read_u8_d16_hi
+        ds_inst(0x0a4, false, [0, 0], [1, 0, 0, 3]), // ds_read_i8_d16
+        ds_inst(0x0a5, false, [0, 0], [1, 0, 0, 3]), // ds_read_i8_d16_hi
+        ds_inst(0x0a6, false, [0, 0], [1, 0, 0, 3]), // ds_read_u16_d16
+        ds_inst(0x0a7, false, [0, 0], [1, 0, 0, 3]), // ds_read_u16_d16_hi
+        ds_inst(0x000, false, [0, 0], [0, 0, 1, 3]), // ds_add_u32
+        ds_inst(0x020, false, [0, 0], [4, 0, 1, 3]), // ds_add_rtn_u32
+        ds_inst(0x02d, false, [0, 0], [4, 0, 1, 3]), // ds_wrxchg_rtn_b32
+        ds_inst(0x010, false, [0, 0], [0, 2, 1, 3]), // ds_cmpst_b32
+        ds_inst(0x030, false, [0, 0], [4, 2, 1, 3]), // ds_cmpst_rtn_b32
+    ];
+    for extra in allowed {
+        let native = with_ds_before_barrier(single_wave_lds([64, 1, 1], 1), extra);
+        let shader = emit(&native, true).unwrap();
+        check(&shader, [64, 1, 1]);
+    }
+}
+
+#[test]
+fn single_wave_lds_refuses_128_threads_and_unsupported_lds_forms() {
+    let multi = single_wave_lds([128, 1, 1], 1);
+    assert!(admitted(&multi, true).is_none());
+    if let Ok(shader) = emit(&multi, true) {
+        assert!(shader.independent_waves.is_none());
+    }
+    let unallocated = single_wave_lds([64, 1, 1], 0);
+    if let Ok(shader) = emit(&unallocated, true) {
+        assert!(shader.independent_waves.is_none());
+    }
+    for extra in [
+        ds_inst(0x015, false, [0, 0], [0, 0, 1, 3]), // ds_add_f32
+        ds_inst(0x01d, false, [0, 0], [0, 0, 0, 0]), // ds_gws_barrier
+        ds_inst(0x03e, false, [0, 0], [4, 0, 0, 0]), // ds_append
+        ds_inst(0x03d, false, [0, 0], [4, 0, 0, 0]), // ds_consume
+        ds_inst(0x00d, true, [0, 0], [0, 0, 1, 3]),  // ds_write_b32 gds
+        ds_inst(0x08d, false, [0, 0], [0, 0, 0, 3]), // ds_write_src2_b32
+        ds_inst(0x0b0, false, [0, 0], [0, 0, 1, 0]), // ds_write_addtid_b32
+        ds_inst(0x0b1, false, [0, 0], [4, 0, 0, 0]), // ds_read_addtid_b32
+    ] {
+        let native = with_ds_before_barrier(single_wave_lds([64, 1, 1], 1), extra);
+        assert!(
+            admitted(&native, true).is_none(),
+            "{:?}",
+            crate::gfx10::decode(&native.code)
+        );
+        if let Ok(shader) = emit(&native, true) {
+            assert!(shader.independent_waves.is_none());
+        }
+    }
+}
+
+#[test]
+fn only_round_to_nearest_mode_writes_are_dropped() {
+    use crate::gfx10::{Fields, Operand};
+    let setreg = |imm: u16, value: u32| Fields::Sop {
+        dst: None,
+        src: vec![Operand::Literal(value)],
+        imm: Some(imm),
+    };
+    // hwreg(HW_REG_MODE, 2, 2) = 0: double/half rounding to nearest even.
+    assert!(ir::sets_nearest_rounding(
+        "s_setreg_imm32_b32",
+        &setreg(0x0881, 0)
+    ));
+    assert!(ir::sets_nearest_rounding(
+        "s_setreg_imm32_b32",
+        &setreg(0x1801, 0)
+    ));
+    for (imm, value) in [
+        (0x0881, 1), // round toward +inf
+        (0x1901, 0), // FP_DENORM bits
+        (0x2001, 0), // rounding and denorm together
+        (0xf814, 0), // scratch base, not MODE
+    ] {
+        assert!(!ir::sets_nearest_rounding(
+            "s_setreg_imm32_b32",
+            &setreg(imm, value)
+        ));
+    }
+    assert!(!ir::sets_nearest_rounding(
+        "s_setreg_b32",
+        &setreg(0x0881, 0)
+    ));
+}
+
 #[test]
 fn replay_metadata_rejects_invalid_original_dimensions() {
     for dims in [
         [0, 1, 1],
-        [64, 1, 1],
+        [32, 1, 1],
         [65, 1, 1],
         [128, 0, 1],
         [1, 1, 128],
@@ -338,7 +538,13 @@ fn replay_metadata_rejects_invalid_original_dimensions() {
     ] {
         assert!(super::IndependentWaves::new(dims).is_none());
     }
-    for (dims, waves) in [([8, 16, 1], 2), ([4, 4, 16], 4), ([1024, 1, 1], 16)] {
+    for (dims, waves) in [
+        ([64, 1, 1], 1),
+        ([8, 8, 1], 1),
+        ([8, 16, 1], 2),
+        ([4, 4, 16], 4),
+        ([1024, 1, 1], 16),
+    ] {
         let plan = super::IndependentWaves::new(dims).unwrap();
         assert_eq!(plan.wave_count(), waves);
         assert_eq!(plan.original_threads(), dims);
