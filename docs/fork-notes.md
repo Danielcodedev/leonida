@@ -1127,3 +1127,25 @@ byte. Synthetic tests execute the emitted address/load/select instructions again
 independent original-array oracle, including chunk edges, unaligned addresses, underflow,
 32-bit wrap and both switch modes. Pipeline creation alone does not establish correct
 rendering or improved frame times; R-7 remains open.
+
+## Cards measured: RTX 3060 Ti 8 GB (2026-11-27)
+
+Frame figures are `ms/frame` from the game's title bar, sampled on world frames only (the menus sit at 33.3 ms),
+after the shader warm-up and not on the first run after a shader change. Nothing here quotes game data.
+
+| Card | Driver | OS | Profile applied | Where | Frame | Notes |
+|---|---|---|---|---|---|---|
+| RTX 3060 Ti 8 GB | 621.40 (32.0.16.2140) | Windows 11 26H2, build 26300 | `base`, selected automatically | opening prologue, Series X | 514–1,064 ms, 510–756 draws (about 2 fps) | Ryzen 5 5600, 16 GB RAM, 48 GB commit. Before the shader warm-up the first gameplay room was not drawn at all (R-2); after it the prologue rendered but washed out (R-3). |
+| RTX 3060 Ti 8 GB | 621.40 | Windows 11 26H2 | `base` | account picker, language, brightness, legal notices, title art | 33.3 ms (30 fps) | All of these draw, take input and hold 30 fps. |
+
+Notes for this card:
+
+- `leonida config --graphics` resolves `base` here with nothing set by hand: `ASYNC_SUBMIT`, `QUEUE2`,
+  `INDIRECT_WINDOW`, `COPY_PLAIN`, `JOIN_PARTS`, `BACK_OWN_VIEW`, `INDIRECT_GATHER`, `CARD_REHASH_RUNS`.
+- The shader warm-up is not optional on this card. Without it, the handover from the cutscene to the first room
+  produced a black frame at 1 fps, 845–899 ms and 1,029–1,252 draws issued, which reads as R-2. With it, the
+  prologue drew at 514–1,064 ms but washed out, which reads as R-3.
+- `leonida translate --list` reports 198 shaders that do not translate on this dump: 195 `GS_VoxelizeGeneric`
+  geometry programs and 3 lane-mask cases, matching the counts above.
+- Working set while the title screens are up: about 5.3 GB, on 16 GB of RAM with a 48 GB commit limit.
+- Build: release profile, commit f0e7a9b.
