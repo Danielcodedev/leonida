@@ -1,8 +1,9 @@
-# Unattended runs hold Enter through the opening's cutscenes
+# R-9: unattended runs can hold Enter through the opening's cutscenes
 
-Unattended runs (`scripts/measure-run.ps1`) never got past the opening: it is several cutscenes,
-each skipped by holding Enter, and the run only tapped Enter for 0.2 s every 8 s. At 5 to 7 fps how long
-Enter has to stay down in real time changes from run to run, so no fixed tap length works.
+Unattended runs (`scripts/measure-run.ps1`) never got past the opening: it is several
+cutscenes, each skipped by holding Enter, and the run only tapped Enter for 0.2 s every 8 s. At
+5 to 7 fps how long Enter has to stay down in real time changes from run to run, so no fixed tap
+length works.
 
 `LEONIDA_SKIP_SCENES=1` (diagnostics builds only, off unless set) looks at the presented picture
 instead. From the world's first frame on (the first that ran 500 draws or more), every 8th presented
@@ -32,8 +33,9 @@ the cutscene after its fade is held again. The held Enter joins the keys of
 The log has one line when a hold starts and one when it ends, with the seconds held; no picture
 data.
 
-`measure-run.ps1` turns it on; `-NoSkipScenes` turns it off. Its taps stay as they were (the start
-screen needs them), and `summary.txt` has a new `cutscenes_held` line.
+`measure-run.ps1 -SkipScenes` turns it on. Without it a run is as before, so measurements of the
+opening cutscene (R-9, P-9) don't change. The taps stay as they were (the start screen needs them),
+and `summary.txt` has a new `cutscenes_held` line.
 
 ## Where the numbers come from
 
@@ -45,10 +47,23 @@ bottom rows at 98% and 99%; one pair of 48-row bars is why the lowest top row is
 from the order of the pictures in each run and from the statistics, not from someone looking at
 them.
 
+## Measured
+
+RTX 3080 12 GB, driver 621.24, Ryzen 7 7800X3D, 2026-11-27: two runs of `measure-run.ps1` on the
+diagnostics build, profile `base`, 900 s each.
+
+| run | hold | let go after start | median frame after | card | preparing |
+|---|---|---|---|---|---|
+| 1 | 928 frames, 188.6 s | about 277 s | 112 ms | 36.6 ms | 50.1 ms |
+| 2 | 960 frames, 237.7 s | about 315 s | 121 ms | 40.3 ms | 53.2 ms |
+
+Each run held once and let go on an open picture; no hold reached the cap, no run lost the device.
+Both ended in the same place, where the player can move and drive (checked by eye on a shot). The
+game ran at about 4 fps while Enter was held.
+
 ## Not measured
 
-- No run with the switch has been made yet: whether holding skips every cutscene, and how long the
-  opening then takes, is unknown.
+- Black samples are not logged, so whether one hold skipped one cutscene or several is not known.
 - A cutscene without bars is not seen; the taps are the only presses then.
 - Enter stays held for up to three samples (about 24 frames) after a cutscene ends.
 - The cost of the row copies was not measured. They are about 8 rows of 15 KB at 3840 wide every

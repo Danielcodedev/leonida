@@ -3,8 +3,8 @@
 # pressed every 8 s from 20 s on to get through the menus into the world, frame shots are taken a
 # fixed number of frames after the world's first frame (so two runs can be compared shot by shot),
 # the game is closed after -Seconds, and the steady part of the run is summed up in summary.txt.
-# In the world, Enter is also held while the picture is letterboxed, to skip the opening's
-# cutscenes (LEONIDA_SKIP_SCENES=1; -NoSkipScenes turns that off).
+# With -SkipScenes, Enter is also held in the world while the picture is letterboxed, to skip
+# the opening's cutscenes and measure play (LEONIDA_SKIP_SCENES=1).
 #
 # Everything it writes goes under %LOCALAPPDATA%\leonida\runs (outside the checkout). Logs and
 # shots come from your game: keep them on your PC, post only the figures of summary.txt.
@@ -22,7 +22,7 @@
 # -ShotAfter  frames after the world's first frame to save (world-<n>.png, and world-<n>.view.jpg,
 #             960 wide, for an agent to look at). At 8 fps a 330 s run has about 1,400 of them.
 # -Console    series-x or series-s
-# -NoSkipScenes  no Enter held in cutscenes (the fixed presses only, as before)
+# -SkipScenes    hold Enter while a cutscene is letterboxed, to get to play
 
 param(
     [string]$Root = (Join-Path $env:LOCALAPPDATA ('leonida\runs\series-' + (Get-Date -Format 'yyyyMMdd-HHmmss'))),
@@ -32,7 +32,7 @@ param(
     [int]$From = 170,
     [string]$ShotAfter = '600,1000',
     [ValidateSet('series-x', 'series-s')] [string]$Console = 'series-x',
-    [switch]$NoSkipScenes
+    [switch]$SkipScenes
 )
 
 $ErrorActionPreference = 'Stop'
@@ -69,8 +69,8 @@ try {
     $env:LEONIDA_KEYS = ((0..20) | ForEach-Object { '{0}:Enter' -f (20 + 8 * $_) }) -join ','
     # The taps get through the start screen; a cutscene wants Enter held, and for how long
     # depends on the frame rate, so the game's picture says when (letterbox bars).
-    if ($NoSkipScenes) { Remove-Item Env:LEONIDA_SKIP_SCENES -ErrorAction SilentlyContinue }
-    else { $env:LEONIDA_SKIP_SCENES = '1' }
+    if ($SkipScenes) { $env:LEONIDA_SKIP_SCENES = '1' }
+    else { Remove-Item Env:LEONIDA_SKIP_SCENES -ErrorAction SilentlyContinue }
     $env:LEONIDA_CAPTURE = Join-Path $run 'cap'
     # Shots a fixed number of frames after the world's first frame; the every-8th-frame world
     # pictures are pushed out of reach (each costs about 235 ms of its frame).
@@ -143,7 +143,7 @@ $summary = [ordered]@{
     console = $Console
     end = $end
     world_at_s = if ($world) { [Math]::Round($world) } else { 'never' }
-    cutscenes_held = if ($NoSkipScenes) { 'off' } else { $held }
+    cutscenes_held = if (-not $SkipScenes) { 'off' } else { $held }
     lines = $fps.Count
     fps = [Math]::Round((Get-Median $fps), 1)
     ms_frame = [Math]::Round((Get-Median $ms), 1)
