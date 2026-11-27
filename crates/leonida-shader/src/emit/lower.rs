@@ -6902,7 +6902,11 @@ impl<'a> Lower<'a> {
         if let Some((rows, banks)) = masks {
             // Row (16 lanes) and bank (4 lanes of a row) write masks.
             let (four, two, three) = (k(self, 4), k(self, 2), k(self, 3));
-            let ri = self.s.m.bin(c, Bin::LShr, lane, four);
+            // A console Wave64 may occupy two host waves even when DPP needs no
+            // cross-half exchange. Row masks name its four original rows; shuffle
+            // source lanes and the repeating bank mask stay physical-wave local.
+            let row_lane = if self.halves.is_some() { self.console_thread() } else { lane };
+            let ri = self.s.m.bin(c, Bin::LShr, row_lane, four);
             let ri = self.s.m.bin(c, Bin::And, ri, three);
             let bi = self.s.m.bin(c, Bin::LShr, lane, two);
             let bi = self.s.m.bin(c, Bin::And, bi, three);
@@ -11963,3 +11967,7 @@ mod tests {
         assert_eq!(half(0xBC00 << half_shift(16)), -1.0);
     }
 }
+
+#[cfg(test)]
+#[path = "dpp_row_tests.rs"]
+mod dpp_row_tests;

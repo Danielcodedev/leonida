@@ -111,3 +111,61 @@ pub(crate) fn run(m: &Module, budget: usize) -> Execution {
     }
     panic!("emitted control flow did not return within {budget} blocks");
 }
+
+/// Evaluate one emitted integer value for an authored lane-local fixture. Only
+/// the entry wave-allocation atomic is modeled: its returned base identifies
+/// this physical wave. This checks emitted data dependencies, not GPU barriers.
+pub(crate) fn lane_value(m: &Module, value: V, lane: u32, base: u32, width: u32) -> u32 {
+    fn eval(m: &Module, value: V, lane: u32, base: u32, width: u32, left: usize) -> u32 {
+        assert!(left != 0, "lane expression exceeds its evaluation budget");
+        let get = |v| eval(m, v, lane, base, width, left - 1);
+        let V::Inst(id) = value else {
+            return word(m, &HashMap::new(), value);
+        };
+        match &m.insts[id as usize].op {
+            Op::Bin(op, a, b) => match op {
+                Bin::Add => get(*a).wrapping_add(get(*b)),
+                Bin::Sub => get(*a).wrapping_sub(get(*b)),
+                Bin::Mul => get(*a).wrapping_mul(get(*b)),
+                Bin::And => get(*a) & get(*b),
+                Bin::Or => get(*a) | get(*b),
+                Bin::Xor => get(*a) ^ get(*b),
+                Bin::Shl => get(*a).wrapping_shl(get(*b)),
+                Bin::LShr => get(*a).wrapping_shr(get(*b)),
+                Bin::UDiv => get(*a) / get(*b),
+                Bin::URem => get(*a) % get(*b),
+                _ => panic!("unexpected lane operation {op:?}"),
+            },
+            Op::Cmp(op, a, b) => u32::from(match *op {
+                pred::EQ => get(*a) == get(*b),
+                pred::NE => get(*a) != get(*b),
+                pred::IULT => get(*a) < get(*b),
+                pred::IUGE => get(*a) >= get(*b),
+                _ => panic!("unexpected lane comparison {op}"),
+            }),
+            Op::Select(c, t, f) => get(if get(*c) != 0 { *t } else { *f }),
+            Op::Cast(Cast::Bitcast | Cast::ZExt | Cast::Trunc, v) => get(*v),
+            Op::AtomicRmw(Rmw::Add, _, amount) => {
+                assert_eq!(lane, 0, "only wave-first allocation result is observed");
+                assert_eq!(get(*amount), 32);
+                base
+            }
+            Op::Call(f, args) => match m.funcs[*f as usize].name.as_str() {
+                "dx.op.waveGetLaneIndex" => lane,
+                "dx.op.flattenedThreadIdInGroup.i32" => base + lane,
+                "dx.op.waveReadLaneFirst.i32" => eval(m, args[1], 0, base, width, left - 1),
+                "dx.op.waveReadLaneAt.i32" => {
+                    let source = get(args[2]);
+                    assert!(
+                        source < width,
+                        "shuffle source must stay within physical wave"
+                    );
+                    eval(m, args[1], source, base, width, left - 1)
+                }
+                name => panic!("unexpected lane call {name}"),
+            },
+            op => panic!("unexpected lane expression {op:?}"),
+        }
+    }
+    eval(m, value, lane, base, width, 512)
+}

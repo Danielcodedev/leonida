@@ -1257,3 +1257,21 @@ the opening cutscenes, one run with the run script's speed switches and one with
   minute. One run each, so this needs a second pair, and the switches one at a time, before
   `base` changes for 8 GB cards. If it holds, the switch that costs goes into a profile that
   leaves it out for such cards, not out of `base` for every card.
+
+### DPP row masks across a split Wave64
+
+A Wave64 compute program can run in two 32-lane host waves even when its DPP shuffles
+stay inside each half. The row mask still names four original 16-lane rows. Testing it
+against the physical lane index reused bits 0 and 1 in the upper half: an authored
+`row_mask=0x3` case incorrectly changed thread 32, while `row_mask=0xc` missed it.
+Use the existing original thread mapping only for the row-mask index. Shuffle source
+indices and the repeating bank mask remain local to the host wave; native Wave32,
+native Wave64, and graphics-stage mapping are unchanged.
+
+Validation: the public emitter accepts the authored fixture, and a CPU evaluator follows
+its emitted integer expressions for 6,912 lane results across 64/128-thread groups, six
+row masks, two bank masks, native Wave32/Wave64 and the split Wave64 path. The baseline
+fails and the corrected lowering passes. The native shader suite passes 191 tests with
+two ignored; strict library Clippy and asset policy pass. The evaluator models the
+entry allocator's logical wave base, so this is not a GPU synchronization or gameplay
+claim. Hardware validation is still pending.
