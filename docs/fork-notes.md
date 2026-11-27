@@ -5,6 +5,62 @@ The status summary is in [README.md](../README.md).
 
 ## Newest (2026-11-26)
 
+**Wait for texture readbacks before preparing dependent submissions.**
+`LEONIDA_READBACK_ORDER=1`, or the `readback-order` opt-in graphics profile,
+enables this fix. It is **off by default** until a paired
+`scripts\measure-run.ps1` comparison establishes its gameplay frame-time cost.
+With it off, the old texture-back ranges and waits are preserved, including
+the host-only treatment of rectangle expansion; no new readback waits apply.
+
+Ordinary texture-to-buffer copies were missing from the ranges tracked while
+submissions were in flight. A later submission's CPU-side buffer copy could
+therefore consume stale title memory before the earlier texture readback landed.
+The pending ranges now include the bytes actually written by each readback row,
+excluding pitch padding. Overlapping CPU reads and writes wait for these definite
+writes even when speculative shader fills are enabled; unrelated work can proceed.
+The ranges remain pending until CPU copy-back completes, including when the relay
+lands only part of the queue.
+
+An original one-texel D3D12 regression holds the first submission behind a fence
+and queues a dependent copy in a second submission. It releases the fence when
+the consumer enters the dependency wait, or after the old implementation has
+copied stale bytes; timing does not choose the outcome. On `63fb0e8` with the test
+only, the destination is 0 instead of 37 in all three `LEONIDA_RELAY=0/1/2` modes.
+With the fix it is 37 in all three modes, with `LEONIDA_LATE_WAIT=3`, queue2 and
+the default speculative-fill path enabled. Measured on an Intel Core i9-14900KS,
+RTX 5090, NVIDIA 580.173.02, Pop!_OS 22.04, Proton 11's Wine and vkd3d-proton 3.2.
+Five CPU tests also cover row padding, destination overwrites, empty and
+overflowing footprints, and retaining later flights' pending ranges.
+
+Read-only CPU helper work also declares its title source range. Rectangle expansion
+used to be marked host-only even though it reads title vertices; with the switch
+enabled it waits for
+both pending readbacks and shader writes overlapping exactly those bytes. It still
+writes only host scratch memory, so it does not invalidate title-memory refreshes.
+Other host-only callbacks remain independent. Overflowing access ranges conservatively
+wait rather than claiming they are disjoint.
+
+A second one-texel regression consumes 37 through an annotated host-read callback.
+After merging current main at `dcc8263`, the old annotation reads 0 in relay modes
+0, 1 and 2; the fixed annotation reads 37 in each. Both copy and host-read tests also
+pass together in each mode, serialized by their shared test mutex even with two test
+threads. Seven CPU tests pass, including the actual host-step classification and
+overlap, disjoint, empty and overflowing ranges. This uses the same hardware and
+runtime above and no shader dispatches or game files.
+
+Run the optional tests in a fresh diagnostics test process with
+`LEONIDA_TEST_READBACK_ORDER=1`, `LEONIDA_READBACK_ORDER=1`,
+`LEONIDA_LATE_WAIT=3`, the desired
+`LEONIDA_RELAY` value, and either `LEONIDA_D3D12_WARP=1` or the explicit hardware
+opt-in `LEONIDA_TEST_READBACK_HARDWARE=1`:
+`cargo test -p leonida-gpu --features diagnostics --locked
+host::readback_order_tests -- --nocapture --test-threads=2`.
+
+This orders separate submissions only. Dependencies between commands already
+grouped in one submission still need command-list splitting. This synthetic
+correctness result does not establish the cause of the washed-out game frames
+or claim a gameplay or frame-rate improvement.
+
 **R-7: an unread input takes the mode read in its register.**
 `PS_RasterizeWaterVolumeExposedSurface` and the two
 `PS_RasterizeVehicle*InterfaceDepth` read one input of a packed register per
