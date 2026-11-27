@@ -991,6 +991,18 @@ impl<'a> Lanes<'a> {
         let args: Vec<Key> = (0..target.preds.len())
             .map(|n| (arg(lo, k.0, n), arg(hi, k.1, n)))
             .collect();
+        // A register holding a mask on one path and a dword read from memory
+        // on another is a number the compiler reuses: no lane mask comes back
+        // from a scalar load.
+        let loaded = |v: Value| {
+            self.defs
+                .get(&v)
+                .is_some_and(|&(b, i)| matches!(p.blocks[b].insts[i].fields, Fields::Smem { .. }))
+        };
+        if args.iter().any(|&(a, b)| loaded(a) || loaded(b)) {
+            let born = self.born(k.0);
+            return Some((self.b.atom(Atom::Opaque(k.0), born), false));
+        }
         let id = lo.map_or(k.1, |_| k.0);
         let mut derived = self.derived_phis.contains(&id);
         // (edge condition, mask) per forward edge; back edges come later.
@@ -1757,6 +1769,44 @@ mod tests {
             s.masks.get(&lo).and_then(|&m| s.bools.node(m)),
             Some((Atom::Lane(cmp), Bool::FALSE, Bool::TRUE))
         );
+    }
+
+    #[test]
+    fn a_register_joining_a_mask_with_loaded_data_is_no_mask() {
+        // s4 is a compare's mask on the branch taken, a dword read from a
+        // buffer on the other path; after the join it is masked as a number.
+        let p = build(
+            &[
+                0xD4C2_0004,
+                0x0002_0080, // v_cmp_eq_u32 s4, 0, v0
+                0xBF06_8000, // s_cmp_eq_u32 s0, 0
+                0xBF85_0002, // s_cbranch_scc1 +2
+                0xF420_0104,
+                0xFA00_0000, // s_buffer_load_dword s4, s[8:11], 0
+                0x8705_FF04,
+                0x001F_FFFF, // s_and_b32 s5, s4, 0x1fffff
+                0x7E02_0205, // v_mov_b32 v1, s5
+                S_ENDPGM,
+            ],
+            false,
+        );
+        let s = structure(&p).unwrap();
+        let joined = p
+            .blocks
+            .iter()
+            .flat_map(|b| &b.phis)
+            .find(|phi| phi.reg == Reg::S(4))
+            .unwrap()
+            .value;
+        let and = p
+            .blocks
+            .iter()
+            .flat_map(|b| &b.insts)
+            .find(|i| i.name() == "s_and_b32")
+            .and_then(|i| i.write(Reg::S(5)))
+            .unwrap();
+        assert!(!s.masks.contains_key(&joined));
+        assert!(!s.masks.contains_key(&and));
     }
 
     #[test]

@@ -2740,6 +2740,9 @@ impl<'a> Lower<'a> {
         use super::shader::USER_VIEW_ADDRESS;
         let a = self.scalar.get(&site).copied()?;
         let rp = *self.x.native.layout.get(a.param)?;
+        if rp.root == RootType::ResourceHeap && a.offset % 32 == 0 {
+            return self.slot_view_address(site);
+        }
         if rp.root != RootType::Table || a.dynamic.is_some() || a.offset % 32 != 0 {
             return None;
         }
@@ -6562,6 +6565,42 @@ impl<'a> Lower<'a> {
         let v = self.as_int(f);
         self.strides.insert(key, v);
         Ok(Some(v))
+    }
+
+    /// The title address (low dword, bits from 32 up) of the buffer view the
+    /// scalar load at `site` reads from the view heap at an index it
+    /// computes: read from the host's table by heap slot
+    /// (`shader.rs` `SLOT_VIEW_ADDRESSES`), in the current block.
+    fn slot_view_address(&mut self, site: Site) -> Option<(V, V)> {
+        use super::shader::{SLOT_STRIDES, SLOT_STRIDES_COUNT, SLOT_VIEW_ADDRESSES};
+        let slot = self.heap_index(site, 0, false).ok()?;
+        let c = self.cur;
+        let i32t = self.s.t.i32;
+        // Inside the table whatever the index, as for the strides.
+        let last = self.s.m.i32(SLOT_STRIDES_COUNT - 1);
+        let slot = self
+            .s
+            .op(c, "binary.i32", Attr::ReadNone, i32t, 40, &[slot, last]);
+        self.s.m.tag(slot, Tag::Clamp);
+        let three = self.s.m.i32(3);
+        let byte = self.s.m.bin(c, Bin::Shl, slot, three);
+        let start = self.s.m.i32(SLOT_VIEW_ADDRESSES * 4);
+        let byte = self.s.m.bin(c, Bin::Add, byte, start);
+        let h = self.s.root_srv_handle(SLOT_STRIDES);
+        let iu = self.s.m.undef(i32t);
+        let mask = self.s.m.i8(3);
+        let align = self.s.m.i32(4);
+        let r = self.s.op(
+            c,
+            "rawBufferLoad.f32",
+            Attr::ReadOnly,
+            self.s.t.res_ret,
+            139,
+            &[h, byte, iu, mask, align],
+        );
+        let lo = self.s.m.extract(c, r, 0);
+        let hi = self.s.m.extract(c, r, 1);
+        Some((self.as_int(lo), self.as_int(hi)))
     }
 
     /// The heap index of a descriptor that may differ between lanes,
@@ -11423,6 +11462,10 @@ fn interp_mode(kind: Barycentric) -> Option<u8> {
 }
 
 #[cfg(test)]
+#[path = "view_address_tests.rs"]
+mod view_address_tests;
+
+#[cfg(test)]
 mod tests {
     use super::{Lowered, Numeric, Parts, buffer_format, half_shift, lower};
     use crate::native::{
@@ -11589,7 +11632,7 @@ mod tests {
 
     /// Lowers a compute program with the root parameters `layout` (in user
     /// SGPRs from s0 on) and the used resources `used`.
-    fn lower_with(
+    pub(super) fn lower_with(
         words: &[u32],
         layout: Vec<RootParam>,
         used: Vec<UsedResource>,
@@ -11637,7 +11680,7 @@ mod tests {
     }
 
     /// Root parameter `slot` in user SGPRs from `user_data` on.
-    fn root(root: RootType, user_data: u8, slot: u8) -> RootParam {
+    pub(super) fn root(root: RootType, user_data: u8, slot: u8) -> RootParam {
         RootParam {
             root,
             table_offset_dwords: 0,
