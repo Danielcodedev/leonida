@@ -26,16 +26,17 @@
       }
     },
     {
-      "name": "nvidia-8gb-texture-stage",
+      "name": "nvidia-8gb",
       "opt_in": true,
       "match": {
         "vendor": "nvidia",
         "min_vram_mb": 7000,
         "max_vram_mb": 8600
       },
-      "measured": "RTX 3060 Ti 8 GB, Ryzen 5 5600, 16 GB, driver 621.40, Windows 11 26H2, first gameplay room Series X after the shader warm-up, 2026-11-27: textures with no host copy 15,563 (8,646 MB) and usual frame 312 ms at the default 192 MB staging; 12,145 (8,500 MB) and 288 ms at 512; 15,064 (10,381 MB) and 1,007 ms at 1,024. Opt-in until measured on other 8 GB cards. See docs/fork-notes.md, where the 8 GB goes.",
+      "measured": "RTX 3060 Ti 8 GB, Ryzen 5 5600, 16 GB, driver 621.40, Windows 11 26H2, after the shader warm-up, 2026-11-27: this is the pair above together. First gameplay room 130 ms and courtyard 129 ms usual frame with both, against 312-489 ms with stock defaults and 175-183 ms for the room with staging alone; the courtyard kept 4,000-4,850 draws through the readings. Opt-in until measured on other 8 GB cards. See docs/notes/2026-11-27-nvidia-8gb-pair.md.",
       "env": {
-        "LEONIDA_TEXTURE_STAGE_MB": "512"
+        "LEONIDA_TEXTURE_STAGE_MB": "512",
+        "LEONIDA_ASYNC_PRESENT": "1"
       }
     },
     {
