@@ -8476,6 +8476,13 @@ impl Host {
                 .flatten();
             #[cfg(feature = "diagnostics")]
             let probe = if slot.is_some() { None } else { crate::capture::probe(&self.device, list, texture) };
+            // `LEONIDA_SKIP_SCENES`: a sample whose list has finished is
+            // judged, and a new one recorded when due.
+            #[cfg(feature = "diagnostics")]
+            let sampled = {
+                crate::skip::landed(FINISHED.load(Ordering::Acquire));
+                crate::skip::record(&self.device, list, texture, frame)
+            };
             #[cfg(not(feature = "diagnostics"))]
             let _ = frame;
             list.ResourceBarrier(&[
@@ -8487,13 +8494,24 @@ impl Host {
                 ),
             ]);
             copy.close();
-            match slot {
+            let flown = match slot {
                 Some(i) => {
                     let flown = self.execute_own(copy);
                     p.ahead[i].1 = flown;
+                    flown
                 }
-                None => self.execute(&[copy]),
+                None => {
+                    self.execute(&[copy]);
+                    0
+                }
+            };
+            #[cfg(feature = "diagnostics")]
+            if sampled {
+                crate::skip::sent(flown);
+                crate::skip::landed(FINISHED.load(Ordering::Acquire));
             }
+            #[cfg(not(feature = "diagnostics"))]
+            let _ = flown;
             #[cfg(feature = "diagnostics")]
             if let Some((buffer, footprint)) = capture {
                 crate::capture::save_read_back(frame, &buffer, &footprint);

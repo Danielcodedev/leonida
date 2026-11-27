@@ -1,0 +1,52 @@
+# Unattended runs hold Enter through the opening's cutscenes
+
+Unattended runs (`scripts/measure-run.ps1`) never got past the opening: it is several cutscenes,
+each skipped by holding Enter, and the run only tapped Enter for 0.2 s every 8 s. At 5 to 7 fps how long
+Enter has to stay down in real time changes from run to run, so no fixed tap length works.
+
+`LEONIDA_SKIP_SCENES=1` (diagnostics builds only, off unless set) looks at the presented picture
+instead. From the world's first frame on (the first that ran 500 draws or more), every 8th presented
+frame has eight full-width rows copied into a small readback buffer by the present's own list: three
+in the top bar (1%, 2.5% and 4% of the height), two in the bottom bar (98% and 99%) and three in the
+picture (8%, 50% and 92%). The rows are judged at a later present, once that list has finished, so
+nothing waits for the card. The copy reads the title's frame, not the back buffer, so the frame rate
+box is not in it. Only 8-bit color frames are read; any other format logs one warning and skips
+nothing.
+
+A row is a bar when no color channel of every 4th pixel is above 12. A sample is:
+
+- **letterboxed** (a cutscene): all five bar rows are bars and a picture row goes above 24;
+- **open**: the 1% or the 2.5% row is not a bar;
+- **black** (a fade or a loading screen): every row is a bar;
+- **unsure**: anything else.
+
+Enter is held after two letterboxed samples in a row and let go after three open ones. Black and
+unsure samples change nothing, so a hold carries across the fade between two cutscenes. While
+holding, Enter is down for 48 presented frames and up for 3 (and at least 0.5 s), so a skip that
+wants a fresh press gets one. A hold that goes 1200 frames without a black sample stops, and is not taken
+up again before an open sample: a letterbox Enter cannot skip. The held Enter joins the keys of
+`LEONIDA_KEYS`, so it reaches both the keyboard and the pad button the stand-in pad maps Enter to.
+The log has one line when a hold starts and one when it ends, with the seconds held; no picture
+data.
+
+`measure-run.ps1` turns it on; `-NoSkipScenes` turns it off. Its taps stay as they were (the start
+screen needs them), and `summary.txt` has a new `cutscenes_held` line.
+
+## Where the numbers come from
+
+The bars were measured on saved half-size world pictures of 25 earlier runs on one PC: of 115
+pictures, 68 had bars, and 62 of those were exactly 60 rows top and bottom at 1080 rows
+(5.6% each, a 2:1 picture). Some had subtitles reaching 32 rows into the bottom bar, hence the
+bottom rows at 98% and 99%; one pair of 48-row bars is why the lowest top row is at 4%, not 5%. Of
+304 pictures before the world (menus, loading screens, title cards), none had bars. The labels come
+from the order of the pictures in each run and from the statistics, not from someone looking at
+them.
+
+## Not measured
+
+- No run with the switch has been made yet: whether holding skips every cutscene, and how long the
+  opening then takes, is unknown.
+- A cutscene without bars is not seen; the taps are the only presses then.
+- Enter stays held for up to three samples (about 24 frames) after a cutscene ends.
+- The cost of the row copies was not measured. They are about 8 rows of 15 KB at 3840 wide every
+  8th frame, recorded into a list that is sent anyway, and never waited for.

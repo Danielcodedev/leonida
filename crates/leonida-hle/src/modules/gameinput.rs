@@ -1202,6 +1202,8 @@ mod host {
     /// 0.2 s that long after input starts, with or without focus. A key is a
     /// letter, a digit, or `Enter`, `Esc`, `Tab`, `Back`, `Up`, `Down`,
     /// `Left`, `Right` (the stand-in pad's table maps them to buttons).
+    /// With `LEONIDA_SKIP_SCENES=1`, also Enter while the picture shows a
+    /// cutscene (`leonida_gpu::skip`).
     #[cfg(feature = "diagnostics")]
     fn scripted() -> Vec<u8> {
         static SCRIPT: LazyLock<(Instant, Vec<(Duration, u8)>)> = LazyLock::new(|| {
@@ -1231,10 +1233,15 @@ mod host {
         });
         let (start, keys) = &*SCRIPT;
         let now = start.elapsed();
-        keys.iter()
+        let mut down: Vec<u8> = keys
+            .iter()
             .filter(|&&(at, _)| (at..at + Duration::from_millis(200)).contains(&now))
             .map(|&(_, vk)| vk)
-            .collect()
+            .collect();
+        if leonida_gpu::skip::hold_enter() && !down.contains(&0x0D) {
+            down.push(0x0D);
+        }
+        down
     }
 
     /// The foreground window is one of ours (the title's or our fallback).
