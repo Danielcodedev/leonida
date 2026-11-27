@@ -982,6 +982,28 @@ driver 621.24: with `LEONIDA_TEXTURE_BACK=1` the boat stayed up and the
 mission went on. Cost: about a megabyte copied back per list that writes
 one of the four kinds (`shortcut:` in `texback.rs`).
 
+## P-4: page catalog lookups during remapping (2026-11-27)
+
+DirectStorage used the title mapping mutex just to resolve page numbers to section
+slices. An unrelated alias remap held that mutex across host mapping calls, delaying
+workers whose own views never touch the title addresses being changed. Page numbers
+now have a separate catalog lock. Mapping snapshots retain section ownership across
+a concurrent page free; native mapping calls run after releasing the catalog lock.
+
+Title view extents and reverse aliases stay under their existing mutex. DirectStorage
+written-page publication takes that mutex before the catalog and releases both before
+its GPU notifications. Map/remap notifications still hold their original protection.
+The texture-read/remapping guard, native mapping calls, mapping granularity and
+valid-prefix behavior on an unknown page are unchanged. This complements PR #34's
+texture range locks; it does not implement those locks or complete P-4.
+
+The synthetic `page_windows_do_not_wait_for_unrelated_title_remapping` regression
+times out after five seconds on the prior implementation and returns the expected
+bytes with the split. All 15 xmem tests passed in an isolated, headless Proton 11.0
+prefix with GPU devices disabled, including pending-section lifetime after page free,
+unknown-page prefix mapping and 2,000 remaps with a protected concurrent reader.
+These are CPU memory tests; no gameplay frame-rate improvement is claimed.
+
 ## Debugging
 
 A release build has no debugging aids. Build them in with
