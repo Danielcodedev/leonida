@@ -2005,13 +2005,66 @@ enum Step {
     Refresh(std::sync::Arc<crate::shadow::Shadow>, usize, usize),
     /// Work that may write title memory.
     Run(Box<dyn Fn() + Send>),
-    /// Work that writes host memory only.
+    /// Work that neither reads nor writes title memory.
     Host(Box<dyn Fn() + Send>),
+    /// Work that reads a declared title range and writes host memory only.
+    HostRead(usize, usize, Box<dyn Fn() + Send>),
     /// Shaders write a range (address, bytes) of a buffer's host copy.
     GpuWrite(std::sync::Arc<crate::shadow::Shadow>, usize, usize),
     /// Brings a texture's staging buffer up to date: once per submission,
     /// whichever lists sample it, until a `Copy` or `Run` intervenes.
     Texture(std::sync::Arc<crate::texture::Staging>),
+}
+
+impl Step {
+    fn readback_access(&self) -> ReadBackAccess {
+        match self {
+            &Self::Copy(dst, src, len) => ReadBackAccess::Copy { dst, src, len },
+            &Self::Fill(_, at, len)
+            | &Self::Refresh(_, at, len)
+            | &Self::GpuWrite(_, at, len)
+            | &Self::HostRead(at, len, _) => ReadBackAccess::Range(at, len),
+            Self::Texture(staging) => {
+                let (at, len) = staging.memory();
+                ReadBackAccess::Range(at, len)
+            }
+            Self::Run(_) => ReadBackAccess::Unknown,
+            Self::Host(_) => ReadBackAccess::HostOnly,
+        }
+    }
+}
+
+#[cfg(test)]
+mod host_read_tests {
+    use super::{ReadBacks, Step};
+
+    #[test]
+    fn declared_host_reads_wait_only_for_overlapping_writes() {
+        let mut readbacks = ReadBacks::default();
+        assert!(readbacks.rows(0x1000, [16, 1, 256]));
+        for (at, len, blocked) in [
+            (0x1004, 4, true),
+            (0x0ffc, 8, true),
+            (0x0ffc, 4, false),
+            (0x1010, 16, false),
+            (0x1004, 0, false),
+            (usize::MAX - 3, 8, true),
+        ] {
+            let step = Step::HostRead(at, len, Box::new(|| panic!("classification only")));
+            let access = step.readback_access();
+            // Both production checks use this declared range: definite
+            // readbacks first, then ordinary shader-write dependencies.
+            assert_eq!(readbacks.blocks(access), blocked, "readback {at:#x}+{len}");
+            assert_eq!(
+                access.blocked_by(&[(0x1000, 0x1010)]),
+                blocked,
+                "shader write {at:#x}+{len}"
+            );
+            assert!(!access.blocked_by(&[]));
+        }
+        let host_only = Step::Host(Box::new(|| panic!("classification only")));
+        assert!(!readbacks.blocks(host_only.readback_access()));
+    }
 }
 
 /// What a list does on the CPU when it is submitted: copies between host
@@ -2671,18 +2724,7 @@ fn blocked_by(
             // These are definite CPU-side writes still to land, unlike a
             // shader's broad writable view. In particular, fill_ahead must
             // not let a copy or upload consume the old readback contents.
-            let access = match step {
-                &Step::Copy(dst, src, len) => ReadBackAccess::Copy { dst, src, len },
-                &Step::Fill(_, at, len)
-                | &Step::Refresh(_, at, len)
-                | &Step::GpuWrite(_, at, len) => ReadBackAccess::Range(at, len),
-                Step::Texture(staging) => {
-                    let (at, len) = staging.memory();
-                    ReadBackAccess::Range(at, len)
-                }
-                Step::Run(_) => ReadBackAccess::Unknown,
-                Step::Host(_) => ReadBackAccess::HostOnly,
-            };
+            let access = step.readback_access();
             if read_backs.blocks(access) {
                 return Some(if matches!(step, Step::Run(_)) {
                     WHY_RUN
@@ -2738,6 +2780,13 @@ fn blocked_by(
                         if count {
                             LATE_STATS[17].fetch_add(1, Ordering::Relaxed);
                         }
+                        return Some(WHY_READ);
+                    }
+                }
+                Step::HostRead(..) => {
+                    // Arbitrary read-only host work has no speculative
+                    // fill check; wait for the exact range it consumes.
+                    if access.blocked_by(written) {
                         return Some(WHY_READ);
                     }
                 }
@@ -7147,9 +7196,19 @@ impl HostList {
         self.deferred().refreshed.clear();
     }
 
-    /// As [`HostList::defer`], for work that writes only host memory.
+    /// As [`HostList::defer`], for work that neither reads nor writes title
+    /// memory. Use [`HostList::defer_title_read`] for a title source range.
     pub(crate) fn defer_host(&self, work: impl Fn() + Send + 'static) {
         self.deferred().copies.push(Step::Host(Box::new(work)));
+    }
+
+    /// Work that reads `[at, at + len)` of title memory and writes only
+    /// host memory. Its source waits for earlier GPU writes to land, but
+    /// it does not invalidate the batch's title-memory refreshes.
+    pub(crate) fn defer_title_read(&self, at: usize, len: usize, work: impl Fn() + Send + 'static) {
+        self.deferred()
+            .copies
+            .push(Step::HostRead(at, len, Box::new(work)));
     }
 
     /// Brings a texture's staging buffer up to date when the list is
@@ -7200,7 +7259,7 @@ impl HostList {
                     batch.add(shadow, *address, *len);
                     continue;
                 }
-                Step::Run(work) | Step::Host(work) => {
+                Step::Run(work) | Step::Host(work) | Step::HostRead(_, _, work) => {
                     if matches!(step, Step::Run(_)) {
                         batch.title_written();
                     }
@@ -9363,8 +9422,19 @@ void main() {
 mod readback_order_tests {
     use super::*;
 
+    static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn later_submission_copies_texture_readback_after_completion() {
+        later_submission_reads_texture_readback(false);
+    }
+
+    #[test]
+    fn later_submission_host_reads_texture_readback_after_completion() {
+        later_submission_reads_texture_readback(true);
+    }
+
+    fn later_submission_reads_texture_readback(host_read: bool) {
         let hardware = std::env::var("LEONIDA_TEST_READBACK_HARDWARE").as_deref() == Ok("1");
         if std::env::var("LEONIDA_TEST_READBACK_ORDER").as_deref() != Ok("1")
             || (!hardware && std::env::var("LEONIDA_D3D12_WARP").as_deref() != Ok("1"))
@@ -9372,6 +9442,7 @@ mod readback_order_tests {
             eprintln!("readback order test skipped: explicit test and adapter opt-ins required");
             return;
         }
+        let _test = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let host = host().expect("explicitly selected host device");
         // SAFETY: a plain query; hardware requires its own explicit opt-in.
         let software = host
@@ -9484,7 +9555,18 @@ mod readback_order_tests {
                 .expect("test gate")
         };
         let consumer = host.new_list().expect("consumer list");
-        consumer.defer_copy(destination, source, 4);
+        let observed_value = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+        if host_read {
+            let at = source as usize;
+            let result = observed_value.clone();
+            consumer.defer_title_read(at, 4, move || {
+                // SAFETY: the test's title dword stays live until settling.
+                let value = unsafe { (at as *const u32).read() };
+                result.store(value, Ordering::Release);
+            });
+        } else {
+            consumer.defer_copy(destination, source, 4);
+        }
         let (copied, observed) = std::sync::mpsc::channel();
         consumer.defer_host(move || {
             let _ = copied.send(());
@@ -9517,9 +9599,14 @@ mod readback_order_tests {
         let reason = coordinator.join().expect("test coordinator");
         assert_ne!(reason, "deadline", "consumer made no observable progress");
         assert_eq!(title[0], 37, "texture readback did not land");
+        let value = if host_read {
+            observed_value.load(Ordering::Acquire)
+        } else {
+            title[1]
+        };
         assert_eq!(
-            title[1], 37,
-            "later submission copied before readback completion"
+            value, 37,
+            "later submission read before readback completion"
         );
         assert_eq!(reason, "dependency wait");
     }

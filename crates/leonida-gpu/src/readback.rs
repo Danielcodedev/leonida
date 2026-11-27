@@ -14,6 +14,23 @@ pub(crate) enum Access {
     HostOnly,
 }
 
+impl Access {
+    /// Whether pending writes overlap this CPU access. A wrapped range
+    /// cannot prove independence from any pending write.
+    pub(crate) fn blocked_by(self, ranges: &[(usize, usize)]) -> bool {
+        let hits = |at: usize, len: usize| {
+            at.checked_add(len)
+                .map_or(!ranges.is_empty(), |end| touches(ranges, at, end))
+        };
+        match self {
+            Self::Range(at, len) => hits(at, len),
+            Self::Copy { dst, src, len } => hits(src, len) || hits(dst, len),
+            Self::Unknown => !ranges.is_empty(),
+            Self::HostOnly => false,
+        }
+    }
+}
+
 /// Exact destination ranges, kept until their flights have landed.
 #[derive(Clone, Default)]
 pub(crate) struct ReadBacks(Vec<(usize, usize)>);
@@ -57,13 +74,7 @@ impl ReadBacks {
 
     /// This check precedes the optional read-ahead of shader-write ranges.
     pub(crate) fn blocks(&self, access: Access) -> bool {
-        let hits = |at: usize, len: usize| touches(&self.0, at, at.saturating_add(len));
-        match access {
-            Access::Range(at, len) => hits(at, len),
-            Access::Copy { dst, src, len } => hits(src, len) || hits(dst, len),
-            Access::Unknown => !self.0.is_empty(),
-            Access::HostOnly => false,
-        }
+        access.blocked_by(&self.0)
     }
 }
 
@@ -139,6 +150,16 @@ mod tests {
         assert!(pending.blocks(Access::Unknown));
         assert!(!pending.blocks(Access::HostOnly));
         assert!(!pending.blocks(Access::Range(0x2000, 16)));
+    }
+
+    #[test]
+    fn overflowing_cpu_ranges_do_not_bypass_pending_writes() {
+        let mut pending = ReadBacks::default();
+        pending.rows(0x1000, [16, 1, 256]);
+        assert!(pending.blocks(Access::Range(usize::MAX - 3, 8)));
+        assert!(!pending.blocks(Access::Range(usize::MAX, 0)));
+        pending.clear();
+        assert!(!pending.blocks(Access::Range(usize::MAX - 3, 8)));
     }
 
     #[test]

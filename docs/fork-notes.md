@@ -26,13 +26,27 @@ RTX 5090, NVIDIA 580.173.02, Pop!_OS 22.04, Proton 11's Wine and vkd3d-proton 3.
 Five CPU tests also cover row padding, destination overwrites, empty and
 overflowing footprints, and retaining later flights' pending ranges.
 
-Run the optional test alone in a fresh diagnostics test process with
+Read-only CPU helper work also declares its title source range. Rectangle expansion
+used to be marked host-only even though it reads title vertices; it now waits for
+both pending readbacks and shader writes overlapping exactly those bytes. It still
+writes only host scratch memory, so it does not invalidate title-memory refreshes.
+Other host-only callbacks remain independent. Overflowing access ranges conservatively
+wait rather than claiming they are disjoint.
+
+A second one-texel regression consumes 37 through an annotated host-read callback.
+After merging current main at `dcc8263`, the old annotation reads 0 in relay modes
+0, 1 and 2; the fixed annotation reads 37 in each. Both copy and host-read tests also
+pass together in each mode, serialized by their shared test mutex even with two test
+threads. Seven CPU tests pass, including the actual host-step classification and
+overlap, disjoint, empty and overflowing ranges. This uses the same hardware and
+runtime above and no shader dispatches or game files.
+
+Run the optional tests in a fresh diagnostics test process with
 `LEONIDA_TEST_READBACK_ORDER=1`, `LEONIDA_LATE_WAIT=3`, the desired
 `LEONIDA_RELAY` value, and either `LEONIDA_D3D12_WARP=1` or the explicit hardware
 opt-in `LEONIDA_TEST_READBACK_HARDWARE=1`:
 `cargo test -p leonida-gpu --features diagnostics --locked
-host::readback_order_tests::later_submission_copies_texture_readback_after_completion
--- --exact --nocapture --test-threads=1`.
+host::readback_order_tests -- --nocapture --test-threads=2`.
 
 This orders separate submissions only. Dependencies between commands already
 grouped in one submission still need command-list splitting. This synthetic
