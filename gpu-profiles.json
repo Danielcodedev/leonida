@@ -33,7 +33,7 @@
         "min_vram_mb": 7000,
         "max_vram_mb": 8600
       },
-      "measured": "RTX 3060 Ti 8 GB, Ryzen 5 5600, 16 GB, driver 621.40, Windows 11 26H2, after the shader warm-up, 2026-11-27: this is the pair above together. First gameplay room 130 ms and courtyard 129 ms usual frame with both, against 312-489 ms with stock defaults and 175-183 ms for the room with staging alone; the courtyard kept 4,000-4,850 draws through the readings. Opt-in until measured on other 8 GB cards. See docs/notes/2026-11-27-nvidia-8gb-pair.md.",
+      "measured": "RTX 3060 Ti 8 GB, Ryzen 5 5600, 16 GB, driver 621.40, Windows 11 26H2, after the shader warm-up, 2026-11-27: LEONIDA_TEXTURE_STAGE_MB=512 and LEONIDA_ASYNC_PRESENT=1 together. First gameplay room 130 ms and courtyard 129 ms usual frame with both, against 312-489 ms with stock defaults and 175-183 ms for the room with staging alone; the courtyard kept 4,000-4,850 draws through the readings. Opt-in until measured on other 8 GB cards. See docs/notes/2026-11-27-nvidia-8gb-pair.md.",
       "env": {
         "LEONIDA_TEXTURE_STAGE_MB": "512",
         "LEONIDA_ASYNC_PRESENT": "1"
