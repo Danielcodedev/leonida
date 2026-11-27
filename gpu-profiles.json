@@ -33,6 +33,13 @@
       "env": { "LEONIDA_CODE_TABLE_CHUNKS": "1" }
     },
     {
+      "name": "readback-order",
+      "opt_in": true,
+      "match": {},
+      "measured": "RTX 5090, i9-14900KS, NVIDIA 580.173.02, Pop!_OS, Proton 11.0 and vkd3d-proton 3.2, 2026-11-27: shader-free one-texel copy and host-read regressions observed stale 0 before and correct 37 after in relay modes 0, 1 and 2. Gameplay frame-time cost is unmeasured; off by default pending a paired game run. See docs/fork-notes.md, texture readback ordering.",
+      "env": { "LEONIDA_READBACK_ORDER": "1" }
+    },
+    {
       "name": "card-windows",
       "opt_in": true,
       "match": {},

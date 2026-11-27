@@ -6,6 +6,12 @@ The status summary is in [README.md](../README.md).
 ## Newest (2026-11-26)
 
 **Wait for texture readbacks before preparing dependent submissions.**
+`LEONIDA_READBACK_ORDER=1`, or the `readback-order` opt-in graphics profile,
+enables this fix. It is **off by default** until a paired
+`scripts\measure-run.ps1` comparison establishes its gameplay frame-time cost.
+With it off, the old texture-back ranges and waits are preserved, including
+the host-only treatment of rectangle expansion; no new readback waits apply.
+
 Ordinary texture-to-buffer copies were missing from the ranges tracked while
 submissions were in flight. A later submission's CPU-side buffer copy could
 therefore consume stale title memory before the earlier texture readback landed.
@@ -27,7 +33,8 @@ Five CPU tests also cover row padding, destination overwrites, empty and
 overflowing footprints, and retaining later flights' pending ranges.
 
 Read-only CPU helper work also declares its title source range. Rectangle expansion
-used to be marked host-only even though it reads title vertices; it now waits for
+used to be marked host-only even though it reads title vertices; with the switch
+enabled it waits for
 both pending readbacks and shader writes overlapping exactly those bytes. It still
 writes only host scratch memory, so it does not invalidate title-memory refreshes.
 Other host-only callbacks remain independent. Overflowing access ranges conservatively
@@ -42,7 +49,8 @@ overlap, disjoint, empty and overflowing ranges. This uses the same hardware and
 runtime above and no shader dispatches or game files.
 
 Run the optional tests in a fresh diagnostics test process with
-`LEONIDA_TEST_READBACK_ORDER=1`, `LEONIDA_LATE_WAIT=3`, the desired
+`LEONIDA_TEST_READBACK_ORDER=1`, `LEONIDA_READBACK_ORDER=1`,
+`LEONIDA_LATE_WAIT=3`, the desired
 `LEONIDA_RELAY` value, and either `LEONIDA_D3D12_WARP=1` or the explicit hardware
 opt-in `LEONIDA_TEST_READBACK_HARDWARE=1`:
 `cargo test -p leonida-gpu --features diagnostics --locked
