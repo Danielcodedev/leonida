@@ -10,6 +10,7 @@
 use std::alloc::{Layout, alloc, dealloc};
 use std::collections::{BTreeMap, HashMap};
 use std::ffi::c_void;
+use std::ops::Range;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, LazyLock, Mutex, MutexGuard};
 
@@ -706,12 +707,9 @@ pub extern "system" fn XMemMapPhysicalPages(
         // catalog lock, then release it before any host mapping calls.
         Some(page_runs(unsafe { std::slice::from_raw_parts(pages, n) }))
     };
-    // Until the pages are mapped again: `unmap` takes whole views away and
-    // maps what stays of them again, and a mapped view is a reservation
-    // until it is committed. A read of title memory in place must not fall
-    // into that gap (`leonida_gpu::title_memory_remapping`).
-    let _changing = leonida_gpu::title_memory_remapping();
-    unmap(&mut physical, base, n * PAGE);
+    // Keep the old views and their replacements protected until the new
+    // pages are committed, when an in-place reader can see them again.
+    let _changing = unmap(&mut physical, base, n * PAGE);
     let Some((runs, unknown)) = snapshot else {
         return address;
     };
@@ -767,9 +765,7 @@ pub extern "system" fn XMemMapPhysicalPagesScatter(
 pub fn map_alias(to: u64, from: u64, len: u64) -> bool {
     let (to, from, len) = (to as usize, from as usize, len as usize);
     let mut physical = physical();
-    // As in `XMemMapPhysicalPages`: no read in place meets the gap.
-    let _changing = leonida_gpu::title_memory_remapping();
-    unmap(&mut physical, to, len);
+    let _changing = unmap(&mut physical, to, len);
     for k in (0..len).step_by(PAGE) {
         if from == 0 {
             break;
@@ -891,28 +887,35 @@ fn commit_limit_message(
     message
 }
 
-/// Returns `[base, base + len)` to placeholders; views reaching past it
-/// are mapped again outside it.
-fn unmap(physical: &mut Physical, base: usize, len: usize) {
-    // No bytes: no view to return. The search below would still find the
-    // view holding `base` and cut it in two there, and its range of views
-    // starting inside would run backwards (which `BTreeMap` panics on).
-    if len == 0 {
-        return;
+/// Finds the views an unmap will remove and the full span they and the
+/// replacement mappings can touch. The fringes of a split view need the
+/// same protection as the requested pages because Windows unmaps it whole.
+fn remapping_views(physical: &Physical, range: Range<usize>) -> (Range<usize>, Vec<usize>) {
+    if range.is_empty() {
+        return (range, Vec::new());
     }
-    let end = base + len;
-    // Views do not overlap: the one holding `base`, then those starting
-    // inside (the GPU's page mappings make one view per page).
+    let (base, end) = (range.start, range.end);
     let first = physical
         .views
         .range(..=base)
         .next_back()
-        .filter(|(at, (size, _))| *at + size > base)
-        .map(|(at, _)| *at);
-    let hit: Vec<usize> = first
-        .into_iter()
-        .chain(physical.views.range(base + 1..end).map(|(at, _)| *at))
-        .collect();
+        .filter(|(at, (size, _))| *at + size > base);
+    let mut affected = range;
+    let mut hit = Vec::new();
+    for (&at, (size, _)) in first.into_iter().chain(physical.views.range(base + 1..end)) {
+        affected.start = affected.start.min(at);
+        affected.end = affected.end.max(at + size);
+        hit.push(at);
+    }
+    (affected, hit)
+}
+
+/// Returns `[base, base + len)` to placeholders and remaps the old views'
+/// fringes. The caller keeps the guard until its replacement views are ready.
+fn unmap(physical: &mut Physical, base: usize, len: usize) -> leonida_gpu::Remapping {
+    let end = base + len;
+    let (affected, hit) = remapping_views(physical, base..end);
+    let changing = leonida_gpu::title_memory_remapping(affected);
     for at in hit {
         let Some((size, slice)) = physical.views.remove(&at) else {
             continue;
@@ -945,6 +948,7 @@ fn unmap(physical: &mut Physical, base: usize, len: usize) {
             map(physical, end, at + size - end, Slice { index, ..slice });
         }
     }
+    changing
 }
 
 /// The oldest layout we know; newer titles pass other flag values (Minecraft
@@ -1216,6 +1220,10 @@ mod tests {
         assert_eq!(unsafe { at(b, 1).cast::<u8>().add(1).read() }, 9);
 
         // Unmapping the middle page keeps its neighbours.
+        let base = a as usize;
+        let (affected, hit) = remapping_views(&physical(), base + PAGE..base + 2 * PAGE);
+        assert_eq!(affected, base..base + 3 * PAGE);
+        assert_eq!(hit, [base]);
         assert_eq!(
             XMemMapPhysicalPages(at(a, 1), 1, std::ptr::null()),
             at(a, 1)
