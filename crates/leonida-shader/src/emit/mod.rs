@@ -454,9 +454,16 @@ fn emit_legacy(
                 Some((p, st, io, res))
             })
         };
+        // Off unless asked for (`LEONIDA_WAVE_MORE_SKIPS=1`): the forms also leave out an
+        // early-out over a far jump to the end, and the deep one follows scalars through phis
+        // that pass one value on (Belobug/VIctory-Belobug-AMD 4fd34fd). That translates the
+        // tiled cascade-shadow program f133e35efed2a48a, and it moves four programs that
+        // translate without it from approximate local waves to the exact deep form, so their
+        // output changes; unmeasured in a run.
+        let more = std::env::var_os("LEONIDA_WAVE_MORE_SKIPS").is_some_and(|v| v == "1");
         let forms = [
-            ("without early-outs", form(ir::without_early_outs(p))),
-            ("without skips", form(ir::without_skips(p, false))),
+            ("without early-outs", form(ir::without_early_outs(p, more))),
+            ("without skips", form(ir::without_skips(p, false, more))),
         ];
         for (name, f) in &forms {
             if let Some((p, st, io, res)) = f {
@@ -483,7 +490,7 @@ fn emit_legacy(
                 // lane runs, where the two host waves can exchange.
                 // (`LEONIDA_WAVE_DEEP_SKIPS=0` and `LEONIDA_WAVE_WIDE=0` turn the two off.)
                 let deep_on = std::env::var_os("LEONIDA_WAVE_DEEP_SKIPS").is_none_or(|v| v != "0");
-                let deep = if deep_on { form(ir::without_skips(p, true)) } else { None };
+                let deep = if deep_on { form(ir::without_skips(p, true, more)) } else { None };
                 if let Some((p, st, io, res)) = &deep {
                     let again = emit_program(c, native, p, st, io, res);
                     report("without skips, scalars followed", &again);

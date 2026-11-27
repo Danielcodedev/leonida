@@ -638,21 +638,16 @@ pub(crate) fn thread_edges(
 /// only when no lane of the wave is left; scalar code has no effects. The
 /// body is then code every lane runs, which a console wave run as two host
 /// waves needs for the barriers of its exchanges and LDS accesses.
+/// With `far`, a program too long for the branch to reach its end has the other form of the
+/// same early-out: `s_cbranch_execnz` over a far jump to that end, which is left out as well.
 /// `None` if the program has no such branch.
-pub(crate) fn without_early_outs(p: &Program) -> Option<Program> {
-    let ends = |b: usize| {
-        p.blocks[b].exit == Exit::End
-            && p.blocks[b].insts.iter().all(|i| matches!(i.fields, crate::gfx10::Fields::Sopp { .. }))
-    };
+pub(crate) fn without_early_outs(p: &Program, far: bool) -> Option<Program> {
     let mut blocks = p.blocks.clone();
     let mut any = false;
-    for block in &mut blocks {
-        let Exit::Branch { taken, not_taken } = block.exit else {
-            continue;
-        };
-        if ends(taken) && block.insts.last().is_some_and(|i| i.name() == "s_cbranch_execz") {
+    for (b, block) in blocks.iter_mut().enumerate() {
+        if let Some(next) = early_out_continuation(p, b, far) {
             block.insts.pop();
-            block.exit = Exit::Jump(not_taken);
+            block.exit = Exit::Jump(next);
             any = true;
         }
     }
@@ -665,6 +660,43 @@ pub(crate) fn without_early_outs(p: &Program) -> Option<Program> {
     link(&mut blocks);
     split_irreducible(&mut blocks).ok()?;
     Some(rename(blocks, p.wave64, p.vgprs))
+}
+
+/// Whether block `b` only ends the program.
+fn ends_program(p: &Program, b: usize) -> bool {
+    p.blocks[b].exit == Exit::End
+        && p.blocks[b].insts.iter().all(|i| matches!(i.fields, crate::gfx10::Fields::Sopp { .. }))
+}
+
+/// Whether block `b` is the far jump of a console branch whose target is too far for the
+/// branch's 16-bit offset (`s_getpc_b64`, an address added to it, `s_setpc_b64`) to a block
+/// that only ends the program. Code that does any work on the way stays what it is.
+fn far_jump_to_end(p: &Program, b: usize) -> bool {
+    let block = &p.blocks[b];
+    matches!(block.exit, Exit::Jump(target) if ends_program(p, target))
+        && block.insts.iter().all(|i| {
+            matches!(i.name(), "s_getpc_b64" | "s_add_u32" | "s_addc_u32" | "s_setpc_b64")
+        })
+}
+
+/// Where the lanes that stay go when block `b` ends in an early-out: `s_cbranch_execz` to a
+/// block that only ends the program, or with `far` also `s_cbranch_execnz` whose other way
+/// is a far jump to such a block (a program too long for the branch to reach its end). The
+/// branch is then left out and the code goes on there. The far form, like the scalar phis
+/// [`without_skips`] follows with `more`, is from Belobug/VIctory-Belobug-AMD 4fd34fd
+/// (adapted from fxceless/victory-fork eaeb8f1): what the tiled cascade-shadow programs
+/// need on hosts of 32-lane waves. The far form must branch forward over the jump: a loop's
+/// back edge of the same shape would lose the loop's only exit.
+fn early_out_continuation(p: &Program, b: usize, far: bool) -> Option<usize> {
+    let Exit::Branch { taken, not_taken } = p.blocks[b].exit else {
+        return None;
+    };
+    let forward = p.blocks[taken].offset > p.blocks[not_taken].offset;
+    match p.blocks[b].insts.last()?.name() {
+        "s_cbranch_execz" if ends_program(p, taken) => Some(not_taken),
+        "s_cbranch_execnz" if far && forward && far_jump_to_end(p, not_taken) => Some(taken),
+        _ => None,
+    }
 }
 
 /// As [`without_early_outs`], and also without the branches that only skip a
@@ -681,17 +713,16 @@ pub(crate) fn without_early_outs(p: &Program) -> Option<Program> {
 ///
 /// `deep` looks closer at what the code after the branch can see. A scalar the region moves
 /// away and back (the compiler parks scalars in VGPR lanes around a branch and takes them
-/// back before the join, `unspill`) is the value it copies; a join nothing reads shows no
-/// one the difference (a restore of EXEC that the next one overwrites reads nothing); and
-/// the join may have other ways in (an inner branch that ends together with an outer one).
+/// back before the join, `unspill`) is the value it copies, and with `more` so is a scalar
+/// phi whose arguments all come to one value (a join of branches that left it alone); a join
+/// nothing reads shows no one the difference (a restore of EXEC that the next one overwrites
+/// reads nothing); and the join may have other ways in (an inner branch that ends together
+/// with an outer one).
 /// That leaves out most of the skips of the title's large lighting programs, whose bodies
-/// are then code every lane runs.
-pub(crate) fn without_skips(p: &Program, deep: bool) -> Option<Program> {
+/// are then code every lane runs. `more` also leaves out the far early-outs
+/// ([`without_early_outs`] with `far`).
+pub(crate) fn without_skips(p: &Program, deep: bool, more: bool) -> Option<Program> {
     let n = p.blocks.len();
-    let ends = |b: usize| {
-        p.blocks[b].exit == Exit::End
-            && p.blocks[b].insts.iter().all(|i| matches!(i.fields, crate::gfx10::Fields::Sopp { .. }))
-    };
     // Scalars moved from register to register (a scalar the compiler parked in a VGPR lane
     // comes back by such a move, `unspill`) are the value they copy.
     let mut copy: std::collections::HashMap<Value, Value> = Default::default();
@@ -740,12 +771,10 @@ pub(crate) fn without_skips(p: &Program, deep: bool) -> Option<Program> {
             }
         }
     }
-    let root = |mut v: Value| {
-        while deep && let Some(&c) = copy.get(&v) {
-            v = c;
-        }
-        v
-    };
+    if deep && more {
+        copy_through_phis(p, &mut copy);
+    }
+    let root = |v: Value| if deep { follow(&copy, v) } else { v };
     // The region a skip of `b` to `target` leaves out, if it is a pure skip.
     let skipped = |b: usize, target: usize, first: usize| -> Option<Vec<bool>> {
         let mut inside = vec![false; n];
@@ -802,12 +831,13 @@ pub(crate) fn without_skips(p: &Program, deep: bool) -> Option<Program> {
         let Exit::Branch { taken, not_taken } = p.blocks[b].exit else {
             continue;
         };
-        if !p.blocks[b].insts.last().is_some_and(|i| i.name() == "s_cbranch_execz") {
-            continue;
-        }
-        if ends(taken) || skipped(b, taken, not_taken).is_some() {
+        let next = early_out_continuation(p, b, more).or_else(|| {
+            let skip = p.blocks[b].insts.last().is_some_and(|i| i.name() == "s_cbranch_execz");
+            (skip && skipped(b, taken, not_taken).is_some()).then_some(not_taken)
+        });
+        if let Some(next) = next {
             blocks[b].insts.pop();
-            blocks[b].exit = Exit::Jump(not_taken);
+            blocks[b].exit = Exit::Jump(next);
             any = true;
         }
     }
@@ -820,6 +850,46 @@ pub(crate) fn without_skips(p: &Program, deep: bool) -> Option<Program> {
     link(&mut blocks);
     split_irreducible(&mut blocks).ok()?;
     Some(rename(blocks, p.wave64, p.vgprs))
+}
+
+/// The value `v` is a copy of, followed to the end of `copy`'s chains.
+fn follow(copy: &std::collections::HashMap<Value, Value>, mut v: Value) -> Value {
+    while let Some(&c) = copy.get(&v) {
+        v = c;
+    }
+    v
+}
+
+/// The one value every argument of the scalar `phi` comes to (the phi's own value left
+/// aside, as a loop's back edge brings it), if there is one.
+fn single_source(copy: &std::collections::HashMap<Value, Value>, phi: &Phi) -> Option<Value> {
+    let mut one = None;
+    for x in phi.args.iter().map(|&a| follow(copy, a)).filter(|&x| x != phi.value) {
+        if *one.get_or_insert(x) != x {
+            return None;
+        }
+    }
+    one
+}
+
+/// Adds to `copy` the scalar phis that pass one value through (a join of branches none of
+/// which changed it, one after the other, as the console's compiler leaves them): such a phi
+/// is a copy of that value. A phi that merges a real change is not. Repeats until no phi is
+/// added, for a phi may pass through the ones before it.
+fn copy_through_phis(p: &Program, copy: &mut std::collections::HashMap<Value, Value>) {
+    let mut added = true;
+    while added {
+        added = false;
+        for phi in p.blocks.iter().flat_map(|b| &b.phis) {
+            if copy.contains_key(&phi.value) || !matches!(phi.reg, Reg::S(_) | Reg::Scc) {
+                continue;
+            }
+            if let Some(one) = single_source(copy, phi) {
+                copy.insert(phi.value, one);
+                added = true;
+            }
+        }
+    }
 }
 
 /// Placeholder before renaming.
@@ -1639,22 +1709,22 @@ mod tests {
         // s6 is changed in the body and read after the join: the branch stays
         let kept = skip(&[SET, USE], &[READ]);
         assert_eq!(skips(&kept), 1);
-        assert!(without_skips(&kept, false).is_none());
-        assert!(without_skips(&kept, true).is_none());
+        assert!(without_skips(&kept, false, false).is_none());
+        assert!(without_skips(&kept, true, false).is_none());
         // ... put back by a copy of what it held (as a scalar parked in a VGPR lane comes
         // back): every lane may walk the body
         let back = skip(&[SET, USE, BACK], &[READ]);
-        assert!(without_skips(&back, false).is_none());
-        assert_eq!(skips(&without_skips(&back, true).expect("left out")), 0);
+        assert!(without_skips(&back, false, false).is_none());
+        assert_eq!(skips(&without_skips(&back, true, false).expect("left out")), 0);
         // ... or not read after the join at all
         let unread = skip(&[SET, USE], &[]);
-        assert_eq!(skips(&without_skips(&unread, false).expect("left out")), 0);
-        assert_eq!(skips(&without_skips(&unread, true).expect("left out")), 0);
+        assert_eq!(skips(&without_skips(&unread, false, false).expect("left out")), 0);
+        assert_eq!(skips(&without_skips(&unread, true, false).expect("left out")), 0);
         // ... or read only by a restore of EXEC that nothing uses before the next one
         // (s_mov_b64 exec, s[6:7]; s_mov_b64 exec, s[12:13]; v_mov_b32 v2, s0)
         let idle = skip(&[SET, USE], &[0xBEFE_0406, 0xBEFE_040C, 0x7E04_0200]);
-        assert!(without_skips(&idle, false).is_none());
-        assert_eq!(skips(&without_skips(&idle, true).expect("left out")), 0);
+        assert!(without_skips(&idle, false, false).is_none());
+        assert_eq!(skips(&without_skips(&idle, true, false).expect("left out")), 0);
     }
 
     #[test]
