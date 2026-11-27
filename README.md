@@ -110,9 +110,12 @@ powershell -ExecutionPolicy Bypass -File .\build-launcher.ps1
 ```
 
 It creates `Leonida-Launcher.exe` in the same folder (git ignores it; it stays when you switch
-branches). Start it, pick a branch and click **Charger et lancer**: it switches to that branch and
-runs `run-gta6.ps1`. Switching discards your changes to tracked files, after asking. Under
-**Paramètres** you can set your game folder (passed as `-GameDir`); settings are kept in
+branches). Start it, pick a branch and click **Load and start**: it switches to that branch and
+runs `run-gta6.ps1`. Switching discards your changes to tracked files, after asking. If Git is
+missing, the launcher offers to install it with winget; if the Visual Studio C++ build tools or
+Rust are missing, the window that starts the game offers to install them first (the same check as
+`start-measure.cmd`). Under **Settings** you can set your game folder (passed as `-GameDir`) and
+the launcher's language (English or French); settings are kept in
 `%APPDATA%\LeonidaLauncher\config.json`. The first build installs the `ps2exe` module for your
 Windows user and downloads the logo; without network it uses a plain logo.
 
