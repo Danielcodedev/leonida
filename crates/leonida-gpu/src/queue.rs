@@ -452,7 +452,7 @@ static LINED: [AtomicU64; 5] = [const { AtomicU64::new(0) }; 5];
 /// translates.
 #[cfg(windows)]
 fn wait_translations(before: std::time::Instant) {
-    if crate::list::thin::translating() {
+    if !crate::list::thin::made() || crate::list::thin::translating() {
         return;
     }
     let queues = lock(&WAITING).clone();

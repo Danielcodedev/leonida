@@ -198,6 +198,8 @@ static BACKS: Mutex<Vec<usize>> = Mutex::new(Vec::new());
 /// the middle, submissions, and the microseconds they waited for their
 /// lists' translation.
 static STATS: [AtomicU64; 6] = [const { AtomicU64::new(0) }; 6];
+/// A recording was made: until then no queue's line holds one.
+static MADE: AtomicBool = AtomicBool::new(false);
 
 fn held<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
@@ -232,6 +234,7 @@ struct Inner {
 
 impl Recording {
     fn new(kind: u32) -> Self {
+        MADE.store(true, Release);
         Recording {
             kind,
             inner: Mutex::default(),
@@ -460,6 +463,11 @@ pub(crate) fn backs(recordings: &[Arc<Recording>]) -> Vec<This> {
         .map(|r| r.back())
         .filter(|b| !b.is_null())
         .collect()
+}
+
+/// Whether any recording was made ([`MADE`]).
+pub(crate) fn made() -> bool {
+    MADE.load(Acquire)
 }
 
 /// Whether this thread is one of those that translate: it must not wait for
