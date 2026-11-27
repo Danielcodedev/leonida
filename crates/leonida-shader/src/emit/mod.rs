@@ -83,6 +83,8 @@
 mod bitcode;
 mod code_table;
 mod container;
+#[cfg(test)]
+mod cube_lod_tests;
 #[cfg(all(test, windows))]
 mod diff_tests;
 #[cfg(all(test, windows))]
