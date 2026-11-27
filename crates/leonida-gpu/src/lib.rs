@@ -44,6 +44,8 @@ pub mod frame;
 pub mod framelog;
 #[cfg(windows)]
 mod host;
+#[cfg(any(windows, test))]
+mod heap_readiness;
 #[cfg(windows)]
 mod indirect;
 #[cfg(any(windows, test))]

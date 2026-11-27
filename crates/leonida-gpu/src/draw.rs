@@ -1678,14 +1678,25 @@ impl State {
             .find(|h| !h.samplers())?;
         let host = heap.host()?;
         let gpu = host.strides_gpu()?;
-        // One key per list, as textures have: no title resource is there.
-        const ONCE: usize = usize::MAX - 0x5e;
-        if !list.first_use(ONCE) {
+        if crate::heap_readiness::enabled() {
+            let started = std::time::Instant::now();
+            let frame = crate::frame::current();
+            let (snapshot, inspected) = host.buffer_snapshot(heap, frame);
+            list.ready_heap_buffers(&snapshot, host.strides_buffer()?)?;
+            // Keep the existing texture scheduling policy separate: one list
+            // wins its global frame pass. Buffer readiness is never consumed
+            // by that recording-time decision, even for unwatched copies.
+            const TEXTURES: usize = usize::MAX - 0x5e;
+            static TEXTURE_FRAME: AtomicU64 = AtomicU64::new(u64::MAX);
+            if list.first_use(TEXTURES) && TEXTURE_FRAME.swap(frame, Ordering::Relaxed) != frame {
+                let textures_began = std::time::Instant::now();
+                self.heap_textures(list, heap, host);
+                HEAP_PASS_PARTS[0].fetch_add(textures_began.elapsed().as_micros() as u64, Ordering::Relaxed);
+            }
+            HEAP_BUFFER_PASSES.fetch_add(u64::from(inspected != 0), Ordering::Relaxed);
+            HEAP_PASS_PARTS[1].fetch_add(inspected as u64, Ordering::Relaxed);
+            HEAP_BUFFER_MICROS.fetch_add(started.elapsed().as_micros() as u64, Ordering::Relaxed);
             return Some(gpu);
-        }
-        // The list may outlive the title's heap object, which owns the table.
-        if let Some(buffer) = host.strides_buffer() {
-            list.keep(buffer);
         }
         // The pass itself once per frame: per list it ran up to 51 times a
         // frame over 81,000 views and 4,100 host copies, 18 s of every
@@ -1693,10 +1704,19 @@ impl State {
         // shortcut: what the title writes into such buffers between lists
         // of one frame is seen a frame late.
         static FRAME: AtomicU64 = AtomicU64::new(u64::MAX);
-        let frame = crate::frame::current();
-        if FRAME.swap(frame, Ordering::Relaxed) == frame {
+        let Some(frame) = crate::heap_readiness::record_use(
+            |key| list.first_use(key),
+            || {
+                // The list may outlive the title's heap object, which owns the table.
+                if let Some(buffer) = host.strides_buffer() {
+                    list.keep(buffer);
+                }
+            },
+            &FRAME,
+            crate::frame::current,
+        ) else {
             return Some(gpu);
-        }
+        };
         let started = std::time::Instant::now();
         // Per host heap: the host copy and range each slot's buffer view
         // reads, kept from pass to pass. Only the slots written since the
@@ -4230,3 +4250,6 @@ mod tests {
         assert_eq!(bake_named(&constants, 0, record), ((100..105).collect(), (0, 0)));
     }
 }
+
+#[cfg(test)]
+mod heap_readiness_tests;

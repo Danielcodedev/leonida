@@ -199,7 +199,7 @@ impl Detached {
         &self.host
     }
 
-    #[cfg(all(test, feature = "diagnostics"))]
+    #[cfg(test)]
     pub(crate) fn for_test(host: crate::host::HostList) -> Self {
         Self { host, _uploads: Vec::new(), _state: crate::draw::State::default() }
     }

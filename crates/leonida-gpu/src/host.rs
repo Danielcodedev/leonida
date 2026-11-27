@@ -2084,6 +2084,9 @@ struct Deferred {
     /// Buffer ranges refreshed since the last title copy (host copy,
     /// address, bytes): refreshing them again would find the same bytes.
     refreshed: std::collections::HashSet<(usize, usize, usize)>,
+    /// Indexed-buffer readiness is per heap and recording. Resource ownership
+    /// survives title-write invalidation; reset replaces the whole Deferred.
+    heap_readiness: crate::heap_readiness::Recording,
     /// Textures whose contents the list brings up to date.
     textures: std::collections::HashSet<usize>,
     /// Bottom-of-pipe writes, done once the list has run: address, what,
@@ -6954,6 +6957,9 @@ impl HostList {
     /// Copies `len` bytes from `src` to `dst` when the list is submitted.
     pub(crate) fn defer_copy(&self, dst: *mut u8, src: *const u8, len: usize) {
         let mut deferred = self.deferred();
+        // Even a joined copy is a new title-write boundary for an empty
+        // cached heap snapshot that added no Refresh step after the last copy.
+        deferred.heap_readiness.title_written();
         COPIES_JOINED[0].fetch_add(1, Ordering::Relaxed);
         // A copy that goes on where the one recorded just before it ended,
         // source and destination both: with `join_copies` the two are one
@@ -6997,6 +7003,33 @@ impl HostList {
                 .copies
                 .push(Step::Refresh(shadow.clone(), address, len));
         }
+    }
+
+    /// Keep this heap's stride table and record its cached buffer spans through
+    /// the ordinary Refresh steps. All readback/flight analyses see these reads.
+    pub(crate) fn ready_heap_buffers(
+        &self,
+        snapshot: &crate::heap_readiness::Snapshot<crate::shadow::Shadow>,
+        strides: &ID3D12Resource,
+    ) -> Option<()> {
+        let strides = strides.cast::<windows::core::IUnknown>().ok()?;
+        let mut deferred = self.deferred();
+        let Deferred { heap_readiness, kept, refreshed, copies, .. } = &mut *deferred;
+        heap_readiness.record(
+            snapshot,
+            || kept.push(strides),
+            || {
+                for span in snapshot.spans.iter() {
+                    let address = span.from as usize;
+                    let len = (span.to - span.from) as usize;
+                    let key = (std::sync::Arc::as_ptr(&span.copy) as usize, address, len);
+                    if refreshed.insert(key) {
+                        copies.push(Step::Refresh(span.copy.clone(), address, len));
+                    }
+                }
+            },
+        );
+        Some(())
     }
 
     /// Shaders of the list write `[address, address + len)` of a buffer's
@@ -7282,6 +7315,14 @@ impl HostList {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn keeps_for_test(&self, object: &impl Interface) -> bool {
+        let Ok(object) = object.cast::<windows::core::IUnknown>() else {
+            return false;
+        };
+        self.deferred().kept.iter().any(|kept| kept.as_raw() == object.as_raw())
+    }
+
     /// Whether this is the first time since the reset that the list asks
     /// about `key` (a texture to bring up to date).
     pub(crate) fn first_use(&self, key: usize) -> bool {
@@ -7291,8 +7332,10 @@ impl HostList {
     /// Runs `work` when the list is submitted, in order with its copies.
     /// `work` may write title memory (refreshes after it copy again).
     pub(crate) fn defer(&self, work: impl Fn() + Send + 'static) {
-        self.deferred().copies.push(Step::Run(Box::new(work)));
-        self.deferred().refreshed.clear();
+        let mut deferred = self.deferred();
+        deferred.copies.push(Step::Run(Box::new(work)));
+        deferred.refreshed.clear();
+        deferred.heap_readiness.title_written();
     }
 
     /// As [`HostList::defer`], for work that neither reads nor writes title
