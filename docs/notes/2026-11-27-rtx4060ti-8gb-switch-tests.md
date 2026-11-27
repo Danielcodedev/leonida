@@ -96,11 +96,14 @@ as a new game and played through the prison into the robbery, hand-played.
 | whole run, menus and loading included | 7,263 in 983.4 s | 7.4 | 34 ms | 10,846 ms |
 
 - It ended with a crash report and exit code -2005270523 (`0x887A0005`, the device removed), as
-  the game moved from the robbery to the escape. The tester gives the removal reason as
-  `0x887A0004` (unsupported). The RTX 5080 run that found the constant buffer view size gave
-  `0x887A0001` (invalid call), so this may be a different cause; the two RTX 3060 removals in
-  [their note](2026-11-27-rtx3060-12gb-tester-results.md) gave no reason. None of the eight
-  earlier runs on this card, without the warm-up, lost the device.
+  the game moved from the robbery to the escape. The tester gives the reason as `0x887A0004`
+  (unsupported), but in the device-removed line that code belongs to the missing breadcrumbs
+  (DRED off), not to the removal: the RTX 5080 run that found the constant buffer view size
+  carried it too, followed by `0x887A0001` (invalid call). So this may be the same cause, the
+  view size ([its note](2026-11-27-cbv-64k-limit.md)); a guess until a run with that fix. The
+  two RTX 3060 removals in [their note](2026-11-27-rtx3060-12gb-tester-results.md) don't
+  show this cause: one gave no reason, the other points to memory. None of the eight earlier runs on
+  this card, without the warm-up, lost the device.
 - The robbery was still corrupted after the warm-up: the tester saw constant black-and-white
   flashing and about 1 to 4 fps. So the warm-up fixes neither the boat's water nor the
   robbery's picture.
