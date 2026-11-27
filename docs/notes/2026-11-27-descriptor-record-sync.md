@@ -15,8 +15,17 @@ The patch's new batching option and page-straddling changes are outside this cha
 
 The production-owned CPU state regression fails with the old raw-only observation publication and
 passes with the fix. Six CPU tests cover A/B/A, null/restoration, first API write/raw clear, deferred
-and invalidated state, captured identity and padding, and skipped observations. A Windows
-descriptor test exercises actual create/copy/raw-sync calls with two valid samplers and exact made
-identities, including an API write queued before host-heap creation, in both existing scan modes. It
-follows the existing explicit skip-if-no-device convention and submits no GPU work; it has not yet
-been run. Exact made keys validate descriptor synchronization, not rendered sampler output. No game image improvement or performance result is claimed.
+and invalidated state, captured identity and padding, and skipped observations. All six also pass in
+the Windows test executable without graphics initialization.
+
+Eight Windows regressions exercise actual create/copy/raw-sync calls with two valid samplers and
+exact made identities, including an API write queued before host-heap creation, in both existing
+scan modes. The identical tests fail all eight assertions on upstream `a3c5545` and pass all eight
+with this fix on an NVIDIA RTX 5090 through vkd3d-proton. Neither run skips a test or submits shader
+work; core and synchronization validation report only the runtime's deliberate initialization
+canary. An initial test fixture had reversed LOD bounds; the recorded comparison uses the corrected
+finite range 0..4 and valid sampler enums in both executables.
+
+The tests use the normal explicit skip-if-no-device convention for CI. Strict Windows default and
+all-features Clippy checks pass. Exact made keys validate descriptor synchronization, not rendered
+sampler output. No game image improvement or performance result is claimed.
