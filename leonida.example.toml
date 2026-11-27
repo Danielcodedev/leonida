@@ -41,3 +41,4 @@ test_titles = []
 # card_windows_mb = 0          # LEONIDA_CARD_WINDOWS_MB: limit in MiB, 0 disables
 # window_upload = false        # LEONIDA_WINDOW_UPLOAD
 # texture_room_percent = 90    # LEONIDA_TEXTURE_ROOM_PERCENT: 50..97
+# texture_stage_mb = 512       # LEONIDA_TEXTURE_STAGE_MB: MiB of textures staged a frame, 64..4096
