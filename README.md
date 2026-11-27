@@ -103,6 +103,19 @@ to remember it:
 powershell -ExecutionPolicy Bypass -File .\run-gta6.ps1
 ```
 
+To switch between branches and start `run-gta6.ps1` from a window instead, build the launcher once:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\build-launcher.ps1
+```
+
+It creates `Leonida-Launcher.exe` in the same folder (git ignores it; it stays when you switch
+branches). Start it, pick a branch and click **Charger et lancer**: it switches to that branch and
+runs `run-gta6.ps1`. Switching discards your changes to tracked files, after asking. Under
+**Paramètres** you can set your game folder (passed as `-GameDir`); settings are kept in
+`%APPDATA%\LeonidaLauncher\config.json`. The first build installs the `ps2exe` module for your
+Windows user and downloads the logo; without network it uses a plain logo.
+
 `measure-gta6.ps1` does the same with the diagnostics build, the frame log and the card meter on, and saves
 everything the game prints to `%LOCALAPPDATA%\leonida\logs`. `-SpeedSwitches off` runs it without the frame-rate
 switches or your graphics overrides, for a comparison in the same place.
