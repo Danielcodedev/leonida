@@ -5,6 +5,24 @@ The status summary is in [README.md](../README.md).
 
 ## Newest (2026-11-26)
 
+**R-7: buffer view addresses by view heap slot.**
+The 5 `CS_TraceShadowRays_*` compute programs ("a descriptor read only as
+data") load a buffer descriptor from the view heap at an index they compute
+and only take its address, to walk the memory behind it. The host's table of
+element strides by heap slot (`SLOT_STRIDES`) now goes on after its 2^21
+strides with two dwords per slot, the title address of the slot's buffer view
+(0: none or not a buffer, `SLOT_VIEW_ADDRESSES`), written with the stride
+whenever the slot is. `view_address` reads it for a descriptor picked from
+the heap, as it took the address from a user-data dword for one in a table.
+The table's upload buffer grows from 8 to 24 MiB per view heap.
+`CS_TraceShadowRays_FullAdaptive` then stopped on "a lane mask holding lanes
+elsewhere read as data": the compiler reuses an SGPR that holds a compare's
+mask on one path and a dword from `s_buffer_load` on the other, and masks the
+join as a number. Structurisation took the join for a lane mask; a join with
+an argument read by a scalar memory load is now no mask. With
+`translate --list --validate` limited to these programs, all 5 translate and
+validate.
+
 **R-7: signature interpolation modes from the console's `PSV0`.**
 The translated signatures took their interpolation modes from a table keyed
 by type: every float linear, every integer constant. The console packs a

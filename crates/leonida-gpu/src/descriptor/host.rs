@@ -960,7 +960,7 @@ impl HostHeap {
         ));
         let strides = (!sampler)
             .then(|| {
-                let bytes = u64::from(leonida_shader::emit::SLOT_STRIDES_COUNT) * 4;
+                let bytes = u64::from(leonida_shader::emit::SLOT_STRIDES_DWORDS) * 4;
                 let (buffer, data) = host.upload_buffer(bytes)?;
                 // SAFETY: the buffer's whole mapping; a live buffer.
                 let gpu = unsafe {
@@ -1637,9 +1637,20 @@ impl HostHeap {
         if let Some((_, _, data)) = &self.strides
             && index < leonida_shader::emit::SLOT_STRIDES_COUNT
         {
+            use leonida_shader::emit::SLOT_VIEW_ADDRESSES;
+            let address = stride.and(view).and_then(buffer_range).map_or(0, |r| r.0);
+            let at = (SLOT_VIEW_ADDRESSES + 2 * index) as usize;
             // SAFETY: inside the mapping; shaders read it while we write (a
-            // dword, either value is one the slot had).
-            unsafe { (*data as *mut u32).add(index as usize).write_volatile(stride.unwrap_or(0)) };
+            // dword, either value is one the slot had; the address's two
+            // dwords can be seen half old, half new while the slot changes).
+            unsafe {
+                let words = *data as *mut u32;
+                words
+                    .add(index as usize)
+                    .write_volatile(stride.unwrap_or(0));
+                words.add(at).write_volatile(address as u32);
+                words.add(at + 1).write_volatile((address >> 32) as u32);
+            }
         }
         let mut buffers = self.buffers.lock().unwrap_or_else(|e| e.into_inner());
         let was = if stride.is_some() {
@@ -3652,6 +3663,38 @@ mod tests {
         heap.release(a, 50);
         assert_eq!(heap.dynamic(50), Some(4));
         assert_eq!(heap.dynamic(40), Some(4 + heap.dynamic - 40));
+    }
+
+    /// The table shaders pick buffers from the heap by holds each slot's
+    /// stride and, after the strides, the title address of its buffer view;
+    /// both follow the slot's writes.
+    #[test]
+    fn the_slot_table_holds_each_buffer_views_address() {
+        use leonida_shader::emit::SLOT_VIEW_ADDRESSES;
+        let Some(heap) = HostHeap::new(false, 8) else {
+            return; // no host GPU
+        };
+        let data = heap.strides.as_ref().map(|s| s.2).unwrap();
+        // SAFETY: dwords inside the table's mapping.
+        let word = |k: u32| unsafe { (data as *const u32).add(k as usize).read_volatile() };
+        let slot = |i: u32| (word(i), word(SLOT_VIEW_ADDRESSES + 2 * i), word(SLOT_VIEW_ADDRESSES + 2 * i + 1));
+        // 10 structured elements of 16 bytes from element 2, at an address no
+        // test and no title uses.
+        let at = 0x7fee_0000_0040u64;
+        let buffer = |at: u64| {
+            let mut desc = [0u32; 16];
+            (desc[1], desc[4], desc[6], desc[7]) = (1, 2, 10, 16);
+            (desc[10], desc[11]) = (at as u32, (at >> 32) as u32);
+            View::Placed(false, [1; 14], desc)
+        };
+        assert!(heap.note_buffer(3, Some(&buffer(at)), false).is_empty());
+        assert_eq!(slot(3), (16, (at + 32) as u32, (at >> 32) as u32));
+        assert_eq!(slot(2), (0, 0, 0));
+        // Written again elsewhere, then emptied.
+        heap.note_buffer(3, Some(&buffer(at + 0x1000)), false);
+        assert_eq!(slot(3).1, (at + 0x1020) as u32);
+        heap.note_buffer(3, None, false);
+        assert_eq!(slot(3), (0, 0, 0));
     }
 }
 
