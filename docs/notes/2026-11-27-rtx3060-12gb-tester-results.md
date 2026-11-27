@@ -36,10 +36,17 @@ Driver 621.01 is older than the 621.14 to 621.40 on the other cards reported so 
   out of the run. It held about 4 fps before that, and the other characters' textures were still
   loading. Another device removal in the notes is a laptop with `LEONIDA_TEXTURE_RANGE_LOCK=1`
   ([P-4 note](2026-11-27-p4-texture-range-lock.md)), a switch not on here.
+- axel_cf's crash report has no removal reason. Its last error is a host command list that did
+  not close, with `0x8007000E`. That code is `E_OUTOFMEMORY`: D3D12 returns it from `Close` when
+  memory ran out while the list was recorded, and an invalid command gives `E_INVALIDARG`. Our
+  message (`crates/leonida-gpu/src/host.rs`) says "a command recorded into it was invalid" for
+  every code, so here it points the wrong way. This PC has 16 GB of RAM, and the RTX 3060 Ti
+  8 GB with 16 GB in [../fork-notes.md](../fork-notes.md) used 22 GB of private memory in the
+  first room, so running out of memory fits (a guess: no memory figures came with the report).
 - So this card has lost the device on both drivers, 621.01 and 621.40, with `base` and after the
-  warm-up. Neither report gives the removal reason, so whether it is the constant buffer view
-  size (an RTX 5080 run lost the device the same way, reason invalid call) is not known; a run
-  on that fix would tell. One crash after one driver update doesn't show the driver caused it.
+  warm-up. Lepsy06's report gives no reason, and axel_cf's points to memory, not to the constant
+  buffer view size that an RTX 5080 run hit (reason invalid call). The two crashes may not share
+  a cause. One crash after one driver update doesn't show the driver caused it.
 - Lepsy06's 238 ms on an i5-13600KF is close to axel_cf's 248 ms on an i5-10400F, in different
   scenes. A much faster CPU gave about the same frame time, so the CPU looks less likely to be
   what holds this card back (a guess). axel_cf's 248 -> 282 ms after the driver update is one
