@@ -1032,3 +1032,20 @@ byte. Synthetic tests execute the emitted address/load/select instructions again
 independent original-array oracle, including chunk edges, unaligned addresses, underflow,
 32-bit wrap and both switch modes. Pipeline creation alone does not establish correct
 rendering or improved frame times; R-7 remains open.
+
+## Conditional branches back to two loop headers (2026-11-27)
+
+A conditional latch can return to either of two nested loop headers. The emitter used
+to guard only its first destination, leaving the other counter without a back-edge phi
+input. Reaching the first loop's limit also redirected execution into the other loop.
+Each selected back edge now has its own guard and counter update; at the limit it uses
+the existing abort path (discard for a pixel, return otherwise). Register and lane-mask
+phis use the guard as their incoming predecessor. Equal destinations share one guard.
+
+This repairs the existing bounded-loop approximation, without adding a switch or changing
+its limits, wave size, barriers, or the forward exit of an ordinary single-back-edge loop.
+Synthetic native programs verify both branch choices, nested-loop register results,
+self-loops, aliases, phi predecessors and pixel discard by executing emitted integer
+control flow on the CPU. The regression fails before the correction. This establishes
+the guard defect and its repair; it does not establish the cause of a live driver timeout
+or claim a frame-rate improvement.

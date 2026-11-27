@@ -7,6 +7,9 @@
 
 use std::collections::{BTreeMap, HashMap};
 
+#[cfg(test)]
+pub(crate) mod execute;
+
 pub mod census;
 pub mod opt;
 
