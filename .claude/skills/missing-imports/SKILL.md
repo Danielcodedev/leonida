@@ -62,18 +62,18 @@ A new function comes with a test that needs no game, in the module's own `#[cfg(
 2. **Rank** with the commands above and the latest run's log.
 3. **Find out what the function has to do before writing it.** Its public reference page gives the
    signature; the title's call sites give the arguments it passes and what it does with the result
-   ([trace-import](../trace-import/SKILL.md)). Read `docs/fork-notes.md` too: much is measured there.
+   ([trace-import](../trace-import/SKILL.md)). Read `docs/notes/` and `docs/fork-notes.md` too: much is measured there.
    Quote where each fact comes from, or call it a guess.
 4. **Write the smallest real implementation.** Returning success with the outputs unset is the bug the
    `trap` default exists to catch; return a documented failure the title handles rather than a success it
    cannot use. Code that approximates the console gets a `shortcut:` comment; a behaviour that might break
    a picture or lose the device goes behind a `LEONIDA_*` switch, off by default, noted in
-   `docs/fork-notes.md`. Every new `unsafe` block gets a `// SAFETY:` comment.
+   a note under `docs/notes/`. Every new `unsafe` block gets a `// SAFETY:` comment.
 5. **Test without the game:** `cargo test -p leonida-hle --locked` (or the crate you changed), then
    `cargo clippy --workspace --all-targets --locked -- -D warnings` and compare with `main`: no new warning.
 6. **Run again with [boot-triage](../boot-triage/SKILL.md)** and compare with the run before. Fixed:
    update the state file. Same stop after the fix: count a strike; at three, stop guessing.
-7. **Write it down** in `docs/fork-notes.md` when something was measured, with how.
+7. **Write it down** in a new note under `docs/notes/` when something was measured, with how.
 
 Before writing code, say in one paragraph what will change, why it fixes the cause, what it could break,
 and whether that comes from reading the code or from memory.

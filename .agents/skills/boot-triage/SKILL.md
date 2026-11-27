@@ -109,7 +109,7 @@ The first thing that went wrong usually caused the rest. In this order:
    usually the title's own assertion. Inside our code: a bug of ours. Inside the title's code with nothing
    missing before it: [trace-import](../trace-import/SKILL.md), starting from that address.
 3. **Host GPU failures** in `crashes.log` (device removed, a pipeline the driver refused).
-   `LEONIDA_D3D12_DRED=1` names the allocation and the commands in flight; `docs/fork-notes.md` lists the
+   `LEONIDA_D3D12_DRED=1` names the allocation and the commands in flight; `docs/notes/` and `docs/fork-notes.md` list the
    other GPU switches.
 4. **`method not implemented`** warnings (`crates/leonida-gpu/src/object.rs`): the object, the slot and the
    caller. The method answered `E_NOTIMPL`, and the title may have gone on without it.
@@ -130,7 +130,7 @@ file. A milestone that passed before and fails now is the first thing to fix.
 ## Three strikes
 
 Three fixes on the same stop that did not move it: stop guessing. Reread the state file and
-`docs/fork-notes.md`, trace the address with [trace-import](../trace-import/SKILL.md), and if it is still
+the notes (`docs/notes/`, `docs/fork-notes.md`), trace the address with [trace-import](../trace-import/SKILL.md), and if it is still
 unclear, ask the user one specific question.
 
 ## Do not

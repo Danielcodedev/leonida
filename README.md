@@ -24,7 +24,7 @@
   <a href="#status">Status</a> |
   <a href="#getting-started">Getting started</a> |
   <a href="#updating">Updating</a> |
-  <a href="docs/fork-notes.md">Fork notes</a> |
+  <a href="docs/notes/">Fork notes</a> |
   <a href="#contact">Contact</a> |
   <a href="#credits">Credits</a> |
   <a href="#license">License</a>
@@ -71,7 +71,7 @@ Known problems:
 - Many changes are specific to this game and this GPU; some are marked `shortcut:` in the code.
 
 The full measurement log, what each switch does and the debugging options are in
-[docs/fork-notes.md](docs/fork-notes.md).
+[docs/notes/](docs/notes/) (newest) and [docs/fork-notes.md](docs/fork-notes.md) (up to 2026-11-27).
 
 ## Getting started
 
