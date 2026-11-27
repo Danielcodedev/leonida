@@ -7,7 +7,7 @@ umask 077
 
 usage() {
     cat <<'EOF'
-Usage: ./run-gta6-linux.sh --game-dir DIR --proton DIR --compiler DLL [options]
+Usage: ./scripts/run-gta6-linux.sh --game-dir DIR --proton DIR --compiler DLL [options]
 
 Required:
   --game-dir DIR       Your game folder (with MicrosoftGame.config and its exe)
@@ -16,7 +16,7 @@ Required:
 
 Options:
   --exe EXE            Windows Leonida build (default: target/.../leonida.exe)
-  --config FILE        Leonida settings (default: beside this script, if present)
+  --config FILE        Leonida settings (default: the repository's leonida.toml, if present)
   --vkd3d-dir DIR      x64 DLL folder from a separate vkd3d-proton build
   --state-dir DIR      Prefix, cache and saves (default: ~/.local/share/leonida/proton)
   --read-only-dir DIR  Also expose a symlink target inside Steam Flatpak (repeatable)
@@ -55,13 +55,14 @@ require_outside_source() {
 }
 
 script_dir=$(dirname -- "$(realpath -e -- "$0")")
+repo_dir=$(dirname -- "$script_dir")
 game_dir=''
 proton_dir=''
 compiler=''
-exe="$script_dir/target/x86_64-pc-windows-msvc/release/leonida.exe"
+exe="$repo_dir/target/x86_64-pc-windows-msvc/release/leonida.exe"
 config=''
 vkd3d_dir=''
-[[ ! -f "$script_dir/leonida.toml" ]] || config="$script_dir/leonida.toml"
+[[ ! -f "$repo_dir/leonida.toml" ]] || config="$repo_dir/leonida.toml"
 state_dir="${XDG_DATA_HOME:-$HOME/.local/share}/leonida/proton"
 read_only_dirs=()
 bind_only=false
