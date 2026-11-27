@@ -984,6 +984,8 @@ pub enum View<'a> {
     Texture(u32, u32, &'a [[f32; 4]]),
     /// An RGBA32F cube SRV (face size, texels of faces +x -x +y -y +z -z).
     Cube(u32, &'a [[f32; 4]]),
+    /// An RGBA32F cube SRV with mip levels, in face-major D3D subresource order.
+    CubeMips(u32, u16, &'a [[f32; 4]]),
     /// A raw buffer UAV of this many dwords, zeroed.
     RawUav(u32),
     /// An RGBA32F texture UAV (width, height), zeroed.
@@ -1030,6 +1032,28 @@ impl Host {
         root: &ID3D12RootSignature,
         pso: &ID3D12PipelineState,
         d: &Dispatch,
+    ) -> Result<Vec<Vec<u32>>, String> {
+        self.dispatch_with_timeout(root, pso, d, None)
+    }
+
+    /// Runs a small device test with a bounded fence wait. A timeout terminates
+    /// the process while submitted resources are still owned.
+    pub fn dispatch_bounded(
+        &self,
+        root: &ID3D12RootSignature,
+        pso: &ID3D12PipelineState,
+        d: &Dispatch,
+        timeout: std::time::Duration,
+    ) -> Result<Vec<Vec<u32>>, String> {
+        self.dispatch_with_timeout(root, pso, d, Some(timeout))
+    }
+
+    fn dispatch_with_timeout(
+        &self,
+        root: &ID3D12RootSignature,
+        pso: &ID3D12PipelineState,
+        d: &Dispatch,
+        timeout: Option<std::time::Duration>,
     ) -> Result<Vec<Vec<u32>>, String> {
         let dev = &self.device;
         // SAFETY: D3D12 calls with descriptions that outlive them; resources
@@ -1157,21 +1181,28 @@ impl Host {
                 let mut at = views.GetCPUDescriptorHandleForHeapStart();
                 at.ptr += i * view_size;
                 match *v {
-                    View::Texture(..) | View::Cube(..) => {
-                        let (w, h, texels, faces) = match *v {
-                            View::Texture(w, h, t) => (w, h, t, 1),
-                            View::Cube(n, t) => (n, n, t, 6),
+                    View::Texture(..) | View::Cube(..) | View::CubeMips(..) => {
+                        let (w, h, mut texels, faces, mips) = match *v {
+                            View::Texture(w, h, t) => (w, h, t, 1, 1),
+                            View::Cube(n, t) => (n, n, t, 6, 1),
+                            View::CubeMips(n, mips, t) => (n, n, t, 6, mips),
                             _ => unreachable!(),
                         };
+                        if mips == 0 || u32::from(mips) > 32 - w.max(h).leading_zeros() {
+                            return Err("invalid test texture mip count".into());
+                        }
                         let mut desc = texture(w, h, D3D12_RESOURCE_FLAG_NONE);
                         desc.DepthOrArraySize = faces as u16;
+                        desc.MipLevels = mips;
                         let tex = make(
                             D3D12_HEAP_TYPE_DEFAULT,
                             &desc,
                             D3D12_RESOURCE_STATE_COPY_DEST,
                         )?;
-                        let pitch = (w as usize * 16).next_multiple_of(256);
-                        for face in 0..faces as usize {
+                        for sub in 0..u32::from(mips) * faces {
+                            let mip = sub % u32::from(mips);
+                            let (w, h) = ((w >> mip).max(1), (h >> mip).max(1));
+                            let pitch = (w as usize * 16).next_multiple_of(256);
                             let upload = make(
                                 D3D12_HEAP_TYPE_UPLOAD,
                                 &buffer((pitch * h as usize) as u64, D3D12_RESOURCE_FLAG_NONE),
@@ -1179,9 +1210,10 @@ impl Host {
                             )?;
                             let mut p = std::ptr::null_mut();
                             upload.Map(0, None, Some(&mut p)).map_err(err)?;
-                            let texels = &texels[face * (w * h) as usize..];
+                            let (level, rest) = texels.split_at((w * h) as usize);
+                            texels = rest;
                             for y in 0..h as usize {
-                                let row = &texels[y * w as usize..(y + 1) * w as usize];
+                                let row = &level[y * w as usize..(y + 1) * w as usize];
                                 std::ptr::copy_nonoverlapping(
                                     row.as_ptr().cast::<u8>(),
                                     p.cast::<u8>().add(y * pitch),
@@ -1190,7 +1222,7 @@ impl Host {
                             }
                             upload.Unmap(0, None);
                             let mut at_face = subresource(&tex);
-                            at_face.Anonymous.SubresourceIndex = face as u32;
+                            at_face.Anonymous.SubresourceIndex = sub;
                             list.CopyTextureRegion(
                                 &at_face,
                                 0,
@@ -1212,7 +1244,7 @@ impl Host {
                             Shader4ComponentMapping: D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING,
                             Anonymous: D3D12_SHADER_RESOURCE_VIEW_DESC_0 {
                                 TextureCube: D3D12_TEXCUBE_SRV {
-                                    MipLevels: 1,
+                                    MipLevels: u32::from(mips),
                                     ..Default::default()
                                 },
                             },
@@ -1414,12 +1446,32 @@ impl Host {
                 }
             }
             list.Close().map_err(err)?;
-            queue.ExecuteCommandLists(&[Some(list.cast().map_err(err)?)]);
             let fence: ID3D12Fence = dev.CreateFence(0, D3D12_FENCE_FLAG_NONE).map_err(err)?;
-            queue.Signal(&fence, 1).map_err(err)?;
-            while fence.GetCompletedValue() < 1 {
+            let submitted = list.cast().map_err(err)?;
+            queue.ExecuteCommandLists(&[Some(submitted)]);
+            // After submission, never unwind owners without proving completion. This is a
+            // test helper: terminate a failed device test instead of freeing live resources.
+            let fail = |why: String| -> ! {
+                eprintln!("test dispatch did not complete: {why}");
+                std::process::abort();
+            };
+            if let Err(e) = queue.Signal(&fence, 1) {
+                fail(format!("Signal: {}", err(e)));
+            }
+            let deadline = timeout.map(|t| std::time::Instant::now() + t);
+            loop {
+                let completed = fence.GetCompletedValue();
+                if completed == u64::MAX {
+                    fail("fence reported device removal".into());
+                }
                 if let Err(e) = dev.GetDeviceRemovedReason() {
-                    return Err(format!("device removed: {}", err(e)));
+                    fail(format!("device removed: {}", err(e)));
+                }
+                if completed >= 1 {
+                    break;
+                }
+                if deadline.is_some_and(|d| std::time::Instant::now() >= d) {
+                    fail("fence timeout".into());
                 }
                 std::thread::yield_now();
             }

@@ -3,6 +3,36 @@
 The detailed log of what this fork measured and changed, moved here from the README.
 The status summary is in [README.md](../README.md).
 
+## Newest (2026-11-27)
+
+**R-9: preserve cube-gradient LOD units and the minimum clamp.**
+Adapted only the cube-gradient correction from
+[DexNom/VIctory 921d8d3](https://github.com/DexNom/VIctory/commit/921d8d3b43b44f3a6ca4b44095edd3c4baf10a87).
+DXIL's `Log` operation already returns log base 2; multiplying it by `LOG2_E`
+selected overly coarse mip levels. The cube path now uses that value directly
+and applies the instruction's minimum LOD for `image_sample_d_cl` before sampling.
+This preserves the existing longest-gradient approximation; it does not add
+anisotropic filtering. The correction follows the
+[DXIL operation definition](https://github.com/microsoft/DirectXShaderCompiler/blob/main/docs/DXIL.rst)
+and the [minimum-LOD clamp contract](https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/tcube-samplegrad-s-float-float-float-float-uint-).
+
+An authored one-thread regression fills each cube mip with its own level number.
+On the unchanged translator, a two-texel footprint reads 1.4414063 instead of 1,
+a sixteen-texel footprint reads 5.7695313 instead of 4, and a minimum clamp of 3
+reads 0. After the correction, all ten cases return the expected levels. These
+include zero and tiny footprints, minimum clamps above and below the computed
+LOD, and explicit-LOD/level-zero controls. Both emitted programs pass Microsoft's
+DXIL validator. Measured on RTX 5090, NVIDIA 580.173.02, Pop!_OS 22.04,
+Proton 11's Wine and vkd3d-proton 3.2 (`ec20719452e916b`), with Vulkan core and
+synchronization validation and no unexpected test errors. This establishes the
+sampled LOD correction, not a gameplay picture or frame-rate improvement.
+
+The optional device test skips before device creation unless
+`LEONIDA_TEST_CUBE_GRADIENT_LOD=hardware` or `warp` is explicitly selected:
+`cargo test -p leonida-shader guest_cube_gradient_selects_mip_by_footprint -- --nocapture`.
+Only the hardware mode was measured here. Its fence wait is bounded to five
+seconds and terminates on failure while submitted resources remain owned.
+
 ## Newest (2026-11-26)
 
 **Wait for texture readbacks before preparing dependent submissions.**
