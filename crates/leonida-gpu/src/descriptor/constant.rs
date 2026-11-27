@@ -1,5 +1,11 @@
 //! Constant-buffer descriptions and the upload path for fresh descriptor tables.
 
+/// The largest host CBV: 4,096 rows of 16 bytes. The console's views reach 4 MiB, and a larger
+/// host one is an invalid call that removes the device (an RTX 5080 lost it on a view of
+/// 2,365,184 bytes). shortcut: a translated shader reads constants a row at a time and cannot
+/// address past this either, but a console program that reads further gets zeros.
+pub(crate) const MAX_SIZE: u32 = 4096 * 16;
+
 /// The two fields passed to the native constant-buffer descriptor creation call.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Description {
@@ -14,7 +20,7 @@ impl Description {
         }
         Self {
             address,
-            size: size.next_multiple_of(256),
+            size: size.next_multiple_of(256).min(MAX_SIZE),
         }
     }
 
@@ -46,6 +52,8 @@ pub(crate) fn upload(
     if is_null(address, size) {
         return Description::default();
     }
+    // The view shows no more than this, so no more is copied.
+    let size = size.min(MAX_SIZE);
     let Some((gpu, to)) = scratch(u64::from(size)) else {
         return Description::default();
     };
@@ -111,6 +119,26 @@ mod tests {
                 )
             );
         }
+    }
+
+    #[test]
+    fn a_view_past_the_host_limit_is_cut_to_it() {
+        let bytes = Cell::new(0);
+        let desc = upload(
+            0x20000,
+            2_365_184,
+            |size| (size == 65536).then_some((0x10000, std::ptr::dangling_mut())),
+            |_, _, n| bytes.set(n),
+        );
+        assert_eq!(
+            desc,
+            Description {
+                address: 0x10000,
+                size: MAX_SIZE
+            }
+        );
+        assert_eq!(bytes.get(), 65536);
+        assert_eq!(Description::new(0x10000, (1 << 22) - 256).size, MAX_SIZE);
     }
 
     #[test]
