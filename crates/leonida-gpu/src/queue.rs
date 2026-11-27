@@ -51,6 +51,13 @@ enum Held {
     /// A submission: the lists' host sides, taken from the title's lists
     /// (which it may reset meanwhile), and the order they run in.
     Run(Vec<crate::list::Detached>, Vec<usize>),
+    /// With [`behind`] and lists whose calls are written down
+    /// (`crate::list::thin`): a submission whose lists may still be being
+    /// translated: their recordings in order, when it was made, and whether
+    /// the line has stood at it. It never runs before they are; then the
+    /// parts of the lists of ours they went to take its place ([`unfold`]).
+    /// A forced present waits for the translation ([`wait_translations`]).
+    Lists(Vec<std::sync::Arc<crate::list::thin::Recording>>, std::time::Instant, bool),
     /// A signal of the queue's, due after what it holds before it.
     Signal(usize, u64),
     /// With [`behind`]: the submission at the head of the line is being
@@ -159,6 +166,13 @@ fn send_behind(this: This, planes: u32, plane_parameters: *const Plane) -> bool 
     };
     // The state the lists recorded so far leave the texture in: what our
     // copy finds it in when it runs behind them (looked at, not changed).
+    // Lists whose calls are written down record it when they are
+    // translated, so the submissions made so far are waited for.
+    // shortcut: the next frame's lists are translated while the title
+    // records them, so the state can already have moved on with some of
+    // them (read when the frame is shown, as Belobug's does, it would
+    // have moved on with more).
+    wait_translations(std::time::Instant::now());
     const COPY_SOURCE: u32 = 0x800;
     let state = crate::resource::host_transition(resource, COPY_SOURCE).map_or(COPY_SOURCE, |(_, before)| before);
     crate::resource::host_transition(resource, state);
@@ -319,13 +333,7 @@ fn submit_cut(this: This, lists: &[This]) {
                 "a submission is given to its queue part by part (its lists wait for memory values)"
             );
         }
-        {
-            let mut held = lock(&queue(this).held);
-            for (waits, taken, order) in parts {
-                held.extend(waits.into_iter().map(Held::Value));
-                held.push(Held::Run(taken, order));
-            }
-        }
+        lock(&queue(this).held).extend(into_line(parts));
         let mut waiting = lock(&WAITING);
         if !waiting.contains(&(this as usize)) {
             waiting.push(this as usize);
@@ -334,6 +342,140 @@ fn submit_cut(this: This, lists: &[This]) {
     // What ran may be what another queue waits for, and what was just
     // given to the queue may be free to run already.
     release_held(false);
+}
+
+/// What a queue holds for `parts` (`crate::list::detach_parts`), in order:
+/// the waits of each part, then its host lists.
+#[cfg(windows)]
+fn into_line(parts: crate::list::Parts) -> Vec<Held> {
+    let mut line = Vec::new();
+    for (waits, taken, order) in parts {
+        line.extend(waits.into_iter().map(Held::Value));
+        line.push(Held::Run(taken, order));
+    }
+    line
+}
+
+/// With [`behind`] and lists whose calls are written down
+/// (`crate::list::thin`): a submission goes into the queue's line as the
+/// recordings of its lists, translated or not, and the call returns; our
+/// thread goes on with it once they are translated ([`unfold`]). Waiting
+/// for the translation inside the call stood every title thread that
+/// submits (an RTX 3080 run: 20.5 s of waiting per 4,096 submissions, a
+/// median frame of 1,569 ms, and the device lost).
+#[cfg(windows)]
+fn submit_lined(this: This, lists: &[This]) {
+    let recordings = crate::list::thin::submitted_later(lists);
+    #[cfg(feature = "diagnostics")]
+    crate::capture::op(this as usize, || {
+        format!(
+            "SUBMIT queue kind {} {} lists to the line, part by part once translated",
+            queue(this).kind,
+            recordings.len()
+        )
+    });
+    if recordings.is_empty() {
+        return;
+    }
+    let now = std::time::Instant::now();
+    lock(&queue(this).held).push(Held::Lists(recordings, now, false));
+    {
+        let mut waiting = lock(&WAITING);
+        if !waiting.contains(&(this as usize)) {
+            waiting.push(this as usize);
+        }
+    }
+    release_held(false);
+}
+
+/// The translation of recordings submitted into a queue's line ended
+/// ([`Held::Lists`]): our thread looks at the lines again.
+#[cfg(windows)]
+pub(crate) fn translated() {
+    wake();
+}
+
+/// What a submission of translated `recordings` is in its queue's line:
+/// what [`submit_cut`] gives the line for the lists of ours they went to
+/// (with [`behind`] nothing of it runs at once: every list goes part by
+/// part). The recordings are let go of once the host sides are taken.
+#[cfg(windows)]
+fn unfold(
+    recordings: Vec<std::sync::Arc<crate::list::thin::Recording>>,
+    since: std::time::Instant,
+    stood: bool,
+) -> Vec<Held> {
+    let lists = crate::list::thin::backs(&recordings);
+    // A frame shot learns that its frame's lists are being submitted.
+    #[cfg(feature = "diagnostics")]
+    if crate::shot::recording() {
+        for &l in &lists {
+            if let Some(h) = crate::list::host_list(l) {
+                crate::shot::submitted(h);
+            }
+        }
+    }
+    let line = into_line(crate::list::detach_parts(&lists));
+    drop(recordings);
+    if stood {
+        LINED[1].fetch_add(1, Ordering::Relaxed);
+        LINED[2].fetch_add(since.elapsed().as_micros() as u64, Ordering::Relaxed);
+    }
+    if (LINED[0].fetch_add(1, Ordering::Relaxed) + 1).is_multiple_of(4096) {
+        let n: Vec<u64> = LINED.iter().map(|n| n.swap(0, Ordering::Relaxed)).collect();
+        tracing::info!(
+            "submissions translated in their queue's line (LEONIDA_THIN=1 with \
+             LEONIDA_ASYNC_SUBMIT=1): {} went on, {} of them after the line stood at their \
+             translation ({:.1} ms in all from their submit calls); presents waited {:.1} ms \
+             for translations, {} times",
+            n[0],
+            n[1],
+            n[2] as f64 / 1000.0,
+            n[4] as f64 / 1000.0,
+            n[3]
+        );
+    }
+    line
+}
+
+/// Since the last line of the log: submissions translated in their queue's
+/// line ([`Held::Lists`]), those the line stood at for their translation and
+/// the microseconds from their submit calls to then, and the times a
+/// present waited for translations ([`wait_translations`]) and their
+/// microseconds.
+#[cfg(windows)]
+static LINED: [AtomicU64; 5] = [const { AtomicU64::new(0) }; 5];
+
+/// Waits until the lists of every submission in the queues' lines made
+/// before `before` are translated: they record the states of textures,
+/// which a present reads. Called with no line locked; not on a thread that
+/// translates.
+#[cfg(windows)]
+fn wait_translations(before: std::time::Instant) {
+    if crate::list::thin::translating() {
+        return;
+    }
+    let queues = lock(&WAITING).clone();
+    let mut left = Vec::new();
+    for q in queues {
+        // SAFETY: a live queue: one released is taken off the list.
+        let line = unsafe { &(*(q as *const Queue)).held };
+        for h in lock(line).iter() {
+            if let Held::Lists(recordings, since, _) = h
+                && *since < before
+                && !crate::list::thin::translated(recordings)
+            {
+                left.extend(recordings.iter().cloned());
+            }
+        }
+    }
+    if left.is_empty() {
+        return;
+    }
+    let began = std::time::Instant::now();
+    crate::list::thin::wait_for(&left);
+    LINED[3].fetch_add(1, Ordering::Relaxed);
+    LINED[4].fetch_add(began.elapsed().as_micros() as u64, Ordering::Relaxed);
 }
 
 /// A submission to a queue that honours waits, list by list ([`split`]).
@@ -731,16 +873,41 @@ fn send_joined(joined: &mut Joined) {
 #[cfg(windows)]
 pub(crate) fn before_sync() {
     if behind() && !RELEASING_HERE.get() {
+        // A submission whose lists are being translated would stand in its
+        // line and let ours pass it: translation is a delay of ours, so it
+        // is waited for (a thread that translates does not wait).
+        wait_translations(std::time::Instant::now());
         release_held_now(false);
     }
 }
 
 #[cfg(windows)]
 fn release_held_now(all: bool) {
+    // Forced, a submission whose lists are being translated is waited for,
+    // never passed. Waited for outside [`release_lines`]: a thread that
+    // translates may want its lock meanwhile ([`before_sync`]). Only those
+    // made before the force began: the title's threads may submit more
+    // meanwhile, and waiting for those too could go on as long as they do.
+    let began = std::time::Instant::now();
+    loop {
+        if all {
+            wait_translations(began);
+        }
+        // (A thread that translates cannot wait: it leaves the rest.)
+        if !release_lines(all, began) || crate::list::thin::translating() {
+            return;
+        }
+    }
+}
+
+/// [`release_held_now`] once: whether, forced, it stood at a submission
+/// made before `began` whose lists were not translated yet ([`Held::Lists`]).
+#[cfg(windows)]
+fn release_lines(all: bool, began: std::time::Instant) -> bool {
     // One caller at a time, so a queue's submissions keep their order.
     static RELEASING: std::sync::Mutex<()> = std::sync::Mutex::new(());
     if lock(&WAITING).is_empty() {
-        return;
+        return false;
     }
     let _one = lock(&RELEASING);
     let was_here = RELEASING_HERE.replace(true);
@@ -755,6 +922,7 @@ fn release_held_now(all: bool) {
     // are forced, and none is left when this returns.
     let joining = !all && behind() && crate::host::late() && crate::host::host().is_some() && join_parts();
     let mut joined = Joined::default();
+    let mut stalled = false;
     loop {
         let queues = lock(&WAITING).clone();
         let mut moved = false;
@@ -766,6 +934,16 @@ fn release_held_now(all: bool) {
                 // A queue with a part in `joined` has our mark at the head
                 // of its line: what is looked at is behind the mark.
                 let base = usize::from(joined.marked.contains(&q));
+                // A submission whose lists are not translated yet stands,
+                // forced or not: forced, the caller waits for them and
+                // looks again if it was made before the force began.
+                if let Some(Held::Lists(recordings, since, stood)) = held.get_mut(base)
+                    && !crate::list::thin::translated(recordings)
+                {
+                    *stood = true;
+                    stalled |= all && *since < began;
+                    break;
+                }
                 match held.get(base) {
                     None | Some(Held::Running) => break,
                     Some(&Held::Wait(fence, value))
@@ -792,6 +970,20 @@ fn release_held_now(all: bool) {
                 }
                 match held.remove(base) {
                     Held::Wait(..) | Held::Running => {}
+                    // Translated: the parts of the lists of ours take its
+                    // place, before anything behind it, and are looked at
+                    // next. They are made with the line open, behind our
+                    // mark, as a submission is sent.
+                    Held::Lists(recordings, since, stood) => {
+                        held.insert(base, Held::Running);
+                        drop(held);
+                        let parts = unfold(recordings, since, stood);
+                        held = lock(line);
+                        if matches!(held.get(base), Some(Held::Running)) {
+                            held.remove(base);
+                        }
+                        held.splice(base..base, parts);
+                    }
                     Held::Value(wait) => {
                         // Passed at a present without being met: what the
                         // queue stood at.
@@ -938,6 +1130,7 @@ fn release_held_now(all: bool) {
             send_joined(&mut joined);
         }
     }
+    stalled
 }
 
 /// Whether a queue may pass `wait`: memory holds the value, or, with
@@ -1050,6 +1243,15 @@ fn execute_now(this: This, count: u32, lists: *const This) {
     if let Some(host) = crate::host::host() {
         // SAFETY: the title passes `count` lists.
         let lists = unsafe { std::slice::from_raw_parts(lists, count as usize) };
+        if crate::list::thin::on() && behind() && !this.is_null() {
+            submit_lined(this, lists);
+            return;
+        }
+        // With `LEONIDA_THIN=1` the title's lists hold only what was written
+        // down: the lists of ours they were translated onto run instead,
+        // once this call has waited for their translation.
+        let translated = crate::list::thin::on().then(|| crate::list::thin::submitted(lists));
+        let lists = translated.as_ref().map_or(lists, |t| t.lists());
         if cuts() && !this.is_null() {
             submit_cut(this, lists);
             return;
@@ -1323,8 +1525,11 @@ fn present_now(this: This, planes: u32, plane_parameters: *const Plane) -> HRESU
     if sent_behind {
     } else if crate::host::late() && !crate::host::late_free_present() {
         // (With `behind`: what the queues hold runs here first, and what
-        // it sent is settled with the rest.)
+        // it sent is settled with the rest. Submissions whose lists are
+        // being translated would stand in their lines until the forced
+        // pass below, after the settling, so they are waited for first.)
         if behind() {
+            wait_translations(std::time::Instant::now());
             release_held_now(false);
         }
         crate::host::settle_for_present();
@@ -1333,6 +1538,7 @@ fn present_now(this: This, planes: u32, plane_parameters: *const Plane) -> HRESU
     } else if crate::host::late() {
         // The present is sent ahead too: what waits for a value a flight
         // will write runs behind that flight, and nothing is settled here.
+        wait_translations(std::time::Instant::now());
         release_held_now(false);
     }
     // shortcut: what a queue still holds at a present runs now, whatever
@@ -1388,6 +1594,12 @@ fn present_now(this: This, planes: u32, plane_parameters: *const Plane) -> HRESU
         if crate::capture::listed(frame) {
             crate::capture::dump_targets(frame);
         }
+    }
+    // The state the lists leave the texture in is known once they are
+    // translated (with `LEONIDA_WAIT_FORCE=0` nothing above waited for it).
+    #[cfg(windows)]
+    if !sent_behind {
+        wait_translations(std::time::Instant::now());
     }
     #[cfg(windows)]
     if !sent_behind
@@ -1595,6 +1807,59 @@ mod tests {
         assert_eq!(order.iter().map(|&i| lists[i]).collect::<Vec<_>>(), ["a0", "a0", "b0", "b0"]);
     }
     use crate::object::slot;
+
+    /// A submission whose lists are being translated holds what is behind
+    /// it on its queue; once they are translated its parts (none here: the
+    /// recordings were never begun) take its place. At a present it is
+    /// waited for, never passed.
+    #[cfg(windows)]
+    #[test]
+    fn lists_in_translation_hold_their_queue_until_translated() {
+        let null = std::ptr::null();
+        let desc = QueueDesc {
+            kind: 0,
+            priority: 0,
+            flags: 0,
+            nodes: 0,
+        };
+        let mut q = null;
+        assert_eq!(create(null, &desc, &QUEUE_IIDS[0], &mut q), S_OK);
+        let mut fence = null;
+        let fence_iid = &crate::fence::FENCE_IIDS[0];
+        assert_eq!(crate::fence::create(null, 0, 0, fence_iid, &mut fence), S_OK);
+        let line = |recording, value| {
+            lock(&queue(q).held).extend([
+                Held::Lists(vec![recording], std::time::Instant::now(), false),
+                Held::Signal(fence as usize, value),
+            ]);
+            lock(&WAITING).push(q as usize);
+        };
+
+        let recording = crate::list::thin::lined_recording();
+        line(recording.clone(), 1);
+        release_held_now(false);
+        assert_eq!(crate::fence::completed(fence), 0, "the signal waits for the translation");
+        assert!(matches!(lock(&queue(q).held).first(), Some(Held::Lists(_, _, true))));
+        crate::list::thin::end_translation(&recording);
+        release_held_now(false);
+        assert_eq!(crate::fence::completed(fence), 1);
+        assert!(lock(&queue(q).held).is_empty());
+
+        let recording = crate::list::thin::lined_recording();
+        line(recording.clone(), 2);
+        let ender = {
+            let recording = recording.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                crate::list::thin::end_translation(&recording);
+            })
+        };
+        release_held_now(true);
+        assert!(crate::list::thin::translated(&[recording]), "forced, it was waited for");
+        assert_eq!(crate::fence::completed(fence), 2);
+        assert!(lock(&queue(q).held).is_empty());
+        ender.join().unwrap();
+    }
 
     /// Where a queue's signal is: newer layouts have it two slots later.
     /// Another test may switch layouts while this one runs, so the queue's
