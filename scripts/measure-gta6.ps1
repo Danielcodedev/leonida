@@ -8,11 +8,11 @@
 # MicrosoftGame.config in it) or asks for that folder (scripts\game-dir.ps1), and offers to
 # remember it in leonida.toml, which git ignores.
 #
-#   powershell -ExecutionPolicy Bypass -File .\measure-gta6.ps1
-#   powershell -ExecutionPolicy Bypass -File .\measure-gta6.ps1 -GameDir 'D:\Games\GTA VI'   # this run only
-#   powershell -ExecutionPolicy Bypass -File .\measure-gta6.ps1 -WarmUp yes   # warm up the shader cache without asking
-#   powershell -ExecutionPolicy Bypass -File .\measure-gta6.ps1 -SpeedSwitches off   # the same run without the switches
-#   powershell -ExecutionPolicy Bypass -File .\measure-gta6.ps1 -Report no   # no report afterwards
+#   powershell -ExecutionPolicy Bypass -File .\scripts\measure-gta6.ps1
+#   powershell -ExecutionPolicy Bypass -File .\scripts\measure-gta6.ps1 -GameDir 'D:\Games\GTA VI'   # this run only
+#   powershell -ExecutionPolicy Bypass -File .\scripts\measure-gta6.ps1 -WarmUp yes   # warm up the shader cache without asking
+#   powershell -ExecutionPolicy Bypass -File .\scripts\measure-gta6.ps1 -SpeedSwitches off   # the same run without the switches
+#   powershell -ExecutionPolicy Bypass -File .\scripts\measure-gta6.ps1 -Report no   # no report afterwards
 
 param(
     [string]$GameDir = '',
@@ -29,7 +29,8 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-. (Join-Path $PSScriptRoot 'scripts\leonida-settings.ps1')
+$repoRoot = Split-Path -Parent $PSScriptRoot
+. (Join-Path $PSScriptRoot 'leonida-settings.ps1')
 $environmentBefore = Save-LeonidaEnvironment
 
 function Test-GameDir([string]$dir) {
@@ -37,11 +38,11 @@ function Test-GameDir([string]$dir) {
 }
 
 # leonida.toml is read from the current folder.
-Push-Location $PSScriptRoot
+Push-Location $repoRoot
 try {
     cargo build --profile diag -p leonida --features diagnostics
     if ($LASTEXITCODE -ne 0) { throw "cargo build failed (exit $LASTEXITCODE); is leonida.exe still running?" }
-    $exe = Join-Path $PSScriptRoot 'target\diag\leonida.exe'
+    $exe = Join-Path $repoRoot 'target\diag\leonida.exe'
 
     if ($GameDir -ne '') {
         if (-not (Test-GameDir $GameDir)) { throw "no MicrosoftGame.config in $GameDir" }
@@ -56,7 +57,7 @@ try {
 
         if (-not (Test-GameDir $dir)) {
             if ($dir -ne '' -and $dir -ne '(not set)') { Write-Host "The saved game folder has no MicrosoftGame.config: $dir" }
-            . (Join-Path $PSScriptRoot 'scripts\game-dir.ps1')
+            . (Join-Path $PSScriptRoot 'game-dir.ps1')
             $dir = Read-GameDir
 
             $answer = Read-Host 'Remember this folder for next time? [Y/n]'
@@ -122,7 +123,7 @@ try {
 
     if ($Report -eq 'ask') {
         try {
-            & (Join-Path $PSScriptRoot 'scripts\test-report.ps1') -Log $log -SpeedSwitches $switchList `
+            & (Join-Path $PSScriptRoot 'test-report.ps1') -Log $log -SpeedSwitches $switchList `
                 -SwitchMode $SpeedSwitches -WarmUp $WarmUp -Started $started `
                 -ExitCode "$exitCode" -Exe $exe -Graphics $graphics
         } catch {

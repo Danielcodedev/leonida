@@ -33,7 +33,7 @@ ten seconds in under a wrapped device, and while RenderDoc is loaded the driver'
 neither read nor written, so the run is not the one players get. Try a shot before a capture.
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\shot-run.ps1 -Keys '30:Enter,35:Enter' -ShotAt '300,600'
+powershell -ExecutionPolicy Bypass -File .\scripts\shot-run.ps1 -Keys '30:Enter,35:Enter' -ShotAt '300,600'
 ```
 
 `-Keys` (`LEONIDA_KEYS`) presses keys at those seconds to get from the menus into play, `-ShotAt`
@@ -134,5 +134,5 @@ and whether it was observed or inferred.
 ## Not for timings
 
 A RenderDoc replay runs each draw alone on a wrapped device; its durations are not the game's. For time,
-use `stamps.txt` of a shot, the card meter, or a measured run (`measure-gta6.ps1`), as "Measuring" in
+use `stamps.txt` of a shot, the card meter, or a measured run (`scripts\measure-gta6.ps1`), as "Measuring" in
 CLAUDE.md says.
