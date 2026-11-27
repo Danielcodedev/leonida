@@ -38,7 +38,7 @@ The import, method or address may already be measured. Search before opening the
 grep -rn "XUserAddAsync" docs/ crates/ | head
 ```
 
-`docs/fork-notes.md` is the measurement log; `docs/architecture.md` says which crate owns what. The
+`docs/notes/` (and `docs/fork-notes.md` before it) is the measurement log; `docs/architecture.md` says which crate owns what. The
 implementations in `crates/leonida-hle/src/modules/` often carry what was learned in their comments.
 
 ## 1. Find the way in
@@ -78,7 +78,7 @@ crash; that file is game data and stays there.
 
 ## 4. Write it down
 
-Add what was measured to `docs/fork-notes.md`, or extend the comment on the implementation: what the
+Add what was measured as a note under `docs/notes/`, or extend the comment on the implementation: what the
 title calls, from where (`module+offset`, with the build), with which arguments, what it does with the
 result, and what is still open. Describe the code in prose and tables; never paste disassembly or
 pseudocode. Every claim carries its label.

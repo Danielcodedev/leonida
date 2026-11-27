@@ -3,6 +3,9 @@
 The detailed log of what this fork measured and changed, moved here from the README.
 The status summary is in [README.md](../README.md).
 
+**Closed to new entries since 2026-11-27.** New notes go in [notes/](notes/), one file per change
+([how to write one](notes/README.md)), so pull requests stop conflicting at the top of this file.
+
 ## Newest (2026-11-27)
 
 **R-9: preserve cube-gradient LOD units and the minimum clamp.**

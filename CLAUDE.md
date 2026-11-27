@@ -49,8 +49,8 @@ It is a fork of [fxceless/victory-gta6](https://github.com/fxceless/victory-gta6
 - Claim it by opening a draft pull request with the ID in the title (`P-3: ...`) as soon as you start.
 - One item, one pull request. Touch only the files the item needs. The pull request that finishes an item deletes
   its row in `TODO.md` and edits no other row. New work goes in as a new row with the next free ID; never renumber.
-- Read the code and [docs/fork-notes.md](docs/fork-notes.md) before guessing: many things were already measured
-  there. Quote where a number comes from, or say it is a guess.
+- Read the code, [docs/notes/](docs/notes/) and the older [docs/fork-notes.md](docs/fork-notes.md) before guessing:
+  many things were already measured there. Quote where a number comes from, or say it is a guess.
 
 ## Where things are
 
@@ -71,7 +71,7 @@ It is a fork of [fxceless/victory-gta6](https://github.com/fxceless/victory-gta6
 | `gpu-profiles.json`, `leonida-core::graphics` | measured profiles embedded in the executable, and native settings resolution |
 | `scripts/leonida-settings.ps1` | launcher queries and reports for the native graphics settings |
 | `scripts/measure-run.ps1`, `scripts/make-view.ps1` | one unattended diagnostics run with frame shots and a summary of its figures; small JPEG copies of shots |
-| `docs/` | architecture, asset policy, ray tracing, the fork's measurement log |
+| `docs/` | architecture, asset policy, ray tracing, the fork's measurement log (`docs/notes/`, one file per change; `docs/fork-notes.md` up to 2026-11-27) |
 | `.claude/skills/` | agent skills, copied in `.agents/skills/` for other agents; [AGENTS.md](AGENTS.md) lists them. Edit both copies |
 
 ## Commands
@@ -107,7 +107,7 @@ warning. Fixing an unrelated failure is its own item, not something to fold into
   lines you write within 100 columns and formatted the way `rustfmt` would.
 - **Match the surrounding code:** its naming, its comment density and its plain-prose comments that say why.
 - **Switches:** a new behaviour that might break a picture or lose the device goes behind a `LEONIDA_*` environment
-  variable, off by default, described in a comment where it is read and in `docs/fork-notes.md`.
+  variable, off by default, described in a comment where it is read and in a note under `docs/notes/`.
 - **`shortcut:`** marks code that approximates what the console does. Add the marker when you approximate; remove it
   when you replace one with the real behaviour.
 - **Unsafe:** `unsafe_op_in_unsafe_fn` is denied. Give every new `unsafe` block a `// SAFETY:` comment.
@@ -118,6 +118,8 @@ warning. Fixing an unrelated failure is its own item, not something to fold into
 - Measure on your own machine before and after, in the same scene, and put both figures in the pull request with
   your CPU, GPU and driver. Most numbers in the docs come from one RTX 4070.
 - Post figures, never log files: logs can quote game data.
+- Write what you measured or changed in a new file under `docs/notes/` ([how](docs/notes/README.md)), not in
+  `docs/fork-notes.md`, which is closed to new entries. One file per pull request keeps notes from conflicting.
 - The first run after a change to `leonida-shader` re-translates every shader (the cache keys on the translator's
   source), so it stutters. Don't measure that run.
 

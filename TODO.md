@@ -11,7 +11,7 @@ The goal: a console-like experience on PC. The game starts straight into play, h
 - **The pull request that finishes an item deletes that item's row.** Don't edit other rows in it.
 - **New item:** add a row at the end of its section with the next free ID. Never renumber.
 - **Needs:** `game` means your own copy of the game, `GPU` a real Direct3D 12 card, `-` nothing beyond Rust.
-- **Numbers** come from [docs/fork-notes.md](docs/fork-notes.md) unless a row says otherwise, and most were measured
+- **Numbers** come from [docs/notes/](docs/notes/) and [docs/fork-notes.md](docs/fork-notes.md) unless a row says otherwise, and most were measured
   on one RTX 4070. Measure on your machine before and after a change, and put both figures in the pull request.
   Post figures, never log files: logs can quote game data (see [docs/asset-policy.md](docs/asset-policy.md)).
 - **Focus right now: cutscenes.** They are the first thing a player sees. R-9 (they look right) and P-9 (they hold
