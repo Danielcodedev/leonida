@@ -62,7 +62,16 @@ fn run(scenario: Scenario, page: bool) {
     let at = heap(h).handle(5).unwrap();
     let mut a = [0_u32; 4];
     let mut b = [0_u32; 4];
-    let mut sampler = [21, 3, 3, 3, 0, 1, 0, 0, 0, 0, 0, 0x7f7f_ffff, 0];
+    let mut sampler = [
+        21, // Linear minification, magnification and mip filtering.
+        3, 3, 3, // Clamp each axis.
+        0, // MipLODBias.
+        1, // MaxAnisotropy.
+        1, // ComparisonFunc: NEVER, also valid for non-comparison filtering.
+        0, 0, 0, 0, // BorderColor.
+        0, // MinLOD.
+        4.0_f32.to_bits(), // MaxLOD.
+    ];
     create_sampler(std::ptr::null(), &sampler, a.as_mut_ptr() as u64);
     if matches!(scenario, Scenario::QueuedClear) {
         create_sampler(std::ptr::null(), &sampler, at);
