@@ -30,8 +30,17 @@ Validation so far: 204 native shader tests pass (two pre-existing ignored), the 
 emission tests pass, and Microsoft DXIL validation accepts six authored examples, including
 different wave loops, early returns, a guarded loop, and store/load ordering across halves.
 The emitted half-swap example contains all four original memory waits as synchronization
-with UAV and LDS fences. Device and gameplay validation are separate requirements; these
-compiler checks establish no frame-rate or rendering improvement.
+with UAV and LDS fences.
+
+On an RTX 5090, Core i9-14900KS, NVIDIA 580.173.02 and Proton 11.0, all six authored shader
+execution cases passed: reductions requiring either original wave's upper half, cross-half
+load/store ordering, original two-dimensional IDs, early returns with initialized untouched
+outputs, and a bounded loop before a later wait. All 13 authored runtime cases also passed,
+covering replay, argument snapshots and the full original workload budget. These used
+vkd3d-proton ec207 with the separately reviewed custom-heap allocator correction. Vulkan
+core/synchronization validation reported only the deliberate initialization canary; all five
+distinct emitted SPIR-V programs passed offline validation. No title dispatch, scene,
+frame-rate or rendering improvement is established by these authored tests.
 
 The original vector-store wait is `s_waitcnt_vscnt`; a vector-load wait alone does not stand
 in for it. See AMD's [RDNA 2 ISA reference](https://www.amd.com/content/dam/amd/en/documents/radeon-tech-docs/instruction-set-architectures/rdna2-shader-instruction-set-architecture.pdf)
