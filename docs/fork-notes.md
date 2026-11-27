@@ -5,6 +5,20 @@ The status summary is in [README.md](../README.md).
 
 ## Newest (2026-11-26)
 
+**R-7: an unread input takes the mode read in its register.**
+`PS_RasterizeWaterVolumeExposedSurface` and the two
+`PS_RasterizeVehicle*InterfaceDepth` read one input of a packed register per
+vertex (`attributeAtVertex`, so constant mode), beside an element they never
+read that keeps the linear mode the console's `PSV0` gives the whole
+register. The console does not mix modes; the DXIL validator refused ours
+("interpolation mode that differs from another element packed into the
+same row"). `container::share_row_modes`, called by `Shader::finish` for
+pixel inputs, gives an unread arbitrary element the mode its register's read
+elements agree on (an integer only a constant one). No register or mask
+changes, and the elements it changes are not read, so the picture cannot
+change. A unit test covers a register read one way, one read two ways (left
+alone) and an unread uint.
+
 **R-7: a level query on an array leaves the slice undefined.**
 `PS_VfxVBuffer_AlphaClip`, `PS_DeferredTextured_AlphaClip` and `PS_MirrorReflectionDeferredTextured_AlphaClip` failed the DXIL validator with "out of bound coord must be undef": `image_get_lod` on a 2D array became a `calculateLOD` that passed the slice as its third coordinate. Only the spatial coordinates are passed now, undef after them; the level does not depend on the slice, so the result is the same.
 
