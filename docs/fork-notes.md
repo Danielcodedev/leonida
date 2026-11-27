@@ -5,6 +5,27 @@ The status summary is in [README.md](../README.md).
 
 ## Newest (2026-11-26)
 
+**R-7: signature rows in the order the DXIL validator expects.**
+`container::signature` sorted the rows of one register by column. The
+validator expects them in element order, as the console's containers list
+them, for example `TEXCOORD16` in column 3 before `TANGENT0` in column 0.
+The rows are now sorted by register only, a stable sort that keeps element
+order; no register or mask changes. On `2f952dc` that mismatch made 72
+programs fail with "Container part 'Program Input/Output Signature' does not
+match" (33 pixel, 26 vertex, 13 mesh); their pipelines were never created,
+so their draws were lost.
+
+Not fixed: 70 programs pack elements of different interpolation modes into
+one register (a constant `COLOR` or `SV_IsFrontFace` beside linear
+`TEXCOORD`s), which the validator refuses. Moving an element to another
+register in one program alone is not safe: D3D12 links a stage's outputs to
+the next stage's inputs by register and mask too (the debug layer's
+`SHADER_LINKAGE_REGISTERINDEX` and `REGISTERMASK` checks), so both sides of
+a link would have to move the same way. 71 mesh programs exceed the
+32,768-byte vertex plus primitive output limit, and 3 pixel programs fail
+with "out of bound coord must be undef". A unit test covers the row order.
+No gameplay or frame-rate improvement is claimed.
+
 **`scripts/measure-run.ps1` reads frame lines under Windows PowerShell 5.1.**
 The colour codes of `stderr.log` were stripped with the `` `e `` escape,
 which only PowerShell 7 knows; under 5.1 no frame line matched and
