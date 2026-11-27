@@ -83,7 +83,34 @@ profile in `gpu-profiles.local.json`; the second report lists `ASYNC_PRESENT` an
 - So `nvidia-8gb` has helped on one of the two 8 GB cards measured, and stays opt-in.
 - The picture was the same in both runs, and the same as before the warm-up: the water drawn but
   poorly, the boat slightly distorted, heavy stuttering. So at the boat the warm-up did not fix
-  the picture. Whether it fixes the robbery's blur was not tested.
+  the picture. It didn't fix the robbery's either (next section).
+
+## A new game to the robbery, after the warm-up
+
+One more run, same tester, same build, `base` (the eight switches on), after the warm-up, started
+as a new game and played through the prison into the robbery, hand-played.
+
+| Span | Frames | fps | Median frame | Longest frame |
+|---|---|---|---|---|
+| last minute before closing | 183 in 61.8 s | 3.0 | 231 ms | 10,846 ms |
+| whole run, menus and loading included | 7,263 in 983.4 s | 7.4 | 34 ms | 10,846 ms |
+
+- It ended with a crash report and exit code -2005270523 (`0x887A0005`, the device removed), as
+  the game moved from the robbery to the escape. The tester gives the removal reason as
+  `0x887A0004` (unsupported). The RTX 5080 run that found the constant buffer view size gave
+  `0x887A0001` (invalid call), so this may be a different cause; the two RTX 3060 removals in
+  [their note](2026-11-27-rtx3060-12gb-tester-results.md) gave no reason. None of the eight
+  earlier runs on this card, without the warm-up, lost the device.
+- The robbery was still corrupted after the warm-up: the tester saw constant black-and-white
+  flashing and about 1 to 4 fps. So the warm-up fixes neither the boat's water nor the
+  robbery's picture.
+- The tester felt this run was slower than the earlier ones: about 1 to 2 fps in the opening
+  scene and 4 to 5 fps at best in the prison. Those are their readings, not report figures.
+- Their screenshot, described and not added: in the robbery, 1,426.5 ms a frame and 14,074
+  draws, about three times the 4,447 draws of the earlier robbery shot. Most of the picture is
+  white glare with soft, washed-out shapes, black cut-out patches where characters stand, and
+  bright edges with red and blue fringes on the walls. The same kind of picture as the earlier
+  robbery shot, with far more draws.
 
 Not measured: any run with all eight on in the prison, on the same day as runs 1 to 7; the
-robbery after the warm-up.
+removal reason on the constant buffer view fix.
