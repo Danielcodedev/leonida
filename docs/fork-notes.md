@@ -1171,3 +1171,38 @@ Notes for this card:
   geometry programs and 3 lane-mask cases, matching the counts above.
 - Working set while the title screens are up: about 5.3 GB, on 16 GB of RAM with a 48 GB commit limit.
 - Build: release profile, commit f0e7a9b.
+
+## Cards measured: RTX 4070 Ti SUPER 16 GB, RTX 4060 Ti 8 GB (2026-11-27)
+
+Two testers' reports, as they gave them. Nothing here quotes game data.
+
+RTX 4070 Ti SUPER 16 GB, Ryzen 9 7900X, driver 621.40, Windows, tester ondra. Build e2f881f,
+Series X, first rooms, six unattended runs of 330 s, frames counted from 170 s; median ms/frame,
+`base` against `base` and the switch; 2,032 to 2,698 draws a frame; no device lost and no crash
+report in the six runs.
+
+| On top of `base` | Pair 1 (ms) | Pair 2 (ms) |
+|---|---|---|
+| `LEONIDA_TEXTURE_KEEP=1` | 223.0 -> 227.0 | 260.8 -> 268.0 |
+| `LEONIDA_COPY_CHANGED=1` | 223.0 -> 353.2 | 260.8 -> 448.6 |
+
+- Texture keep gave nothing on this card: 4 and 7 ms longer, while the baseline itself moved 38
+  ms between the pairs. A 16 GB card is not near its budget in the first rooms, which is where
+  the rule lets go less (a guess); it shortened frames only on the RTX 3080 12 GB so far. It
+  stays opt-in.
+- Copy changed made frames 60 to 70 % longer. It stays off.
+- The baseline here (223 to 261 ms) is slower than the RTX 3080's (about 140 ms) with fewer draws;
+  the report has no card or preparing times to say why.
+
+RTX 4060 Ti 8 GB, Core i5-14400F, driver 621.40, tester amineourabi0. First gameplay area after
+the opening cutscenes, one run with the run script's speed switches and one without:
+
+| Speed switches | Last minute | Whole run |
+|---|---|---|
+| on | 2.7 fps | 6.6 fps |
+| off | 4.6 fps | 8.3 fps |
+
+- On this card the switches made the game slower, about 370 against 220 ms a frame in the last
+  minute. One run each, so this needs a second pair, and the switches one at a time, before
+  `base` changes for 8 GB cards. If it holds, the switch that costs goes into a profile that
+  leaves it out for such cards, not out of `base` for every card.
