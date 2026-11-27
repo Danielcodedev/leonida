@@ -1591,6 +1591,7 @@ fn present_now(this: This, planes: u32, plane_parameters: *const Plane) -> HRESU
         crate::capture::frame_drew(frame, crate::draw::drawn());
         crate::renderdoc::frame_drew(frame, crate::draw::drawn());
         crate::shot::present(frame, crate::draw::drawn());
+        crate::skip::present(frame, crate::draw::drawn());
         if crate::capture::listed(frame) {
             crate::capture::dump_targets(frame);
         }
