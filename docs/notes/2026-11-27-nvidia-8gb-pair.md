@@ -18,7 +18,8 @@ Each setting alone, for reference:
 | 1,024 | 15,064 (10,381 MB) | 1,007 ms |
 
 Asynchronous present took the room from 175/183 ms to 127/139 ms in two pairs of runs, with the copy-back thread's
-wait falling from 82.5 to 54.5 ms. Three further switches on the copy path were tried and refused:
+wait falling from 82.5 to 54.5 ms. Both pairs already ran with `LEONIDA_TEXTURE_STAGE_MB=512`; the 512 MB staging
+sweep above is a separate measurement of staging alone, 312 -> 288 ms. Three further switches on the copy path were tried and refused:
 `LEONIDA_COPY_CHANGED=1` (130 ms, no change), `LEONIDA_TEXTURE_CATCHUP=1` (133 ms, no change) and
 `LEONIDA_HEAP_SYNC_TABLES=1` (151 ms, worse); `RELAY=0` reproduced upstream's doubling (645 ms against 489 ms).
 
