@@ -6,7 +6,7 @@ use crate::native::{
 };
 use crate::{Container, ShaderError, io, ir, resource, structure};
 
-fn looping_mask() -> NativeProgram {
+pub(super) fn looping_mask() -> NativeProgram {
     // Root constants s0/s1 bound the active thread IDs and iteration count. The two original
     // Wave64s may run different loop regions. Each stores its exact count's SCC result.
     let words: [u32; 22] = [
@@ -19,7 +19,7 @@ fn looping_mask() -> NativeProgram {
         0xBE8C_246A, // s_and_saveexec_b64 s[12:13], vcc
         0xBF88_0008, // s_cbranch_execz restore
         0x7D84_0102, // loop: v_cmp_eq_u32 vcc, v2, v0
-        0x870E_7E6A, // s_and_b64 s[14:15], vcc, exec
+        0x878E_7E6A, // s_and_b64 s[14:15], vcc, exec
         0xBE86_100E, // s_bcnt1_i32_b64 s6, s[14:15]
         0x8507_8081, // s_cselect_b32 s7, 1, 0
         0x4A04_0481, // v_add_nc_u32 v2, 1, v2
@@ -111,8 +111,10 @@ fn emit(native: &NativeProgram, enabled: bool) -> Result<HostShader, ShaderError
     let c = Container::parse(&bytes)?;
     let old = lower::TEST_HOST_WAVE.replace(Some(32));
     let previous = independent::TEST_ENABLED.replace(Some(enabled));
+    let strict = super::TEST_STRICT_LOCAL.replace(Some(true));
     let result = super::emit(&c, native, &p, &st, &io, &res);
     independent::TEST_ENABLED.set(previous);
+    super::TEST_STRICT_LOCAL.set(strict);
     lower::TEST_HOST_WAVE.set(old);
     result
 }
@@ -158,6 +160,28 @@ fn check(shader: &HostShader, original: [u32; 3]) {
 }
 
 #[test]
+fn authored_reduction_defines_both_words_of_its_wave64_mask() {
+    let native = looping_mask();
+    let decoded = crate::gfx10::decode(&native.code).unwrap();
+    let mask = decoded.iter().find(|inst| inst.offset == 0x24).unwrap();
+    assert_eq!(mask.text(true), "s_and_b64 s[14:15], vcc, exec");
+    let p = ir::build(&native.code, true, native.vgprs).unwrap();
+    let instructions: Vec<_> = p.blocks.iter().flat_map(|block| &block.insts).collect();
+    let producer = instructions
+        .iter()
+        .find(|inst| inst.machine.offset == 0x24)
+        .unwrap();
+    let count = instructions
+        .iter()
+        .find(|inst| inst.machine.offset == 0x28)
+        .unwrap();
+    for reg in [ir::Reg::S(14), ir::Reg::S(15)] {
+        let value = producer.write(reg).expect("both ballot words are defined");
+        assert_eq!(count.read(reg), Some(value));
+    }
+}
+
+#[test]
 fn independent_wave64s_can_reduce_inside_different_loop_regions() {
     let shader = emit(&looping_mask(), true).unwrap();
     check(&shader, [128, 1, 1]);
@@ -191,13 +215,29 @@ fn memory_waits_survive_public_emission_in_the_independent_mode() {
 
 fn early_return() -> NativeProgram {
     let mut native = looping_mask();
+    // Every lane first writes a sentinel. A wave returning below must leave it intact;
+    // DEFAULT-heap UAV contents are otherwise undefined before the first shader store.
+    let initialize: [u32; 8] = [
+        0xBE85_0380, // s_mov_b32 s5, 0
+        0xF408_0202,
+        0xFA00_0000, // s_load_dwordx4 s[8:11], s[4:5], 0
+        0x7E02_0293, // v_mov_b32 v1, 19
+        0x3406_0082, // v_lshlrev_b32 v3, 2, v0
+        0xE070_1000,
+        0x8002_0103, // buffer_store_dword v1, v3, s[8:11], 0 offen
+        0xBBFD_0000, // s_waitcnt_vscnt null, 0
+    ];
     let prefix: [u32; 4] = [
         0x7D88_0002, // v_cmp_gt_u32 vcc, s2, v0
         0xBE92_246A, // s_and_saveexec_b64 s[18:19], vcc
         0xBF88_0016, // s_cbranch_execz final s_endpgm
         0xBEFE_0412, // s_mov_b64 exec, s[18:19]
     ];
-    let mut code: Vec<u8> = prefix.into_iter().flat_map(u32::to_le_bytes).collect();
+    let mut code: Vec<u8> = initialize
+        .into_iter()
+        .chain(prefix)
+        .flat_map(u32::to_le_bytes)
+        .collect();
     code.append(&mut native.code);
     native.code = code;
     native
@@ -405,7 +445,7 @@ fn guarded_loop() -> NativeProgram {
     let tail: [u32; 7] = [
         0x7D88_0002, // v_cmp_gt_u32 vcc, s2, v0
         0xBE92_246A, // s_and_saveexec_b64 s[18:19], vcc
-        0xBF88_0001, // s_cbranch_execz restore
+        0xBF84_0001, // s_cbranch_scc0 restore (SCC from saveexec's new EXEC)
         0xBF82_FFFF, // self-loop, stopped by the existing iteration guard
         0xBEFE_0412, // restore: s_mov_b64 exec, s[18:19]
         0xBF8C_0000, // s_waitcnt
@@ -421,6 +461,28 @@ fn guarded_loop() -> NativeProgram {
 #[test]
 fn an_inactive_half_cannot_leave_before_a_later_wait_at_the_loop_limit() {
     check(&emit(&guarded_loop(), true).unwrap(), [128, 1, 1]);
+}
+
+#[test]
+fn authored_execution_cases_need_the_independent_contract_under_strict_policy() {
+    for native in [
+        looping_mask(),
+        half_swap(),
+        multidimensional(),
+        early_return(),
+        guarded_loop(),
+    ] {
+        match emit(&native, false) {
+            Err(ShaderError::Unsupported { .. }) => {}
+            Ok(shader) => {
+                let container = Container::parse(&shader.dxil).unwrap();
+                let psv = container.part(crate::dxbc::FourCC::PSV0).unwrap().data;
+                assert_eq!(u32::from_le_bytes(psv[20..24].try_into().unwrap()), 64);
+            }
+            Err(error) => panic!("unexpected fixture error: {error}"),
+        }
+        assert!(emit(&native, true).unwrap().independent_waves.is_some());
+    }
 }
 
 /// This is deliberately separate from the CPU/SDK tests. It opens no device unless the
@@ -466,7 +528,7 @@ fn independent_wave64_authored_execution_on_hardware() {
             "early return in only one original wave",
             early_return(),
             [128, 64, 32, 0],
-            first.clone(),
+            (0..128).map(|t| if t < 64 { 1 } else { 19 }).collect(),
         ),
         (
             "bounded loop before later wait",

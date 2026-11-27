@@ -93,6 +93,8 @@ mod lower;
 mod independent;
 #[cfg(test)]
 mod independent_tests;
+#[cfg(test)]
+mod independent_fallback_tests;
 mod own_bits;
 mod rect;
 mod sampler;
@@ -347,7 +349,16 @@ fn translate_plain(container: &[u8]) -> Result<HostShader, ShaderError> {
     emit(&c, &native, &p, &st, &io, &res)
 }
 
-/// Emits a program whose earlier stages already ran.
+#[cfg(test)]
+thread_local! {
+    // Equivalent to the existing LEONIDA_WAVE_LOCAL=idiom policy, without changing the
+    // process environment while other public-emission tests exercise legacy defaults.
+    pub(super) static TEST_STRICT_LOCAL: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+}
+
+/// Emits a program whose earlier stages already ran. A usable legacy result always wins:
+/// the independent replay contract supports fewer native command forms than an ordinary
+/// pipeline, so it must not replace a shader whose complete legacy retry chain succeeds.
 pub fn emit(
     c: &Container,
     native: &NativeProgram,
@@ -356,6 +367,34 @@ pub fn emit(
     io: &io::Io,
     res: &resource::Resources,
 ) -> Result<HostShader, ShaderError> {
+    let legacy = emit_legacy(c, native, p, st, io, res);
+    let unavailable = matches!(&legacy, Ok((_, Some(64))) | Err(ShaderError::Unsupported { .. }));
+    if unavailable && let Some(plan) = independent::admit(native, p, res) {
+        let why = std::env::var_os("LEONIDA_WAVE_WHY").is_some();
+        let again = independent::program(native)
+            .and_then(|p| widen_with_plan(c, native, &p, why, Some(plan)));
+        if why {
+            match &again {
+                Ok((_, wave)) => eprintln!("WAVE64-RETRY independent groups: wave {wave:?}"),
+                Err(e) => eprintln!("WAVE64-RETRY independent groups: {e}"),
+            }
+        }
+        if matches!(&again, Ok((_, Some(32)))) {
+            return again.map(|(shader, _)| shader);
+        }
+    }
+    legacy.map(|(shader, _)| shader)
+}
+
+/// Emits a program whose earlier stages already ran.
+fn emit_legacy(
+    c: &Container,
+    native: &NativeProgram,
+    p: &ir::Program,
+    st: &structure::Structured,
+    io: &io::Io,
+    res: &resource::Resources,
+) -> Result<(HostShader, Option<u32>), ShaderError> {
     // (what an earlier program's lowering on this thread left behind)
     lower::take_needs();
     let original = emit_program(c, native, p, st, io, res);
@@ -372,20 +411,6 @@ pub fn emit(
     // (a mask with lanes elsewhere is only helped by the exact forms: not by each half-wave
     // on its own)
     let exact_only = matches!(&original, Err(ShaderError::Unsupported { what, .. }) if *what == lower::MASK_ELSEWHERE);
-    if stuck && let Some(plan) = independent::admit(native, p, res) {
-        let with_waits = independent::program(native)?;
-        let why = std::env::var_os("LEONIDA_WAVE_WHY").is_some();
-        let again = widen_with_plan(c, native, &with_waits, why, Some(plan));
-        if why {
-            match &again {
-                Ok((_, wave)) => eprintln!("WAVE64-RETRY independent groups: wave {wave:?}"),
-                Err(e) => eprintln!("WAVE64-RETRY independent groups: {e}"),
-            }
-        }
-        if matches!(&again, Ok((_, Some(32)))) {
-            return again.map(|(shader, _)| shader);
-        }
-    }
     if stuck && native.stage == HwStage::Cs && native.wave64 && lower::host_max_wave() == 32 {
         let why = std::env::var_os("LEONIDA_WAVE_WHY").is_some();
         let report = |what: &str, r: &Result<(HostShader, Option<u32>), ShaderError>| {
@@ -406,6 +431,8 @@ pub fn emit(
         // (approximate: a tile-wide result becomes two half-tile ones);
         // `LEONIDA_WAVE_LOCAL=idiom` refuses those instead.
         let strict = std::env::var_os("LEONIDA_WAVE_LOCAL").is_some_and(|v| v == "idiom");
+        #[cfg(test)]
+        let strict = TEST_STRICT_LOCAL.get().unwrap_or(strict);
         let idiom = |p: &ir::Program, st: &structure::Structured| match lower::wave_local(p, st) {
             Ok(()) => true,
             Err((offset, what)) => {
@@ -434,7 +461,7 @@ pub fn emit(
                 let again = emit_program(c, native, p, st, io, res);
                 report(name, &again);
                 if done(&again) {
-                    return again.map(|(shader, _)| shader);
+                    return again;
                 }
             }
         }
@@ -459,7 +486,7 @@ pub fn emit(
                     let again = emit_program(c, native, p, st, io, res);
                     report("without skips, scalars followed", &again);
                     if done(&again) {
-                        return again.map(|(shader, _)| shader);
+                        return again;
                     }
                 }
                 // Still stopped where not every lane runs: the per-lane branches around
@@ -476,7 +503,7 @@ pub fn emit(
                         let again = widen(c, native, base, why);
                         report("wave-wide branches", &again);
                         if done(&again) {
-                            return again.map(|(shader, _)| shader);
+                            return again;
                         }
                     }
                 }
@@ -494,7 +521,7 @@ pub fn emit(
                     let local = lower::with_local_waves(|| emit_program(c, native, p, st, io, res));
                     report(&format!("local waves ({}), {name}", if exact { "idiom" } else { "APPROXIMATE" }), &local);
                     if done(&local) {
-                        return local.map(|(shader, _)| shader);
+                        return local;
                     }
                 }
             }
@@ -502,7 +529,7 @@ pub fn emit(
                 let local = lower::with_local_waves(|| emit_program(c, native, p, st, io, res));
                 report(if exact { "local waves (idiom)" } else { "local waves (APPROXIMATE)" }, &local);
                 if done(&local) {
-                    return local.map(|(shader, _)| shader);
+                    return local;
                 }
             }
         }
@@ -514,14 +541,14 @@ pub fn emit(
                         let local = lower::with_local_waves_any(|| emit_program(c, native, p, st, io, res));
                         report(&format!("local waves (APPROXIMATE, any mask), {name}"), &local);
                         if done(&local) {
-                            return local.map(|(shader, _)| shader);
+                            return local;
                         }
                     }
                 }
                 let local = lower::with_local_waves_any(|| emit_program(c, native, p, st, io, res));
                 report("local waves (APPROXIMATE, any mask)", &local);
                 if done(&local) {
-                    return local.map(|(shader, _)| shader);
+                    return local;
                 }
             }
         }
@@ -543,7 +570,6 @@ pub fn emit(
         }
         other => other,
     };
-    let original = original.map(|(shader, _)| shader);
     // Retry unsupported programs only. Threading can separate an unknown
     // register value from its apparent use on a mutually exclusive path.
     if !matches!(original, Err(ShaderError::Unsupported { .. })) {
@@ -557,7 +583,7 @@ pub fn emit(
     let st = structure::structure(&p)?;
     let io = io::raise(&p, native)?;
     let res = resource::track(&p, &native.layout, native.stage, Some(&st))?;
-    emit_program(c, native, &p, &st, &io, &res).map(|(shader, _)| shader)
+    emit_program(c, native, &p, &st, &io, &res)
 }
 
 /// `p` (a console wave64 compute program on a host of 32-lane waves) with the per-lane
