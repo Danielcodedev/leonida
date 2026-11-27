@@ -70,6 +70,16 @@
       "match": {},
       "measured": "RTX 3080 12 GB, Ryzen 7 7800X3D, driver 621.24, first rooms, two pairs of unattended runs, 2026-11-26: usual frame 156.5 -> 142 and 145 -> 130.5 ms; host copies of textures made again 14,986 -> 8,545 and 17,149 -> 5,674; but passes that made none for lack of room 96 -> 319 and 12 -> 390. RTX 4070 Ti SUPER 16 GB, Ryzen 9 7900X, driver 621.40, e2f881f, first rooms, two pairs (tester ondra), 2026-11-27: median frame 223.0 -> 227.0 and 260.8 -> 268.0 ms, no gain. Opt-in: it has helped only on the 12 GB card so far.",
       "env": { "LEONIDA_TEXTURE_KEEP": "1" }
+    },
+    {
+      "name": "wc-no-back",
+      "opt_in": true,
+      "match": {},
+      "measured": "RTX 3080 12 GB, driver 621.24: lost the device in its one run (2026-11-27), not safe there yet. Ported from readmet3xt-lab/foxhound 50c15a1 and 2f81d0c, whose figures are from a 4070 SUPER with DLSS Quality: gameplay 38.3 -> 33.3 ms, cutscene median 47.3 -> 36.3 ms with a 1 MB floor; 35.3 ms with a 16 MB floor (which scene is not stated). See docs/notes/2026-11-27-wc-no-back.md.",
+      "env": {
+        "LEONIDA_WC_NO_BACK": "1",
+        "LEONIDA_WC_NO_BACK_MIN_KB": "16384"
+      }
     }
   ]
 }

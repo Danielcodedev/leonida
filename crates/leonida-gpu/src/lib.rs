@@ -86,6 +86,8 @@ mod texture;
 mod watch;
 #[cfg(windows)]
 mod texback;
+#[cfg(windows)]
+mod wcback;
 
 #[cfg(windows)]
 pub use host::on_failure;
@@ -106,3 +108,5 @@ pub use watch::{
     Remapping, title_memory_reading, title_memory_remapped, title_memory_remapping,
     title_memory_written, writing as kernel_will_write,
 };
+#[cfg(windows)]
+pub use wcback::title_memory_write_combined;
