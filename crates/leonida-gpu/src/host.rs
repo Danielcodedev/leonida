@@ -5,6 +5,8 @@
 //! (unless `LEONIDA_LATE_WAIT=1`, see [`late`]);
 //! overlap them with per-submission fences once more than clears run.
 
+use crate::readback::{Access as ReadBackAccess, ReadBacks, Segments, join_ranges, touches};
+
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Mutex, OnceLock};
 
@@ -2003,13 +2005,66 @@ enum Step {
     Refresh(std::sync::Arc<crate::shadow::Shadow>, usize, usize),
     /// Work that may write title memory.
     Run(Box<dyn Fn() + Send>),
-    /// Work that writes host memory only.
+    /// Work that neither reads nor writes title memory.
     Host(Box<dyn Fn() + Send>),
+    /// Work that reads a declared title range and writes host memory only.
+    HostRead(usize, usize, Box<dyn Fn() + Send>),
     /// Shaders write a range (address, bytes) of a buffer's host copy.
     GpuWrite(std::sync::Arc<crate::shadow::Shadow>, usize, usize),
     /// Brings a texture's staging buffer up to date: once per submission,
     /// whichever lists sample it, until a `Copy` or `Run` intervenes.
     Texture(std::sync::Arc<crate::texture::Staging>),
+}
+
+impl Step {
+    fn readback_access(&self) -> ReadBackAccess {
+        match self {
+            &Self::Copy(dst, src, len) => ReadBackAccess::Copy { dst, src, len },
+            &Self::Fill(_, at, len)
+            | &Self::Refresh(_, at, len)
+            | &Self::GpuWrite(_, at, len)
+            | &Self::HostRead(at, len, _) => ReadBackAccess::Range(at, len),
+            Self::Texture(staging) => {
+                let (at, len) = staging.memory();
+                ReadBackAccess::Range(at, len)
+            }
+            Self::Run(_) => ReadBackAccess::Unknown,
+            Self::Host(_) => ReadBackAccess::HostOnly,
+        }
+    }
+}
+
+#[cfg(test)]
+mod host_read_tests {
+    use super::{ReadBacks, Step};
+
+    #[test]
+    fn declared_host_reads_wait_only_for_overlapping_writes() {
+        let mut readbacks = ReadBacks::default();
+        assert!(readbacks.rows(0x1000, [16, 1, 256]));
+        for (at, len, blocked) in [
+            (0x1004, 4, true),
+            (0x0ffc, 8, true),
+            (0x0ffc, 4, false),
+            (0x1010, 16, false),
+            (0x1004, 0, false),
+            (usize::MAX - 3, 8, true),
+        ] {
+            let step = Step::HostRead(at, len, Box::new(|| panic!("classification only")));
+            let access = step.readback_access();
+            // Both production checks use this declared range: definite
+            // readbacks first, then ordinary shader-write dependencies.
+            assert_eq!(readbacks.blocks(access), blocked, "readback {at:#x}+{len}");
+            assert_eq!(
+                access.blocked_by(&[(0x1000, 0x1010)]),
+                blocked,
+                "shader write {at:#x}+{len}"
+            );
+            assert!(!access.blocked_by(&[]));
+        }
+        let host_only = Step::Host(Box::new(|| panic!("classification only")));
+        assert!(!readbacks.blocks(host_only.readback_access()));
+    }
 }
 
 /// What a list does on the CPU when it is submitted: copies between host
@@ -2524,10 +2579,12 @@ type Declared = (std::sync::Arc<crate::shadow::Shadow>, Vec<(usize, usize)>);
 struct Sent {
     /// Its number among the submissions started.
     number: u64,
+    /// First ordered occurrence still in flight; dependency prefixes landed.
+    first_run: usize,
     card: Option<CardPlan>,
     back: Vec<Declared>,
-    /// Title-memory ranges written when its shader textures are copied back.
-    texture_back_ranges: Vec<(usize, usize)>,
+    /// Destinations of texture readbacks, copied before completion is signalled.
+    read_backs: ReadBacks,
     /// Its bottom-of-pipe writes.
     writes: Vec<(usize, crate::queue::Written, usize)>,
 }
@@ -2539,11 +2596,25 @@ struct Flight {
     number: u64,
     /// The value signalled on the host's fence behind it.
     fence: u64,
+    /// All original objects stay alive: a list can occur in prefix and tail.
     lists: Vec<crate::list::Detached>,
+    /// Only the tail still in flight: prefix readbacks must not land twice.
     order: Vec<usize>,
+    /// When split, all original occurrences whose owned lists remain held.
+    recycle_order: Option<Vec<usize>>,
     card: Option<CardPlan>,
     back: Vec<Declared>,
-    texture_back_ranges: Vec<(usize, usize)>,
+    read_backs: ReadBacks,
+}
+
+impl Flight {
+    fn retained_len(&self) -> usize {
+        self.recycle_order
+            .as_ref()
+            .unwrap_or(&self.order)
+            .len()
+            .max(1)
+    }
 }
 
 /// One thing in the line of what waits for the card, in order.
@@ -2560,6 +2631,8 @@ struct Line {
     /// The title memory the flights' shaders and texture readbacks may write
     /// (address, end), in order and joined.
     written: Vec<(usize, usize)>,
+    /// Definite readback destinations: never speculated past while preparing.
+    read_backs: ReadBacks,
     /// Host lists in the flights.
     lists: usize,
     /// The value signalled on the host's fence behind the last flight.
@@ -2586,6 +2659,7 @@ unsafe impl Send for Line {}
 static LINE: Mutex<Line> = Mutex::new(Line {
     line: Vec::new(),
     written: Vec::new(),
+    read_backs: ReadBacks::new(),
     lists: 0,
     target: 0,
     settling: false,
@@ -2623,29 +2697,6 @@ static LATE_STATS: [std::sync::atomic::AtomicU64; 18] = [const { std::sync::atom
 /// card, by why they settled (the `WHY_` places).
 static LATE_WAITED: [std::sync::atomic::AtomicU64; 11] = [const { std::sync::atomic::AtomicU64::new(0) }; 11];
 
-/// Whether `[from, to)` touches one of `ranges` (in order, joined).
-fn touches(ranges: &[(usize, usize)], from: usize, to: usize) -> bool {
-    if from >= to {
-        return false;
-    }
-    let at = ranges.partition_point(|r| r.1 <= from);
-    ranges.get(at).is_some_and(|r| r.0 < to)
-}
-
-/// `ranges` with `more`, in order, joined where they overlap or touch.
-fn join_ranges(ranges: &mut Vec<(usize, usize)>, more: impl IntoIterator<Item = (usize, usize)>) {
-    ranges.extend(more.into_iter().filter(|r| r.0 < r.1));
-    ranges.sort_unstable();
-    let mut out: Vec<(usize, usize)> = Vec::with_capacity(ranges.len());
-    for &(from, to) in ranges.iter() {
-        match out.last_mut() {
-            Some(last) if from <= last.1 => last.1 = last.1.max(to),
-            _ => out.push((from, to)),
-        }
-    }
-    *ranges = out;
-}
-
 /// Whether anything is in the air.
 fn flying() -> bool {
     if !late() {
@@ -2662,25 +2713,41 @@ fn flying() -> bool {
 /// runs steps of ours that may read or write it anywhere; what the
 /// flights' shaders write is not there yet.
 fn late_blocked(runs: &[&HostList]) -> Option<usize> {
-    let written = {
+    let (written, read_backs) = {
         let line = line();
         if line.written.is_empty() {
             return None;
         }
-        line.written.clone()
+        (line.written.clone(), line.read_backs.clone())
     };
-    blocked_by(&written, runs, true)
+    blocked_by(&written, &read_backs, runs, true)
 }
 
 /// [`late_blocked`] against `written`, the title memory flights' shaders
 /// may write (in order, joined); `count` whether the kind of read is
 /// counted for the frame line.
-fn blocked_by(written: &[(usize, usize)], runs: &[&HostList], count: bool) -> Option<usize> {
+fn blocked_by(
+    written: &[(usize, usize)],
+    read_backs: &ReadBacks,
+    runs: &[&HostList],
+    count: bool,
+) -> Option<usize> {
     if written.is_empty() {
         return None;
     }
     for list in runs {
         for step in &list.deferred().copies {
+            // These are definite CPU-side writes still to land, unlike a
+            // shader's broad writable view. In particular, fill_ahead must
+            // not let a copy or upload consume the old readback contents.
+            let access = step.readback_access();
+            if readback_order() && read_backs.blocks(access) {
+                return Some(if matches!(step, Step::Run(_)) {
+                    WHY_RUN
+                } else {
+                    WHY_READ
+                });
+            }
             match step {
                 &Step::Copy(dst, src, len) => {
                     if touches(written, src, src + len) || touches(written, dst, dst + len) {
@@ -2729,6 +2796,13 @@ fn blocked_by(written: &[(usize, usize)], runs: &[&HostList], count: bool) -> Op
                         if count {
                             LATE_STATS[17].fetch_add(1, Ordering::Relaxed);
                         }
+                        return Some(WHY_READ);
+                    }
+                }
+                Step::HostRead(..) => {
+                    // Arbitrary read-only host work has no speculative
+                    // fill check; wait for the exact range it consumes.
+                    if readback_order() && access.blocked_by(written) {
                         return Some(WHY_READ);
                     }
                 }
@@ -3711,6 +3785,56 @@ fn declared_writes(runs: &[&HostList]) -> Vec<Declared> {
 pub(crate) fn walls_trace() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
     *ON.get_or_init(|| std::env::var_os("LEONIDA_WALLS_TRACE").is_some_and(|v| v == "1" || v == "2"))
+}
+
+/// Order definite readback writes and annotated host reads before preparing
+/// dependent submissions (`LEONIDA_READBACK_ORDER=1`; off by default).
+/// Synthetic correctness is measured; gameplay frame-time cost is not yet.
+/// With it off, keep the old texture-back ranges and speculative waits.
+pub(crate) fn readback_order() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LEONIDA_READBACK_ORDER").is_some_and(|v| v == "1"))
+}
+
+/// Readbacks of these lists whose destinations must remain pending until
+/// CPU copy-back finishes. Ordinary texture-to-buffer rows are opt-in.
+fn pending_read_backs(runs: &[&HostList]) -> ReadBacks {
+    let mut pending = ReadBacks::default();
+    for list in runs {
+        add_read_backs(&list.deferred(), &mut pending);
+    }
+    pending
+}
+
+fn add_read_backs(deferred: &Deferred, pending: &mut ReadBacks) {
+    pending.extend(
+        deferred
+            .texture_backs
+            .iter()
+            .map(crate::texback::Back::range),
+    );
+    if !readback_order() {
+        return;
+    }
+    for (_, at, layout) in &deferred.backs {
+        if !pending.rows(*at, *layout) {
+            fail(format_args!("texture readback destination range overflow"));
+        }
+    }
+}
+
+/// With readback ordering enabled, plan after queue joining, before any
+/// CPU preparation. One lock at a time handles repeated list occurrences.
+/// The disabled path does not inspect deferred steps or split the batch.
+fn readback_segments(runs: &[&HostList]) -> Vec<usize> {
+    Segments::plan(readback_order(), runs.len(), |segments| {
+        for list in runs {
+            let deferred = list.deferred();
+            segments.push(deferred.copies.iter().map(Step::readback_access), |pending| {
+                add_read_backs(&deferred, pending);
+            });
+        }
+    })
 }
 
 /// After `list` has run: the texels its read-backs copied into host
@@ -5012,7 +5136,7 @@ impl Host {
                     if let Some(card) = flight.card {
                         self.card_done(card);
                     }
-                    landed.push((flight.lists, flight.order));
+                    landed.push((flight.lists, flight.recycle_order.unwrap_or(flight.order)));
                 }
                 Late::Write(at, what, bytes) => what.write(at as *mut u8, bytes),
                 Late::Signal(fence, value) => crate::fence::set(fence as crate::object::This, value),
@@ -5030,6 +5154,7 @@ impl Host {
             let Line {
                 line: items,
                 written,
+                read_backs,
                 lists,
                 settling,
                 poke,
@@ -5041,16 +5166,20 @@ impl Host {
             in_hand.clear();
             // What is still in the air, from the flights that are.
             written.clear();
+            read_backs.clear();
             *lists = 0;
             let mut ranges = Vec::new();
             for item in items.iter() {
                 if let Late::Run(flight) = item {
-                    *lists += flight.order.len().max(1);
+                    *lists += flight.retained_len();
                     ranges.extend(flight.back.iter().flat_map(|(_, r)| r.iter().copied()));
-                    ranges.extend(flight.texture_back_ranges.iter().copied());
+                    read_backs.extend(flight.read_backs.ranges().iter().copied());
                 }
             }
-            join_ranges(written, ranges);
+            join_ranges(
+                written,
+                ranges.into_iter().chain(read_backs.ranges().iter().copied()),
+            );
             *settling = false;
             // The landed lists are reset, and what queues hold looked at,
             // by the helper thread (they take locks a waiter may hold).
@@ -5228,7 +5357,7 @@ impl Host {
     /// the air, at the next point where what they do can be observed
     /// ([`late`] lists those points); their host lists are reset and kept
     /// for reuse then, as a queue does for the lists it ran.
-    pub(crate) fn execute_late(&self, lists: Vec<crate::list::Detached>, order: Vec<usize>) {
+    pub(crate) fn execute_late(&self, lists: Vec<crate::list::Detached>, mut order: Vec<usize>) {
         if order.is_empty() {
             crate::list::recycle(lists, &order);
             return;
@@ -5244,26 +5373,35 @@ impl Host {
             return;
         };
         let told = !sent.writes.is_empty();
+        let retained = order.len();
+        let recycle_order = if sent.first_run == 0 {
+            None
+        } else {
+            let tail = order[sent.first_run..].to_vec();
+            Some(std::mem::replace(&mut order, tail))
+        };
         let most = {
             let mut line = line();
-            let Line { line: items, written, lists: flying, target, .. } = &mut *line;
+            let Line { line: items, written, read_backs, lists: flying, target, .. } = &mut *line;
             join_ranges(
                 written,
                 sent.back
                     .iter()
                     .flat_map(|(_, ranges)| ranges.iter().copied())
-                    .chain(sent.texture_back_ranges.iter().copied()),
+                    .chain(sent.read_backs.ranges().iter().copied()),
             );
-            *flying += order.len();
+            read_backs.extend(sent.read_backs.ranges().iter().copied());
+            *flying += retained;
             *target = *submitted;
             items.push(Late::Run(Flight {
                 number: sent.number,
                 fence: *target,
                 lists,
                 order,
+                recycle_order,
                 card: sent.card,
                 back: sent.back,
-                texture_back_ranges: sent.texture_back_ranges,
+                read_backs: sent.read_backs,
             }));
             items.extend(sent.writes.into_iter().map(|(at, what, bytes)| Late::Write(at, what, bytes)));
             *flying >= late_most()
@@ -5294,17 +5432,19 @@ impl Host {
         let Some((submitted, sent)) = self.submit(&[list], true) else {
             return 0;
         };
+        debug_assert_eq!(sent.first_run, 0);
         let number = sent.number;
         {
             let mut line = line();
-            let Line { line: items, written, lists: flying, target, .. } = &mut *line;
+            let Line { line: items, written, read_backs, lists: flying, target, .. } = &mut *line;
             join_ranges(
                 written,
                 sent.back
                     .iter()
                     .flat_map(|(_, ranges)| ranges.iter().copied())
-                    .chain(sent.texture_back_ranges.iter().copied()),
+                    .chain(sent.read_backs.ranges().iter().copied()),
             );
+            read_backs.extend(sent.read_backs.ranges().iter().copied());
             *flying += 1;
             *target = *submitted;
             items.push(Late::Run(Flight {
@@ -5312,9 +5452,10 @@ impl Host {
                 fence: *target,
                 lists: Vec::new(),
                 order: Vec::new(),
+                recycle_order: None,
                 card: sent.card,
                 back: sent.back,
-                texture_back_ranges: sent.texture_back_ranges,
+                read_backs: sent.read_backs,
             }));
             items.extend(sent.writes.into_iter().map(|(at, what, bytes)| Late::Write(at, what, bytes)));
         }
@@ -5362,6 +5503,7 @@ impl Host {
                 }
                 line.settling = true;
                 line.written.clear();
+                line.read_backs.clear();
                 line.lists = 0;
                 std::mem::take(&mut line.line)
             };
@@ -5453,7 +5595,7 @@ impl Host {
                         if let Some(card) = flight.card {
                             self.card_done(card);
                         }
-                        landed.push((flight.lists, flight.order));
+                        landed.push((flight.lists, flight.recycle_order.unwrap_or(flight.order)));
                     }
                     Late::Write(at, what, bytes) => what.write(at as *mut u8, bytes),
                     Late::Signal(fence, value) => crate::fence::set(fence as crate::object::This, value),
@@ -5482,30 +5624,70 @@ impl Host {
     /// [`Host::execute_late`]: the lists are prepared and sent, and what is
     /// to be done once they have run comes back with the submission lock
     /// still held.
-    fn submit<'a>(&'a self, runs: &[&HostList], late: bool) -> Option<(std::sync::MutexGuard<'a, u64>, Sent)> {
+    fn submit<'a>(
+        &'a self,
+        runs: &[&HostList],
+        late: bool,
+    ) -> Option<(std::sync::MutexGuard<'a, u64>, Sent)> {
         #[cfg(feature = "diagnostics")]
-        let called = std::time::Instant::now();
+        let mut called = std::time::Instant::now();
+        // Hold this across all segments: another submitter must not prepare
+        // snapshots or overwrite shared card results between a producer
+        // landing and its dependent CPU preparation.
+        let mut submitted = self.submitted.lock().unwrap_or_else(|e| e.into_inner());
+        let mut first = 0;
+        for end in readback_segments(runs) {
+            let tail = end == runs.len();
+            let sent = self.submit_segment(
+                &runs[first..end],
+                late && tail,
+                &mut submitted,
+                #[cfg(feature = "diagnostics")]
+                called,
+            );
+            if let Some(mut sent) = sent {
+                sent.first_run = first;
+                return Some((submitted, sent));
+            }
+            first = end;
+            #[cfg(feature = "diagnostics")]
+            {
+                called = std::time::Instant::now();
+            }
+        }
+        None
+    }
+
+    /// Prepare and run one dependency-free segment. Every prefix uses the
+    /// complete synchronous landing path before a fresh Batch/CardPlan is
+    /// made for its consumer; only the final segment may stay in flight.
+    fn submit_segment(
+        &self,
+        runs: &[&HostList],
+        late: bool,
+        submitted: &mut u64,
+        #[cfg(feature = "diagnostics")] called: std::time::Instant,
+    ) -> Option<Sent> {
         #[cfg(feature = "diagnostics")]
         crate::copystat::submission_begins();
         #[cfg(feature = "diagnostics")]
         crate::profile::seen(crate::profile::Seen::Submit);
-        // One submission at a time from preparation to copy-back: snapshots
-        // and the ranges shaders write are per host copy, not per submission.
-        let mut submitted = self.submitted.lock().unwrap_or_else(|e| e.into_inner());
         let was_working = working(true);
         submitting(1, runs.len());
         // Flights in the air ([`late`]): a submission that is waited for
         // settles them first, one sent ahead only if preparing it reads
         // what they write.
         if !late {
-            self.settle(&mut submitted, WHY_SYNC);
+            self.settle(submitted, WHY_SYNC);
         } else if let Some(why) = late_blocked(runs) {
             if relay_exact() && why == WHY_READ {
                 // Only until the flights that may write what is read have
                 // landed: their copy-back's end, not the card's other work.
-                relay_wait(why, |line| blocked_by(&line.written, runs, false).is_none());
+                relay_wait(why, |line| {
+                    blocked_by(&line.written, &line.read_backs, runs, false).is_none()
+                });
             } else {
-                self.settle(&mut submitted, why);
+                self.settle(submitted, why);
             }
         }
         // Descriptors the title copied into placed heaps directly, before
@@ -5523,7 +5705,7 @@ impl Host {
         } else if late_free_present() && now_ms() > SWEPT.load(Ordering::Relaxed) + 1500 {
             // With the present sent ahead nothing else brings a moment
             // with nothing in the air: one is made for the sweep.
-            self.settle(&mut submitted, WHY_SYNC);
+            self.settle(submitted, WHY_SYNC);
             sweep();
             SWEPT.store(now_ms(), Ordering::Relaxed);
         }
@@ -5571,13 +5753,13 @@ impl Host {
             // title memory, which other copies of it must see.
             if behind && stale_under_flights(runs) {
                 let settling = std::time::Instant::now();
-                self.settle(&mut submitted, WHY_STALE);
+                self.settle(submitted, WHY_STALE);
                 settled += settling.elapsed();
                 crate::watch::ask_once(&ranges);
             }
         } else if behind && stale_under_flights(runs) {
             let settling = std::time::Instant::now();
-            self.settle(&mut submitted, WHY_STALE);
+            self.settle(submitted, WHY_STALE);
             settled += settling.elapsed();
         }
         for list in runs {
@@ -5606,7 +5788,7 @@ impl Host {
         let flown = late && relay();
         if flown && self.card_results_low() {
             let settling = std::time::Instant::now();
-            self.settle(&mut submitted, WHY_MOST);
+            self.settle(submitted, WHY_MOST);
             settled += settling.elapsed();
         }
         let card = self.card_before(runs, flown, *submitted);
@@ -5626,10 +5808,7 @@ impl Host {
                 fail(format_args!("a submission sent ahead could not be followed by a signal ({e})"));
             }
             let back = declared_writes(runs);
-            let mut texture_back_ranges = Vec::new();
-            for list in runs {
-                texture_back_ranges.extend(list.deferred().texture_backs.iter().map(crate::texback::Back::range));
-            }
+            let read_backs = pending_read_backs(runs);
             let writes = runs.iter().flat_map(|l| l.deferred().writes.clone()).collect();
             submission_us(0, (prepared - started).saturating_sub(settled).as_micros() as u64);
             submitting(0, 0);
@@ -5637,13 +5816,14 @@ impl Host {
             crate::copystat::submission_ends(lock);
             let sent = Sent {
                 number: this_submission,
+                first_run: 0,
                 card,
                 back,
-                texture_back_ranges,
+                read_backs,
                 writes,
             };
             working(was_working);
-            return Some((submitted, sent));
+            return Some(sent);
         }
         // Diagnostics: each list on its own, timed (`LEONIDA_GPU_TIMING`).
         #[cfg(feature = "diagnostics")]
@@ -5747,7 +5927,7 @@ impl Host {
         // For copies in the card's memory the compare has run there: the
         // pieces that differ are fetched and merged.
         if let Some(card) = &card {
-            self.card_back(card, &mut submitted, &mut std::collections::HashSet::new());
+            self.card_back(card, submitted, &mut std::collections::HashSet::new());
         }
         let back = declared_writes(runs);
         hand_back(&back);
@@ -7115,9 +7295,20 @@ impl HostList {
         self.deferred().refreshed.clear();
     }
 
-    /// As [`HostList::defer`], for work that writes only host memory.
+    /// As [`HostList::defer`], for work that neither reads nor writes title
+    /// memory. Use [`HostList::defer_title_read`] for a title source range.
     pub(crate) fn defer_host(&self, work: impl Fn() + Send + 'static) {
         self.deferred().copies.push(Step::Host(Box::new(work)));
+    }
+
+    /// Work that reads `[at, at + len)` of title memory and writes only
+    /// host memory. With readback ordering enabled, its source waits for
+    /// earlier GPU writes to land. Otherwise it keeps the old host-only
+    /// behavior. Neither mode invalidates the batch's title refreshes.
+    pub(crate) fn defer_title_read(&self, at: usize, len: usize, work: impl Fn() + Send + 'static) {
+        self.deferred()
+            .copies
+            .push(Step::HostRead(at, len, Box::new(work)));
     }
 
     /// Brings a texture's staging buffer up to date when the list is
@@ -7168,7 +7359,7 @@ impl HostList {
                     batch.add(shadow, *address, *len);
                     continue;
                 }
-                Step::Run(work) | Step::Host(work) => {
+                Step::Run(work) | Step::Host(work) | Step::HostRead(_, _, work) => {
                     if matches!(step, Step::Run(_)) {
                         batch.title_written();
                     }
@@ -9318,5 +9509,317 @@ void main() {
             }
         }
         drop((a, b, trial));
+    }
+}
+
+/// Optional end-to-end check, alone in a fresh process:
+/// LEONIDA_TEST_READBACK_ORDER=1 LEONIDA_READBACK_ORDER=1
+/// LEONIDA_D3D12_WARP=1 LEONIDA_LATE_WAIT=3
+/// LEONIDA_RELAY=0 (also 1 and 2), with diagnostics and one test thread.
+/// A hardware adapter requires LEONIDA_TEST_READBACK_HARDWARE=1 instead of WARP.
+/// No device is created without explicit test and adapter opt-ins. Covers
+/// separate submissions and dependent lists in one synchronous or late call.
+#[cfg(all(test, feature = "diagnostics"))]
+mod readback_order_tests {
+    use super::*;
+
+    static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[derive(Clone, Copy)]
+    enum Delivery {
+        Separate,
+        SameSync,
+        SameLate,
+        Overwrite,
+        Repeated,
+    }
+
+    #[test]
+    fn later_submission_copies_texture_readback_after_completion() {
+        submission_reads_texture_readback(false, Delivery::Separate);
+    }
+
+    #[test]
+    fn later_submission_host_reads_texture_readback_after_completion() {
+        submission_reads_texture_readback(true, Delivery::Separate);
+    }
+
+    #[test]
+    fn same_submission_copies_texture_readback_synchronously() {
+        submission_reads_texture_readback(false, Delivery::SameSync);
+    }
+
+    #[test]
+    fn same_submission_copies_texture_readback_asynchronously() {
+        submission_reads_texture_readback(false, Delivery::SameLate);
+    }
+
+    #[test]
+    fn same_submission_host_reads_texture_readback() {
+        submission_reads_texture_readback(true, Delivery::SameLate);
+    }
+
+    #[test]
+    fn completed_prefix_readback_does_not_land_again_over_tail_write() {
+        submission_reads_texture_readback(false, Delivery::Overwrite);
+    }
+
+    #[test]
+    fn repeated_lists_keep_their_execution_and_landing_order() {
+        submission_reads_texture_readback(false, Delivery::Repeated);
+    }
+
+    fn submission_reads_texture_readback(host_read: bool, delivery: Delivery) {
+        let hardware = std::env::var("LEONIDA_TEST_READBACK_HARDWARE").as_deref() == Ok("1");
+        if std::env::var("LEONIDA_TEST_READBACK_ORDER").as_deref() != Ok("1")
+            || (!hardware && std::env::var("LEONIDA_D3D12_WARP").as_deref() != Ok("1"))
+        {
+            eprintln!("readback order test skipped: explicit test and adapter opt-ins required");
+            return;
+        }
+        let _test = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        assert!(readback_order(), "test requires LEONIDA_READBACK_ORDER=1");
+        let host = host().expect("explicitly selected host device");
+        // SAFETY: a plain query; hardware requires its own explicit opt-in.
+        let software = host
+            .adapter
+            .as_ref()
+            .and_then(|a| unsafe { a.GetDesc1() }.ok())
+            .is_some_and(|d| d.Flags & DXGI_ADAPTER_FLAG_SOFTWARE.0 as u32 != 0);
+        assert!(
+            software || hardware,
+            "hardware execution was not explicitly requested"
+        );
+        assert!(
+            late(),
+            "readback order test requires asynchronous submissions"
+        );
+        assert!(
+            late_most() > 1,
+            "producer must remain in flight for this test"
+        );
+        assert!(
+            fill_ahead::on(),
+            "exercise the default speculative-read path"
+        );
+        settle_now(WHY_SYNC);
+
+        let same_call = !matches!(delivery, Delivery::Separate);
+        let overwrite = matches!(delivery, Delivery::Overwrite | Delivery::Repeated);
+        let mut title = Box::new([0u32, 0, 91, 0]);
+        let source = title.as_mut_ptr().cast::<u8>();
+        // SAFETY: the second dword of this allocation, alive through settling.
+        let destination = unsafe { source.add(4) };
+        let producer = host.new_list().expect("producer list");
+        let (upload, data) = producer.upload(host, 256).expect("one upload row");
+        // SAFETY: the upload mapping has at least one dword.
+        unsafe { data.cast::<u32>().write(37) };
+        let desc = D3D12_RESOURCE_DESC {
+            Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
+            Width: 1,
+            Height: 1,
+            DepthOrArraySize: 1,
+            MipLevels: 1,
+            Format: DXGI_FORMAT_R32_UINT,
+            SampleDesc: DXGI_SAMPLE_DESC {
+                Count: 1,
+                Quality: 0,
+            },
+            ..Default::default()
+        };
+        let mut texture: Option<ID3D12Resource> = None;
+        // SAFETY: ordinary creation of a one-texel texture.
+        unsafe {
+            host.device
+                .CreateCommittedResource(
+                    &D3D12_HEAP_PROPERTIES {
+                        Type: D3D12_HEAP_TYPE_DEFAULT,
+                        ..Default::default()
+                    },
+                    D3D12_HEAP_FLAG_NONE,
+                    &desc,
+                    D3D12_RESOURCE_STATE_COPY_DEST,
+                    None,
+                    &mut texture,
+                )
+                .expect("one-texel texture");
+        }
+        let texture = texture.unwrap();
+        let back = host.read_back_buffer(256).expect("one readback row");
+        let rows = |buffer: &ID3D12Resource| D3D12_TEXTURE_COPY_LOCATION {
+            // SAFETY: borrowed resource kept alive until both submissions settle.
+            pResource: unsafe { std::mem::transmute_copy(buffer) },
+            Type: D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT,
+            Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
+                PlacedFootprint: D3D12_PLACED_SUBRESOURCE_FOOTPRINT {
+                    Offset: 0,
+                    Footprint: D3D12_SUBRESOURCE_FOOTPRINT {
+                        Format: DXGI_FORMAT_R32_UINT,
+                        Width: 1,
+                        Height: 1,
+                        Depth: 1,
+                        RowPitch: 256,
+                    },
+                },
+            },
+        };
+        let whole = D3D12_TEXTURE_COPY_LOCATION {
+            // SAFETY: borrowed texture kept alive through both submissions.
+            pResource: unsafe { std::mem::transmute_copy(&texture) },
+            Type: D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
+            Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
+                SubresourceIndex: 0,
+            },
+        };
+        // SAFETY: open list, live resources, matching one-texel footprints.
+        unsafe {
+            producer
+                .list
+                .CopyTextureRegion(&whole, 0, 0, 0, &rows(&upload), None);
+            producer.list.ResourceBarrier(&[transition(
+                &texture,
+                D3D12_RESOURCE_STATE_COPY_DEST,
+                D3D12_RESOURCE_STATE_COPY_SOURCE,
+            )]);
+            producer
+                .list
+                .CopyTextureRegion(&rows(&back), 0, 0, 0, &whole, None);
+            // Reusing the same closed list is legal in the repeated case.
+            producer.list.ResourceBarrier(&[transition(
+                &texture,
+                D3D12_RESOURCE_STATE_COPY_SOURCE,
+                D3D12_RESOURCE_STATE_COPY_DEST,
+            )]);
+        }
+        producer.defer_read_back(back, source, [4, 1, 256]);
+        if same_call {
+            producer.defer_write(source.wrapping_add(12), crate::queue::Written::Value(17), 4);
+        }
+        producer.close();
+
+        let consumer = host.new_list().expect("consumer list");
+        let observed_value = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let completion_value = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let repeated_values = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        if host_read {
+            let at = source as usize;
+            let result = observed_value.clone();
+            consumer.defer_title_read(at, 4, move || {
+                // SAFETY: the test's title dword stays live until settling.
+                let value = unsafe { (at as *const u32).read() };
+                result.store(value, Ordering::Release);
+            });
+        } else {
+            consumer.defer_copy(destination, source, 4);
+        }
+        if matches!(delivery, Delivery::Repeated) {
+            let at = destination as usize;
+            let result = repeated_values.clone();
+            consumer.defer_title_read(at, 4, move || {
+                // SAFETY: the copied dword stays live through every occurrence.
+                result.lock().unwrap().push(unsafe { (at as *const u32).read() });
+            });
+        }
+        if same_call {
+            let at = source.wrapping_add(12) as usize;
+            let result = completion_value.clone();
+            consumer.defer_title_read(at, 4, move || {
+                // SAFETY: the test's completion dword stays live through settling.
+                result.store(unsafe { (at as *const u32).read() }, Ordering::Release);
+            });
+        }
+        if overwrite {
+            consumer.defer_copy(source, source.wrapping_add(8), 4);
+        }
+        let (copied, observed) = std::sync::mpsc::channel();
+        consumer.defer_host(move || {
+            let _ = copied.send(());
+        });
+        consumer.close();
+        let reason = match delivery {
+            Delivery::Separate => {
+                // Release the GPU when the consumer either waits for its
+                // dependency or has already read stale bytes. Time only
+                // bounds the test; it does not decide correctness.
+                // SAFETY: a fence owned and signalled by the test.
+                let gate: ID3D12Fence = unsafe {
+                    host.device
+                        .CreateFence(0, D3D12_FENCE_FLAG_NONE)
+                        .expect("test gate")
+                };
+                let before_wait = LATE_STATS[WHY_READ].load(Ordering::Relaxed);
+                // SAFETY: another thread signals the gate independently.
+                unsafe { host.queue.Wait(&gate, 1).expect("hold first submission") };
+                let coordinator = std::thread::spawn(move || {
+                    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+                    let reason = loop {
+                        if LATE_STATS[WHY_READ].load(Ordering::Relaxed) != before_wait {
+                            break "dependency wait";
+                        }
+                        if observed.try_recv().is_ok() {
+                            break "copy before completion";
+                        }
+                        if std::time::Instant::now() >= deadline {
+                            break "deadline";
+                        }
+                        std::thread::yield_now();
+                    };
+                    // SAFETY: release even if the failsafe deadline expired.
+                    unsafe { gate.Signal(1).expect("release test gate") };
+                    reason
+                });
+                host.execute_late(vec![crate::list::Detached::for_test(producer)], vec![0]);
+                host.execute_late(vec![crate::list::Detached::for_test(consumer)], vec![0]);
+                Some(coordinator.join().expect("test coordinator"))
+            }
+            Delivery::SameSync => {
+                host.execute(&[&producer, &consumer]);
+                None
+            }
+            Delivery::SameLate | Delivery::Overwrite | Delivery::Repeated => {
+                let order = if matches!(delivery, Delivery::Repeated) {
+                    vec![0, 1, 0, 1]
+                } else {
+                    vec![0, 1]
+                };
+                host.execute_late(
+                    vec![
+                        crate::list::Detached::for_test(producer),
+                        crate::list::Detached::for_test(consumer),
+                    ],
+                    order,
+                );
+                None
+            }
+        };
+        settle_now(WHY_SYNC);
+        assert_eq!(
+            title[0],
+            if overwrite { 91 } else { 37 },
+            "readback landed out of order"
+        );
+        let value = if host_read {
+            observed_value.load(Ordering::Acquire)
+        } else {
+            title[1]
+        };
+        assert_eq!(
+            value, 37,
+            "later submission read before readback completion"
+        );
+        if same_call {
+            assert_eq!(
+                completion_value.load(Ordering::Acquire),
+                17,
+                "prefix completion write"
+            );
+        }
+        if matches!(delivery, Delivery::Repeated) {
+            assert_eq!(*repeated_values.lock().unwrap(), [37, 37]);
+        }
+        if let Some(reason) = reason {
+            assert_ne!(reason, "deadline", "consumer made no observable progress");
+            assert_eq!(reason, "dependency wait");
+        }
     }
 }

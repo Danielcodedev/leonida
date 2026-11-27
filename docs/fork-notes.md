@@ -5,6 +5,101 @@ The status summary is in [README.md](../README.md).
 
 ## Newest (2026-11-26)
 
+**Wait for texture readbacks before preparing dependent submissions.**
+`LEONIDA_READBACK_ORDER=1`, or the `readback-order` opt-in graphics profile,
+enables this fix. It is **off by default** until a paired
+`scripts\measure-run.ps1` comparison establishes its gameplay frame-time cost.
+With it off, the old texture-back ranges and waits are preserved, including
+the host-only treatment of rectangle expansion; no new readback waits apply.
+
+Ordinary texture-to-buffer copies were missing from the ranges tracked while
+submissions were in flight. A later submission's CPU-side buffer copy could
+therefore consume stale title memory before the earlier texture readback landed.
+The pending ranges now include the bytes actually written by each readback row,
+excluding pitch padding. Overlapping CPU reads and writes wait for these definite
+writes even when speculative shader fills are enabled; unrelated work can proceed.
+The ranges remain pending until CPU copy-back completes, including when the relay
+lands only part of the queue.
+
+An original one-texel D3D12 regression holds the first submission behind a fence
+and queues a dependent copy in a second submission. It releases the fence when
+the consumer enters the dependency wait, or after the old implementation has
+copied stale bytes; timing does not choose the outcome. On `63fb0e8` with the test
+only, the destination is 0 instead of 37 in all three `LEONIDA_RELAY=0/1/2` modes.
+With the fix it is 37 in all three modes, with `LEONIDA_LATE_WAIT=3`, queue2 and
+the default speculative-fill path enabled. Measured on an Intel Core i9-14900KS,
+RTX 5090, NVIDIA 580.173.02, Pop!_OS 22.04, Proton 11's Wine and vkd3d-proton 3.2.
+Five CPU tests also cover row padding, destination overwrites, empty and
+overflowing footprints, and retaining later flights' pending ranges.
+
+Read-only CPU helper work also declares its title source range. Rectangle expansion
+used to be marked host-only even though it reads title vertices; with the switch
+enabled it waits for
+both pending readbacks and shader writes overlapping exactly those bytes. It still
+writes only host scratch memory, so it does not invalidate title-memory refreshes.
+Other host-only callbacks remain independent. Overflowing access ranges conservatively
+wait rather than claiming they are disjoint.
+
+A second one-texel regression consumes 37 through an annotated host-read callback.
+After merging current main at `dcc8263`, the old annotation reads 0 in relay modes
+0, 1 and 2; the fixed annotation reads 37 in each. Both copy and host-read tests also
+pass together in each mode, serialized by their shared test mutex even with two test
+threads. Seven CPU tests pass, including the actual host-step classification and
+overlap, disjoint, empty and overflowing ranges. This uses the same hardware and
+runtime above and no shader dispatches or game files.
+
+Run the optional tests in a fresh diagnostics test process with
+`LEONIDA_TEST_READBACK_ORDER=1`, `LEONIDA_READBACK_ORDER=1`,
+`LEONIDA_LATE_WAIT=3`, the desired
+`LEONIDA_RELAY` value, and either `LEONIDA_D3D12_WARP=1` or the explicit hardware
+opt-in `LEONIDA_TEST_READBACK_HARDWARE=1`:
+`cargo test -p leonida-gpu --features diagnostics --locked
+host::readback_order_tests -- --nocapture --test-threads=2`.
+
+**R-3 follow-up: land a readback before preparing a dependent list.**
+With the same opt-in switch enabled, this also handles lists grouped into one
+submission, including lists joined by the queue. Previously all CPU preparation
+ran before any of that submission's GPU work, so a later list's CPU copy could
+read the old bytes despite correct ordering between separate submissions.
+
+Only a boundary with an actual readback/CPU overlap splits the submission.
+Every dependent prefix completes its GPU work, shader copy-back, texture readbacks
+and completion writes before the next list is prepared with a fresh batch and card
+plan. The final segment keeps the caller's asynchronous behavior. The submission
+lock spans all segments; original list objects remain owned until the tail finishes,
+while completed prefixes are excluded from the tail's readback landing order.
+Repeated occurrences retain their execution order and are recycled once per object.
+
+With the switch off, one submission is retained without inspecting deferred lists
+or adding a split. CPU tests cover that disabled path, empty work, row padding,
+independent lists, overwritten ranges, unknown accesses, overflowing ranges,
+dependency chains and repeated occurrences. The optional one-texel GPU tests above
+also exercise synchronous and asynchronous same-call consumers, annotated host
+reads, prefix completion words, a tail overwrite that must survive, and both reads
+of a repeated producer/consumer pair.
+
+Dependencies inside one already-recorded native list still require recording-time
+splitting and are not handled here. These synthetic correctness results do not
+establish the cause of the washed-out game frames or claim a gameplay or frame-rate
+improvement; the switch remains off by default pending paired gameplay measurements.
+
+**R-7: an unread input takes the mode read in its register.**
+`PS_RasterizeWaterVolumeExposedSurface` and the two
+`PS_RasterizeVehicle*InterfaceDepth` read one input of a packed register per
+vertex (`attributeAtVertex`, so constant mode), beside an element they never
+read that keeps the linear mode the console's `PSV0` gives the whole
+register. The console does not mix modes; the DXIL validator refused ours
+("interpolation mode that differs from another element packed into the
+same row"). `container::share_row_modes`, called by `Shader::finish` for
+pixel inputs, gives an unread arbitrary element the mode its register's read
+elements agree on (an integer only a constant one). No register or mask
+changes, and the elements it changes are not read, so the picture cannot
+change. A unit test covers a register read one way, one read two ways (left
+alone) and an unread uint.
+
+**R-7: a level query on an array leaves the slice undefined.**
+`PS_VfxVBuffer_AlphaClip`, `PS_DeferredTextured_AlphaClip` and `PS_MirrorReflectionDeferredTextured_AlphaClip` failed the DXIL validator with "out of bound coord must be undef": `image_get_lod` on a 2D array became a `calculateLOD` that passed the slice as its third coordinate. Only the spatial coordinates are passed now, undef after them; the level does not depend on the slice, so the result is the same.
+
 **R-7: buffer view addresses by view heap slot.**
 The 5 `CS_TraceShadowRays_*` compute programs ("a descriptor read only as
 data") load a buffer descriptor from the view heap at an index they compute
@@ -979,6 +1074,28 @@ driver 621.24: with `LEONIDA_TEXTURE_BACK=1` the boat stayed up and the
 mission went on. Cost: about a megabyte copied back per list that writes
 one of the four kinds (`shortcut:` in `texback.rs`).
 
+## P-4: page catalog lookups during remapping (2026-11-27)
+
+DirectStorage used the title mapping mutex just to resolve page numbers to section
+slices. An unrelated alias remap held that mutex across host mapping calls, delaying
+workers whose own views never touch the title addresses being changed. Page numbers
+now have a separate catalog lock. Mapping snapshots retain section ownership across
+a concurrent page free; native mapping calls run after releasing the catalog lock.
+
+Title view extents and reverse aliases stay under their existing mutex. DirectStorage
+written-page publication takes that mutex before the catalog and releases both before
+its GPU notifications. Map/remap notifications still hold their original protection.
+The texture-read/remapping guard, native mapping calls, mapping granularity and
+valid-prefix behavior on an unknown page are unchanged. This complements PR #34's
+texture range locks; it does not implement those locks or complete P-4.
+
+The synthetic `page_windows_do_not_wait_for_unrelated_title_remapping` regression
+times out after five seconds on the prior implementation and returns the expected
+bytes with the split. All 15 xmem tests passed in an isolated, headless Proton 11.0
+prefix with GPU devices disabled, including pending-section lifetime after page free,
+unknown-page prefix mapping and 2,000 remaps with a protected concurrent reader.
+These are CPU memory tests; no gameplay frame-rate improvement is claimed.
+
 ## Debugging
 
 A release build has no debugging aids. Build them in with
@@ -1049,3 +1166,25 @@ self-loops, aliases, phi predecessors and pixel discard by executing emitted int
 control flow on the CPU. The regression fails before the correction. This establishes
 the guard defect and its repair; it does not establish the cause of a live driver timeout
 or claim a frame-rate improvement.
+
+## Cards measured: RTX 3060 Ti 8 GB (2026-11-27)
+
+Frame figures are `ms/frame` from the game's title bar, sampled on world frames only (the menus sit at 33.3 ms),
+after the shader warm-up and not on the first run after a shader change. Nothing here quotes game data.
+
+| Card | Driver | OS | Profile applied | Where | Frame | Notes |
+|---|---|---|---|---|---|---|
+| RTX 3060 Ti 8 GB | 621.40 (32.0.16.2140) | Windows 11 26H2, build 26300 | `base`, selected automatically | opening prologue, Series X | 514–1,064 ms, 510–756 draws (about 2 fps) | Ryzen 5 5600, 16 GB RAM, 48 GB commit. Before the shader warm-up the first gameplay room was not drawn at all (R-2); after it the prologue rendered but washed out (R-3). |
+| RTX 3060 Ti 8 GB | 621.40 | Windows 11 26H2 | `base` | account picker, language, brightness, legal notices, title art | 33.3 ms (30 fps) | All of these draw, take input and hold 30 fps. |
+
+Notes for this card:
+
+- `leonida config --graphics` resolves `base` here with nothing set by hand: `ASYNC_SUBMIT`, `QUEUE2`,
+  `INDIRECT_WINDOW`, `COPY_PLAIN`, `JOIN_PARTS`, `BACK_OWN_VIEW`, `INDIRECT_GATHER`, `CARD_REHASH_RUNS`.
+- The shader warm-up is not optional on this card. Without it, the handover from the cutscene to the first room
+  produced a black frame at 1 fps, 845–899 ms and 1,029–1,252 draws issued, which reads as R-2. With it, the
+  prologue drew at 514–1,064 ms but washed out, which reads as R-3.
+- `leonida translate --list` reports 198 shaders that do not translate on this dump: 195 `GS_VoxelizeGeneric`
+  geometry programs and 3 lane-mask cases, matching the counts above.
+- Working set while the title screens are up: about 5.3 GB, on 16 GB of RAM with a 48 GB commit limit.
+- Build: release profile, commit f0e7a9b.

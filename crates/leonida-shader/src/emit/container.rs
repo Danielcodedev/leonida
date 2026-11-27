@@ -173,6 +173,37 @@ pub(crate) fn take_modes(psv: &[u8], which: usize, elements: &mut [SigElement]) 
     }
 }
 
+/// Each unread arbitrary element takes the interpolation mode of the read
+/// elements packed into its register, if they agree on one (an integer only
+/// a constant one): the validator wants one mode per register, and an input
+/// the program reads per vertex is constant beside neighbours `PSV0` gave
+/// the console's linear mode.
+pub(crate) fn share_row_modes(elements: &mut [SigElement]) {
+    let modes: Vec<Option<u8>> = elements
+        .iter()
+        .map(|e| {
+            let row = e.row?;
+            if e.usage != 0 || e.kind != 0 {
+                return None;
+            }
+            let mut read = elements
+                .iter()
+                .filter(|o| o.row == Some(row) && o.usage != 0)
+                .map(|o| o.interp);
+            let mode = read.next()?;
+            if read.any(|m| m != mode) || (mode != 1 && e.comp != 9) {
+                return None;
+            }
+            Some(mode)
+        })
+        .collect();
+    for (e, mode) in elements.iter_mut().zip(modes) {
+        if let Some(mode) = mode {
+            e.interp = mode;
+        }
+    }
+}
+
 /// The most a mesh shader's outputs may take, in bytes (D3D12).
 pub(crate) const MESH_OUTPUT_LIMIT: u64 = 32 * 1024;
 
@@ -550,5 +581,31 @@ mod tests {
         assert_eq!(ours, console);
         // A part cut short leaves the modes alone.
         assert_eq!(psv_modes(&part[..40], 1), None);
+    }
+
+    #[test]
+    fn unread_elements_take_the_mode_read_in_their_register() {
+        // As in PS_RasterizeVehicle*InterfaceDepth: TEXCOORD3 (row 5, w)
+        // read per vertex, so constant, beside an unread linear NORMAL.
+        let mut normal = psv_element(2, 9, 5, 0, 3);
+        normal.usage = 0;
+        // A register read two ways is left alone, and an unread uint never
+        // turns linear.
+        let mut mixed = psv_element(2, 9, 2, 2, 1);
+        mixed.usage = 0;
+        let mut uint = psv_element(1, 5, 3, 2, 1);
+        uint.usage = 0;
+        let mut els = [
+            normal,
+            psv_element(1, 9, 5, 3, 1),
+            psv_element(2, 9, 2, 0, 1),
+            psv_element(1, 9, 2, 1, 1),
+            mixed,
+            psv_element(2, 9, 3, 0, 2),
+            uint,
+        ];
+        share_row_modes(&mut els);
+        let modes: Vec<u8> = els.iter().map(|e| e.interp).collect();
+        assert_eq!(modes, [1, 1, 2, 1, 2, 2, 1]);
     }
 }
