@@ -1821,15 +1821,11 @@ impl HostHeap {
         }
     }
 
-    /// Makes slot `index` (a dynamic one) a constant buffer view of host
-    /// memory (the list's own, which it holds).
-    pub(crate) fn constant_at(&self, index: u32, gpu: u64, size: u32) {
+    /// Makes a dynamic CBV of the list's upload, or a typed null CBV.
+    pub(crate) fn constant_at(&self, index: u32, value: super::constant::Description) {
         self.keep(index, None);
         let Some(host) = host() else { return };
-        let desc = D3D12_CONSTANT_BUFFER_VIEW_DESC {
-            BufferLocation: gpu,
-            SizeInBytes: size.next_multiple_of(256),
-        };
+        let desc = value.native();
         // SAFETY: a slot of our heap; the memory is the caller's.
         unsafe {
             host.device
@@ -2757,6 +2753,12 @@ fn make(view: &View, at: D3D12_CPU_DESCRIPTOR_HANDLE) -> Option<Kept> {
     let device = &host.device;
     match view {
         &View::Constant(address, size) => {
+            if super::constant::is_null(address, size) {
+                let desc = super::constant::Description::default().native();
+                // SAFETY: a slot of our heap; zero location makes a null CBV.
+                unsafe { device.CreateConstantBufferView(Some(&desc), at) };
+                return Some(None);
+            }
             let shadow = crate::shadow::find(address, u64::from(size))?;
             let gpu = shadow.gpu(address);
             if gpu % 256 != 0 {
@@ -2766,10 +2768,7 @@ fn make(view: &View, at: D3D12_CPU_DESCRIPTOR_HANDLE) -> Option<Kept> {
                 );
                 return None;
             }
-            let desc = D3D12_CONSTANT_BUFFER_VIEW_DESC {
-                BufferLocation: gpu,
-                SizeInBytes: size.next_multiple_of(256),
-            };
+            let desc = super::constant::Description::new(gpu, size).native();
             // SAFETY: a slot of our heap; the range lies in the host copy.
             unsafe { device.CreateConstantBufferView(Some(&desc), at) };
             Some(Some(shadow.buffer.clone()))
@@ -3017,7 +3016,7 @@ fn null_for(view: &View, at: D3D12_CPU_DESCRIPTOR_HANDLE) {
             return null_like(desc[..10].try_into().unwrap_or(&[0; 10]), at);
         }
         View::Constant(..) => {
-            let desc = D3D12_CONSTANT_BUFFER_VIEW_DESC::default();
+            let desc = super::constant::Description::default().native();
             // SAFETY: a slot of our heap; a zero location makes a null view.
             return unsafe { host.device.CreateConstantBufferView(Some(&desc), at) };
         }
