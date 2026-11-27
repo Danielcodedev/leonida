@@ -58,6 +58,7 @@ fn with_stage(words: &[u32], pixel: bool, test: impl FnOnce(Lower<'_>)) {
         outputs: vec![],
         prims: vec![],
         mesh_stride: 0,
+        independent_waves: None,
     };
     // The normal public emission path must also produce a complete container.
     let empty = crate::dxbc::build(&[]);

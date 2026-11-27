@@ -82,6 +82,7 @@ pub(crate) struct Parts<'a> {
     pub prims: Vec<SigElement>,
     /// Mesh: what the group id arrives multiplied by.
     pub mesh_stride: u32,
+    pub independent_waves: Option<super::IndependentWaves>,
 }
 
 enum Stop {
@@ -1276,12 +1277,12 @@ impl<'a> Lower<'a> {
         // a console wave64 program in host waves of 32: the LDS dword of `wave_base`'s counter
         let mut halves: Option<u32> = None;
         if let StageIo::Cs(cs) = x.native.io {
-            s.threads = Some(cs.threads);
+            s.threads = Some(x.independent_waves.map_or(cs.threads, |p| p.native_threads()));
             s.lds_dwords = cs.lds_bytes() / 4;
             // Code reading other lanes needs the console's wave size and
             // lane order; so do lane masks read as numbers, and LDS shared
             // within one wave, where the console compiler leaves out barriers.
-            console_lanes = insts().any(|i| {
+            console_lanes = x.independent_waves.is_some() || insts().any(|i| {
                 let n = i.name();
                 n.starts_with("ds_swizzle")
                     || n.contains("permute")
@@ -1293,7 +1294,7 @@ impl<'a> Lower<'a> {
                 // (a branch the wave takes together asks the wave)
                 || !x.st.wide.is_empty();
             let mut wave = if x.native.wave64 { 64 } else { 32 };
-            let group = cs.threads.iter().product::<u32>();
+            let group = s.threads.expect("compute").iter().product::<u32>();
             let one_wave = group <= wave;
             // A host whose waves are at most 32 lanes (NVIDIA) refuses `WaveSize(64)`. A console
             // wave64 program whose cross-lane code stays inside 32-lane halves – DPP rows,
@@ -1304,7 +1305,7 @@ impl<'a> Lower<'a> {
             // masks), nor when LDS may be shared within the console wave without barriers (a
             // group over 32 threads with LDS): those still need 64-lane waves.
             if wave == 64 && host_max_wave() == 32 && (console_lanes || one_wave && s.lds_dwords > 0) {
-                let crosses = insts().any(|i| {
+                let crosses = x.independent_waves.is_some() || insts().any(|i| {
                     let n = i.name();
                     n.starts_with("v_mbcnt")
                         || matches!(n, "v_readlane_b32" | "v_writelane_b32")
@@ -1544,11 +1545,13 @@ impl<'a> Lower<'a> {
             console_lanes,
             split_lds,
             lds_meet,
-            local: exchange.is_some() && LOCAL_WAVES.get(),
+            local: x.independent_waves.is_none() && exchange.is_some() && LOCAL_WAVES.get(),
             local_ok: false,
-            local_any: LOCAL_ANY.get(),
+            local_any: x.independent_waves.is_none() && LOCAL_ANY.get(),
             uniform: match &exchange {
-                Some((_, false, all)) if !LOCAL_WAVES.get() => lane_uniform(p, x.st, all),
+                Some((_, false, all)) if x.independent_waves.is_some() || !LOCAL_WAVES.get() => {
+                    lane_uniform(p, x.st, all)
+                }
                 _ => HashSet::new(),
             },
             own_bits: match &exchange {
@@ -3664,7 +3667,11 @@ impl<'a> Lower<'a> {
         let k = self.s.m.i32(slot);
         let ptr = self.s.m.element(e, lds, k);
         let zero = self.s.m.i32(0);
-        self.s.m.store(e, ptr, zero);
+        if self.x.independent_waves.is_some() {
+            self.s.m.atomic(e, Rmw::Xchg, ptr, zero);
+        } else {
+            self.s.m.store(e, ptr, zero);
+        }
         self.group_sync(e);
         let lane = self.s.op(e, "waveGetLaneIndex", Attr::ReadOnly, i32t, 111, &[]);
         let first = self.s.m.cmp(e, pred::EQ, lane, zero);
@@ -3748,7 +3755,11 @@ impl<'a> Lower<'a> {
         let index = self.s.m.bin(at, Bin::Add, pair, half);
         let lds = self.s.lds();
         let ptr = self.s.m.element(at, lds, index);
-        self.s.m.store(at, ptr, mine);
+        if self.x.independent_waves.is_some() {
+            self.s.m.atomic(at, Rmw::Xchg, ptr, mine);
+        } else {
+            self.s.m.store(at, ptr, mine);
+        }
         self.group_sync(at);
         let one = self.s.m.i32(1);
         let k1 = self.s.m.bin(at, Bin::Add, pair, one);
@@ -4110,11 +4121,20 @@ impl<'a> Lower<'a> {
         if !self.console_lanes {
             return self.compute_id("threadIdInGroup.i32", 95, c);
         }
-        let [x, y, _] = self.s.threads.expect("compute");
+        let [x, y, _] = self.x.independent_waves.map_or(
+            self.s.threads.expect("compute"), |plan| plan.original_threads());
         let e = self.s.entry;
         let i32t = self.s.t.i32;
         if self.halves.is_some() {
-            let f = self.console_thread();
+            let mut f = self.console_thread();
+            if self.x.independent_waves.is_some() {
+                // Exchange storage and console lane numbers stay pair-local. Only observable
+                // original thread IDs include the dispatch's original Wave64 index.
+                let wave = self.s.independent_wave_index();
+                let six = self.s.m.i32(6);
+                let base = self.s.m.bin(e, Bin::Shl, wave, six);
+                f = self.s.m.bin(e, Bin::Add, base, f);
+            }
             self.s.flags |= flags::WAVE_OPS;
             let (xk, yk, xy) = (self.s.m.i32(x), self.s.m.i32(y), self.s.m.i32(x * y));
             return Val::I32(match c {
@@ -4776,6 +4796,18 @@ impl<'a> Lower<'a> {
         let inst: &'a Inst = &self.x.p.blocks[b].insts[i];
         let offset = inst.machine.offset;
         let name = inst.name();
+        if self.x.independent_waves.is_some() && crate::ir::wave_memory_wait(name) {
+            if !self.exchange.as_ref().is_some_and(|(_, _, all)| all[b]) {
+                need(b);
+                return Err(unsupported(offset, "a wave memory wait where not every lane runs"));
+            }
+            // The console wait belongs to one Wave64. Both physical halves must finish their
+            // earlier memory operations before either starts what follows. A partial wait is
+            // conservatively strengthened; admission excludes unsupported progress/scopes.
+            let mode = self.s.m.i32(1 | 2 | 8);
+            self.s.op(self.cur, "barrier", Attr::NoDuplicate, self.s.t.void, 80, &[mode]);
+            return Ok(());
+        }
         self.local_ok = name.starts_with("s_bcnt1_i32_")
             || name.starts_with("s_ff1_i32_")
             || name.starts_with("v_mbcnt_");
@@ -6021,6 +6053,9 @@ impl<'a> Lower<'a> {
                 self.x.p.blocks[b].insts.iter().any(writes)
             });
             if per_lane {
+                if self.x.independent_waves.is_some() {
+                    return Err("independent Wave64 scalar code address held per lane");
+                }
                 self.s.flags |= flags::WAVE_OPS;
                 let i32t = self.s.t.i32;
                 d = self.s.op(c, "waveReadLaneFirst.i32", Attr::NoUnwind, i32t, 118, &[d]);
@@ -11475,6 +11510,7 @@ mod tests {
             outputs: vec![],
             prims: vec![],
             mesh_stride: 0,
+            independent_waves: None,
         })
         .map(|_| ())
     }
@@ -11525,6 +11561,7 @@ mod tests {
             outputs: vec![],
             prims: vec![],
             mesh_stride: 0,
+            independent_waves: None,
         })
     }
 
@@ -11636,6 +11673,7 @@ mod tests {
             outputs: vec![],
             prims: vec![],
             mesh_stride: 0,
+            independent_waves: None,
         }).unwrap();
 
         let container =

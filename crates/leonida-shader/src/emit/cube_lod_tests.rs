@@ -106,10 +106,12 @@ fn shader() -> HostShader {
         outputs: Vec::new(),
         prims: Vec::new(),
         mesh_stride: 0,
+        independent_waves: None,
     })
     .unwrap();
     HostShader {
         stage: HwStage::Cs,
+        independent_waves: None,
         dxil: lowered.dxil,
         user_data: lowered.user_data,
         samplers: lowered.samplers,

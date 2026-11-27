@@ -46,6 +46,8 @@ pub mod framelog;
 mod host;
 #[cfg(windows)]
 mod indirect;
+#[cfg(any(windows, test))]
+mod independent;
 #[cfg(windows)]
 mod inplace;
 pub mod list;

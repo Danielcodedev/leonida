@@ -152,6 +152,8 @@ pub(crate) struct Shader {
     pub geometry: Option<Geometry>,
     /// Dwords of user data the shader reads (0: no user-data buffer).
     pub user_data: u32,
+    /// The host-supplied original Wave64 index for an independent physical group.
+    independent_wave: Option<V>,
     /// Immediate samplers, bound as `s0..` in [`SAMPLER_SPACE`].
     pub samplers: u32,
     /// Bit n: immediate sampler n is a comparison sampler.
@@ -214,6 +216,7 @@ impl Shader {
             mesh: None,
             geometry: None,
             user_data: 0,
+            independent_wave: None,
             samplers: 0,
             cmp_samplers: 0,
             root_cbvs: Vec::new(),
@@ -285,6 +288,27 @@ impl Shader {
         );
         // The size is known in `finish`, which fixes this placeholder.
         self.annotate(block, h, 13, u32::MAX)
+    }
+
+    pub fn independent_wave_index(&mut self) -> V {
+        if let Some(index) = self.independent_wave {
+            return index;
+        }
+        let bind = [
+            self.m.i32(0), self.m.i32(0), self.m.i32(super::INDEPENDENT_WAVE_SPACE),
+            self.m.i8(2),
+        ];
+        let bind = self.m.aggregate(self.t.bind, &bind);
+        let (zero, uniform) = (self.m.i32(0), self.m.bool(false));
+        let handle = self.op(self.entry, "createHandleFromBinding", Attr::ReadNone,
+            self.t.handle, 217, &[bind, zero, uniform]);
+        let handle = self.annotate(self.entry, handle, 13, 16);
+        let row = self.m.i32(0);
+        let value = self.op(self.entry, "cbufferLoadLegacy.i32", Attr::ReadOnly,
+            self.t.cbuf_ret, 59, &[handle, row]);
+        let index = self.m.extract(self.entry, value, 0);
+        self.independent_wave = Some(index);
+        index
     }
 
     /// The handle of the root CBV of root parameter `slot`, made in the
@@ -485,6 +509,7 @@ impl Shader {
             s.m.md_value(c)
         };
         if self.user_data > 0
+            || self.independent_wave.is_some()
             || self.samplers > 0
             || !self.root_cbvs.is_empty()
             || !self.root_srvs.is_empty()
@@ -514,6 +539,23 @@ impl Shader {
                     space: USER_DATA_SPACE,
                     register: 0,
                     dxil_kind: 13,
+                });
+            }
+            if self.independent_wave.is_some() {
+                let arr = self.m.array(4, self.t.i32);
+                let ty = self.m.named_struct("IndependentWave", vec![arr]);
+                let p = self.m.ptr(ty);
+                let u = self.m.undef(p);
+                let ops = vec![
+                    Some(i32c(&mut self, cbv_list.len() as u32)),
+                    Some(self.m.md_value(u)), Some(empty),
+                    Some(i32c(&mut self, super::INDEPENDENT_WAVE_SPACE)),
+                    Some(i32c(&mut self, 0)), Some(i32c(&mut self, 1)),
+                    Some(i32c(&mut self, 16)), None,
+                ];
+                cbv_list.push(Some(self.m.md_node(ops)));
+                bindings.push(Binding {
+                    kind: 2, space: super::INDEPENDENT_WAVE_SPACE, register: 0, dxil_kind: 13,
                 });
             }
             let blob = self.m.array(16384, self.t.i32);

@@ -2594,6 +2594,36 @@ impl State {
             once!("a dispatch with a graphics pipeline");
             return;
         }
+        if let Some(replay) = p.independent_waves {
+            match replay.direct([x, y, z]) {
+                Ok(false) => return, // No work and no synthetic commands.
+                Err(reason) => {
+                    once!("{reason}");
+                    DROPPED.fetch_add(1, Ordering::Relaxed);
+                    return;
+                }
+                Ok(true) => {}
+            }
+            let ran = replay.issue_direct(&list.list, [x, y, z],
+                || {
+                    if !self.bind(list, p, true) {
+                        return false;
+                    }
+                    #[cfg(feature = "diagnostics")]
+                    list.note_op(|| self.op_text(format!("dispatch {x}x{y}x{z}"), true));
+                    true
+                },
+            );
+            if ran {
+                DISPATCHED.fetch_add(1, Ordering::Relaxed);
+            } else {
+                DROPPED.fetch_add(1, Ordering::Relaxed);
+                if crate::pipeline::is_builder(self.pipeline as This) {
+                    crate::pipeline::builder_off("one of its dispatches could not be bound");
+                }
+            }
+            return;
+        }
         if !self.bind(list, p, true) {
             DROPPED.fetch_add(1, Ordering::Relaxed);
             // A stage of the structure builder that cannot be bound is a
@@ -3441,6 +3471,12 @@ impl State {
             crate::pipeline::note_drop(self.pipeline as This);
             return false;
         };
+        if let Some(replay) = p.independent_waves
+            && let Err(reason) = replay.indirect(kind, stride, max, count.is_some())
+        {
+            why(reason);
+            return false;
+        }
         // Indirect rectangles (the title's tiled lighting, 256
         // indirect draws a frame, makes their corners from the vertex
         // number) are completed by the pipeline's geometry stage: the
@@ -3486,13 +3522,54 @@ impl State {
             },
             None => None,
         };
+        // Independent replays consume a packed private snapshot, not the
+        // source record's optional padding. It always contains one 12-byte dispatch.
+        let host_stride = if p.independent_waves.is_some() { 12 } else { stride };
         let Some(signature) = matches!(kind, DRAW | INDEXED | DISPATCH | MESH)
-            .then(|| host_signature(kind, stride))
+            .then(|| host_signature(kind, host_stride))
             .flatten()
         else {
             why("no host signature");
             return false;
         };
+        if let Some(replay) = p.independent_waves {
+            // The admitted signature has exactly one dispatch and no root
+            // writes or count buffer. Snapshot/charge it once, then every wave
+            // consumes those same private arguments, even if a wave writes the
+            // original argument buffer. Nothing fallible runs between waves.
+            self.window = None;
+            list.gather_close();
+            args.refresh(list, arguments, len);
+            let bounded = crate::indirect::bound_independent(
+                list, (&args.buffer, args.offset(arguments)), stride, replay.waves(),
+            );
+            self.host_pipeline = 0;
+            self.host_roots[1] = 0;
+            let Some(bounded) = bounded else {
+                why("independent-wave arguments could not be admitted");
+                return false;
+            };
+            #[cfg(feature = "diagnostics")]
+            { self.last_indirect = (args.id(), args.offset(arguments)); }
+            let ran = replay.issue_indirect(&list.list, &signature, &bounded,
+                || {
+                    if !self.bind(list, p, true) {
+                        return false;
+                    }
+                    #[cfg(feature = "diagnostics")]
+                    list.note_op(|| self.op_text(
+                        format!("indirect kind {kind} max {max} at {arguments:#x}"), true,
+                    ));
+                    true
+                },
+            );
+            if !ran {
+                why("independent-wave prepare failed");
+                return false;
+            }
+            DISPATCHED.fetch_add(1, Ordering::Relaxed);
+            return true;
+        }
         if kind == MESH && (mesh_test() == 1 || !mesh_kept(self.pipeline)) {
             why("mesh draws are switched off (LEONIDA_MESH_TEST=skip)");
             return false;

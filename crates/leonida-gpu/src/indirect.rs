@@ -430,6 +430,96 @@ pub(crate) fn bound(
     clamp_into(list, c, &dst, budget, src, count, spec, false).then_some(dst)
 }
 
+/// One dispatch-only record for an independent-wave replay. The original
+/// work is admitted once and snapshotted before any wave executes. The
+/// ordinary argument clamp and its cost model remain unchanged.
+/// Like [`bound`], the source must be legal for a shader read. Refreshing a
+/// Shadow retains and updates its bytes, but does not establish its native
+/// state; this helper does not replace the runtime's buffer-state contract.
+pub(crate) fn bound_independent(
+    list: &HostList,
+    (src, offset): (&ID3D12Resource, u64),
+    stride: u32,
+    waves: leonida_shader::emit::IndependentWaves,
+) -> Option<ID3D12Resource> {
+    validate_layout((2, stride, 1), offset, None)?;
+    // SAFETY: the caller retains this live argument resource.
+    let (desc, base) = unsafe { (src.GetDesc(), src.GetGPUVirtualAddress()) };
+    if desc.Dimension != D3D12_RESOURCE_DIMENSION_BUFFER
+        || offset.checked_add(12)? > desc.Width
+        || !base.is_multiple_of(4)
+    {
+        return None;
+    }
+    let (source, offset) = if offset.checked_add(12)? <= u64::from(u32::MAX) {
+        (base, offset as u32)
+    } else {
+        (base.checked_add(offset)?, 0)
+    };
+    static CLAMP: std::sync::OnceLock<Option<Clamp>> = std::sync::OnceLock::new();
+    let c = CLAMP.get_or_init(|| {
+        match make_from(&host()?.device, include_str!("independent_bound.hlsl")) {
+            Ok(c) => Some(c),
+            Err(error) => {
+                tracing::warn!(%error, "no independent-wave argument admission helper");
+                None
+            }
+        }
+    }).as_ref()?;
+    let dst = list.indirect_scratch(12)?;
+    let budget = list.budget()?;
+    let before = list.indirect_state(&dst);
+    list.keep(src);
+    record_independent(c, &list.list, (&dst, before), budget, (source, offset), waves)?;
+    list.indirect_readable(&dst);
+    Some(dst)
+}
+
+/// Records an already validated source's one immutable dispatch snapshot.
+/// The caller retains all resources through completion and tracks `dst`'s state.
+fn record_independent(
+    c: &Clamp,
+    list: &ID3D12GraphicsCommandList,
+    (dst, before): (&ID3D12Resource, D3D12_RESOURCE_STATES),
+    budget: u64,
+    (source, offset): (u64, u32),
+    waves: leonida_shader::emit::IndependentWaves,
+) -> Option<()> {
+    // SAFETY: a live private scratch buffer, retained by the recording.
+    let target = unsafe { dst.GetGPUVirtualAddress() };
+    if !target.is_multiple_of(4) || !budget.is_multiple_of(4)
+        || !source.is_multiple_of(4) || !offset.is_multiple_of(4)
+    {
+        return None;
+    }
+    let constants = [offset, waves.wave_count() * 64];
+    // SAFETY: the caller owns scratch and budget and retains the readable source.
+    // The first barrier orders the snapshot after earlier source writes;
+    // the final transition orders all replay reads after the helper's write.
+    // Nothing rewrites scratch until the next clamp, after every replay.
+    unsafe {
+        list.ResourceBarrier(&[
+            uav_barrier(),
+            transition(dst, before, D3D12_RESOURCE_STATE_UNORDERED_ACCESS),
+        ]);
+        list.SetComputeRootSignature(&c.root);
+        list.SetPipelineState(&c.pso);
+        list.SetComputeRoot32BitConstants(0, 2, constants.as_ptr().cast(), 0);
+        list.SetComputeRootShaderResourceView(1, source);
+        list.SetComputeRootUnorderedAccessView(2, target);
+        list.SetComputeRootUnorderedAccessView(3, budget);
+        list.Dispatch(1, 1, 1);
+        list.ResourceBarrier(&[
+            uav_barrier(),
+            transition(
+                dst, D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT,
+            ),
+        ]);
+    }
+    Some(())
+}
+
 /// [`bound`] for a window of records clamped ahead of the draws that will
 /// read them (`crate::draw`'s windows; no count buffer). The records past
 /// the ones the title filled are whatever the buffer holds, and each
@@ -1001,6 +1091,7 @@ fn uav_barrier() -> D3D12_RESOURCE_BARRIER {
 #[cfg(test)]
 mod tests {
     use super::*;
+    include!("independent_gpu_tests.rs");
     use windows::Win32::Foundation::HANDLE;
     use windows::Win32::Graphics::Direct3D::D3D_FEATURE_LEVEL_12_0;
     use windows::Win32::Graphics::Dxgi::Common::DXGI_SAMPLE_DESC;
@@ -3359,5 +3450,36 @@ void work() {
             least.push(runs[0].0);
         }
         assert!(least.iter().all(|us| us.is_finite() && *us > 0.0), "the card gave no time for a batch");
+    }
+}
+
+#[cfg(test)]
+mod independent_tests {
+    use super::*;
+
+    #[test]
+    fn independent_admission_shader_compiles_without_a_device() {
+        let source = include_str!("independent_bound.hlsl");
+        let mut code = None;
+        let mut errors: Option<ID3DBlob> = None;
+        // SAFETY: the source lives through compilation; no graphics device
+        // is created and no command list or shader is executed by this test.
+        let compiled = unsafe {
+            D3DCompile(
+                source.as_ptr().cast(), source.len(), s!("independent admission"),
+                None, None, s!("main"), s!("cs_5_1"), 0, 0,
+                &mut code, Some(&mut errors),
+            )
+        };
+        let message = errors.map(|blob| {
+            // SAFETY: the blob owns these compiler messages through the copy.
+            unsafe {
+                String::from_utf8_lossy(std::slice::from_raw_parts(
+                    blob.GetBufferPointer().cast::<u8>(), blob.GetBufferSize(),
+                )).into_owned()
+            }
+        });
+        assert!(compiled.is_ok(), "{compiled:?}: {message:?}");
+        assert!(code.is_some());
     }
 }
