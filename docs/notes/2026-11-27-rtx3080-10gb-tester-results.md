@@ -15,7 +15,8 @@ prologue. Run 2 was in the prologue's first room.
 | 2 | whole run, menus and loading included | 3,531 in 560.3 s | 6.3 | 107 ms | 9,086 ms |
 
 - Run 1 reached us cut off after the frame count, so its median and longest frame, whole-run
-  figures and crash line are missing. Run 2 is a new run (other frame counts), not a resend.
+  figures and crash line are missing; the tester no longer has the full report. Run 2 is a new
+  run (other frame counts), not a resend.
 - Run 2: no crash report (exit code 0). The tester saw shadows completely black.
 - What the tester saw in run 1: the heads of the player character and the other characters were
   not drawn, only parts of the hair, the eyeballs and the inside of the mouth. The RTX 4070
