@@ -5,6 +5,9 @@ The status summary is in [README.md](../README.md).
 
 ## Newest (2026-11-26)
 
+**R-7: a level query on an array leaves the slice undefined.**
+`PS_VfxVBuffer_AlphaClip`, `PS_DeferredTextured_AlphaClip` and `PS_MirrorReflectionDeferredTextured_AlphaClip` failed the DXIL validator with "out of bound coord must be undef": `image_get_lod` on a 2D array became a `calculateLOD` that passed the slice as its third coordinate. Only the spatial coordinates are passed now, undef after them; the level does not depend on the slice, so the result is the same.
+
 **R-7: buffer view addresses by view heap slot.**
 The 5 `CS_TraceShadowRays_*` compute programs ("a descriptor read only as
 data") load a buffer descriptor from the view heap at an index they compute
