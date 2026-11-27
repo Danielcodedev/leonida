@@ -1190,6 +1190,122 @@ mod tests {
     use super::*;
 
     #[test]
+    fn chunked_code_tables_keep_every_address_and_bound_every_load() {
+        use crate::emit::code_table::CodeTable;
+
+        #[derive(Clone, Copy)]
+        enum Evaluated {
+            Word(u32),
+            Pointer(u32, usize),
+        }
+
+        // Execute the actual emitted SSA, including loads whose results a later select
+        // discards. This catches an out-of-bounds load from the final short chunk.
+        fn evaluate(m: &Module, result: V, input: u32) -> u32 {
+            let mut values = Vec::new();
+            for inst in &m.insts {
+                let word = |v| match v {
+                    V::Const(i) => match m.consts[i as usize].1 {
+                        Const::Int(x) => x as u32,
+                        _ => panic!("not an integer constant"),
+                    },
+                    V::Inst(i) => match values[i as usize] {
+                        Evaluated::Word(x) => x,
+                        _ => panic!("not an integer instruction"),
+                    },
+                    _ => panic!("not an integer value"),
+                };
+                let value = match &inst.op {
+                    Op::Call(_, args) => {
+                        assert!(args.is_empty());
+                        Evaluated::Word(input)
+                    }
+                    Op::Bin(op, a, b) => Evaluated::Word(match op {
+                        Bin::Sub => word(*a).wrapping_sub(word(*b)),
+                        Bin::LShr => word(*a) >> word(*b),
+                        Bin::And => word(*a) & word(*b),
+                        _ => panic!("unexpected binary operation: {op:?}"),
+                    }),
+                    Op::Cmp(op, a, b) => Evaluated::Word(u32::from(match *op {
+                        pred::IUGT => word(*a) > word(*b),
+                        pred::EQ => word(*a) == word(*b),
+                        _ => panic!("unexpected comparison"),
+                    })),
+                    Op::Select(c, t, f) => {
+                        Evaluated::Word(if word(*c) != 0 { word(*t) } else { word(*f) })
+                    }
+                    Op::Gep(_, V::Global(g), indices) => {
+                        assert_eq!(indices.len(), 2);
+                        assert_eq!(word(indices[0]), 0);
+                        Evaluated::Pointer(*g, word(indices[1]) as usize)
+                    }
+                    Op::Load(V::Inst(p)) => {
+                        let Evaluated::Pointer(g, index) = values[*p as usize] else {
+                            panic!("not a table pointer");
+                        };
+                        let init = m.globals[g as usize].init.expect("initialized table");
+                        let Const::Aggregate(elems) = &m.consts[init as usize].1 else {
+                            panic!("not a constant table");
+                        };
+                        let element = *elems.get(index).expect("every load must be in bounds");
+                        Evaluated::Word(word(V::Const(element)))
+                    }
+                    op => panic!("unexpected code-table operation: {op:?}"),
+                };
+                values.push(value);
+            }
+            let V::Inst(i) = result else {
+                panic!("not an emitted result")
+            };
+            let Evaluated::Word(result) = values[i as usize] else {
+                panic!("not a word")
+            };
+            result
+        }
+
+        for len in [1usize, 1023, 1024, 1025, 2048, 4096, 4097, 4099, 8195] {
+            let words: Vec<u32> = (0..len)
+                .map(|i| (i as u32).wrapping_mul(0x9e37_79b9))
+                .collect();
+            for (base, chunked) in [0u32, 0x1200, 0xffff_f000]
+                .into_iter()
+                .flat_map(|base| [false, true].map(|chunked| (base, chunked)))
+            {
+                let mut m = Module::default();
+                let i32t = m.int(32);
+                let fty = m.func_ty(i32t, vec![]);
+                let input = m.function("input", fty, Some(Attr::ReadNone), false);
+                let block = m.new_block();
+                let byte = m.call(block, input, vec![]);
+                let table = CodeTable::new(&mut m, base, &words, chunked);
+                let result = table.read(&mut m, block, byte);
+                let chunk_len = if chunked && len > 4096 { 1024 } else { len };
+                assert_eq!(m.globals.len(), len.div_ceil(chunk_len));
+                for g in &m.globals {
+                    assert!(matches!(
+                        m.types[g.ty.0 as usize],
+                        TypeDef::Array(n, _) if n as usize <= chunk_len
+                    ));
+                }
+                // Every byte (including unaligned reads), chunk edges, the final short
+                // chunk, instruction-prefix addresses, underflow and 32-bit wrap.
+                let bytes = (0..4 * len as u32 + 8)
+                    .map(|offset| base.wrapping_add(offset))
+                    .chain([0, 1, base.wrapping_sub(1), u32::MAX - 3, u32::MAX]);
+                for byte in bytes {
+                    let index = (byte.wrapping_sub(base) / 4) as usize;
+                    let expected = words[index.min(words.len() - 1)];
+                    assert_eq!(
+                        evaluate(&m, result, byte),
+                        expected,
+                        "{len} words, {base:#x}, {byte:#x}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn vbr_and_blocks() {
         let mut w = Writer::default();
         w.vbr(5, 6);

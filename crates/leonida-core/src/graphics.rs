@@ -536,6 +536,27 @@ mod tests {
     }
 
     #[test]
+    fn nvidia_code_tables_are_opt_in_and_respect_environment_overrides() {
+        let key = "LEONIDA_CODE_TABLE_CHUNKS";
+        let automatic = resolve(&GraphicsSettings::default(), gpu(), &env(&[]), None).unwrap();
+        assert!(!automatic.settings.contains_key(key));
+        assert!(!automatic.profiles.iter().any(|name| name == "nvidia-code-tables"));
+
+        let settings = GraphicsSettings {
+            profiles: Some(vec!["nvidia-code-tables".into()]),
+            ..Default::default()
+        };
+        let selected = resolve(&settings, gpu(), &env(&[]), None).unwrap();
+        assert_eq!(selected.profiles, ["base", "nvidia-code-tables"]);
+        assert_eq!(selected.settings[key], "1");
+        assert_eq!(selected.sources[key], "profile:nvidia-code-tables");
+
+        let overridden = resolve(&settings, gpu(), &env(&[(key, "0")]), None).unwrap();
+        assert_eq!(overridden.settings[key], "0");
+        assert_eq!(overridden.sources[key], "environment");
+    }
+
+    #[test]
     fn explicit_profiles_are_case_insensitive_and_include_base() {
         let settings = GraphicsSettings {
             profiles: Some(vec!["missing".into()]),

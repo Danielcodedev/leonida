@@ -26,6 +26,13 @@
       }
     },
     {
+      "name": "nvidia-code-tables",
+      "opt_in": true,
+      "match": { "vendor": "nvidia" },
+      "measured": "RTX 5090, i9-14900KS, NVIDIA 580.173.02, Pop!_OS, Proton 11.0 and vkd3d-proton 3.2.0, 2026-11-26: six refused compute pipelines went from 0/6 to 6/6 created in a compile-only comparison. No frame-rate improvement is claimed. See docs/fork-notes.md, large code-literal tables on NVIDIA.",
+      "env": { "LEONIDA_CODE_TABLE_CHUNKS": "1" }
+    },
+    {
       "name": "card-windows",
       "opt_in": true,
       "match": {},
