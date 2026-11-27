@@ -17,4 +17,9 @@ The scene field says only "y"; asked afterwards, the tester said it was the prol
   measured: RTX 3060 Ti 8 GB"). The RTX 3080 12 GB figures in `gpu-profiles.json` (about 130 to
   170 ms) come from the first rooms, a different scene. An average is not a median, so both
   comparisons are rough.
+- What the tester saw in the prologue: the heads of the player character and the other characters
+  were not drawn, only parts of the hair, the eyeballs and the inside of the mouth. The RTX 4070
+  Laptop 8 GB report in [the laptop note](2026-11-27-rtx-laptop-8gb-tester-reports.md) describes
+  the same (hair, eyes, a held phone). Here the warm-up was done and the card has 10 GB, so neither
+  a missing warm-up nor an 8 GB card explains it on its own.
 - One run, switches on only, so nothing here says what any switch does on this card.
