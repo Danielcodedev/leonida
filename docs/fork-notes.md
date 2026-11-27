@@ -56,10 +56,32 @@ opt-in `LEONIDA_TEST_READBACK_HARDWARE=1`:
 `cargo test -p leonida-gpu --features diagnostics --locked
 host::readback_order_tests -- --nocapture --test-threads=2`.
 
-This orders separate submissions only. Dependencies between commands already
-grouped in one submission still need command-list splitting. This synthetic
-correctness result does not establish the cause of the washed-out game frames
-or claim a gameplay or frame-rate improvement.
+**R-3 follow-up: land a readback before preparing a dependent list.**
+With the same opt-in switch enabled, this also handles lists grouped into one
+submission, including lists joined by the queue. Previously all CPU preparation
+ran before any of that submission's GPU work, so a later list's CPU copy could
+read the old bytes despite correct ordering between separate submissions.
+
+Only a boundary with an actual readback/CPU overlap splits the submission.
+Every dependent prefix completes its GPU work, shader copy-back, texture readbacks
+and completion writes before the next list is prepared with a fresh batch and card
+plan. The final segment keeps the caller's asynchronous behavior. The submission
+lock spans all segments; original list objects remain owned until the tail finishes,
+while completed prefixes are excluded from the tail's readback landing order.
+Repeated occurrences retain their execution order and are recycled once per object.
+
+With the switch off, one submission is retained without inspecting deferred lists
+or adding a split. CPU tests cover that disabled path, empty work, row padding,
+independent lists, overwritten ranges, unknown accesses, overflowing ranges,
+dependency chains and repeated occurrences. The optional one-texel GPU tests above
+also exercise synchronous and asynchronous same-call consumers, annotated host
+reads, prefix completion words, a tail overwrite that must survive, and both reads
+of a repeated producer/consumer pair.
+
+Dependencies inside one already-recorded native list still require recording-time
+splitting and are not handled here. These synthetic correctness results do not
+establish the cause of the washed-out game frames or claim a gameplay or frame-rate
+improvement; the switch remains off by default pending paired gameplay measurements.
 
 **R-7: an unread input takes the mode read in its register.**
 `PS_RasterizeWaterVolumeExposedSurface` and the two

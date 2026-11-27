@@ -2,8 +2,8 @@
 //!
 //! Unlike a shader's broad writable view, a readback describes bytes that
 //! will be copied. Submission preparation must not speculate past them.
-//! This orders separate submissions; it does not split dependencies between
-//! commands that are already grouped into one submission.
+//! This orders separate submissions and partitions grouped lists before
+//! dependent CPU preparation. Commands inside one recorded list stay together.
 
 /// The title memory a submission-time step reads or overwrites.
 #[derive(Clone, Copy)]
@@ -78,6 +78,55 @@ impl ReadBacks {
     }
 }
 
+/// List boundaries at which prior readbacks must land before preparation
+/// continues. A list's own readbacks follow its CPU accesses: dependencies
+/// within one already-recorded list need a separate recording-time split.
+#[derive(Default)]
+pub(crate) struct Segments {
+    pending: ReadBacks,
+    ends: Vec<usize>,
+    lists: usize,
+}
+
+impl Segments {
+    /// Preserve one legacy submission when disabled, without inspecting
+    /// deferred metadata or adding readback waits. `lists` includes repeats.
+    pub(crate) fn plan(enabled: bool, lists: usize, inspect: impl FnOnce(&mut Self)) -> Vec<usize> {
+        if !enabled {
+            return vec![lists];
+        }
+        let mut segments = Self::default();
+        inspect(&mut segments);
+        segments.finish()
+    }
+
+    /// Adds one ordered list occurrence. `produced` records its readbacks
+    /// after checking its CPU accesses, without an intermediate range copy.
+    pub(crate) fn push(
+        &mut self,
+        accesses: impl IntoIterator<Item = Access>,
+        produced: impl FnOnce(&mut ReadBacks),
+    ) {
+        if !self.pending.ranges().is_empty()
+            && accesses
+                .into_iter()
+                .any(|access| self.pending.blocks(access))
+        {
+            self.ends.push(self.lists);
+            self.pending.clear();
+        }
+        produced(&mut self.pending);
+        self.lists += 1;
+    }
+
+    /// Includes the final boundary, even for an empty synchronous
+    /// submission, whose existing wait/settle behavior still runs once.
+    pub(crate) fn finish(mut self) -> Vec<usize> {
+        self.ends.push(self.lists);
+        self.ends
+    }
+}
+
 /// Whether `[from, to)` touches a sorted, joined range.
 pub(crate) fn touches(ranges: &[(usize, usize)], from: usize, to: usize) -> bool {
     if from >= to {
@@ -106,7 +155,96 @@ pub(crate) fn join_ranges(
 
 #[cfg(test)]
 mod tests {
-    use super::{Access, ReadBacks};
+    use super::{Access, ReadBacks, Segments};
+
+    #[test]
+    fn readback_producer_and_cpu_consumer_use_distinct_segments() {
+        let ends = Segments::plan(true, 2, |segments| {
+            segments.push([], |pending| assert!(pending.rows(0x1000, [4, 1, 256])));
+            segments.push(
+                [Access::Copy {
+                    dst: 0x2000,
+                    src: 0x1000,
+                    len: 4,
+                }],
+                |_| {},
+            );
+        });
+        assert_eq!(ends, [1, 2]);
+    }
+
+    #[test]
+    fn disabled_ordering_keeps_one_submission_without_inspecting_lists() {
+        for lists in [0, 1, 4] {
+            let ends = Segments::plan(false, lists, |_| {
+                panic!("disabled ordering must not inspect readback metadata");
+            });
+            assert_eq!(ends, [lists]);
+        }
+    }
+
+    #[test]
+    fn independent_lists_stay_in_the_prefix_until_the_dependency() {
+        let mut segments = Segments::default();
+        segments.push([], |pending| assert!(pending.rows(0x1000, [8, 2, 256])));
+        segments.push([Access::HostOnly], |_| {});
+        // Only row padding and unrelated memory, not the produced bytes.
+        segments.push(
+            [Access::Range(0x1008, 248), Access::Range(0x2000, 16)],
+            |_| {},
+        );
+        segments.push([Access::Range(0x1104, 4)], |_| {});
+        assert_eq!(segments.finish(), [3, 4]);
+    }
+
+    #[test]
+    fn overwritten_ranges_unknown_work_and_overflow_end_a_segment() {
+        for access in [
+            Access::Copy {
+                dst: 0x1000,
+                src: 0x2000,
+                len: 4,
+            },
+            Access::Unknown,
+            Access::Range(usize::MAX - 1, 4),
+        ] {
+            let mut segments = Segments::default();
+            segments.push([], |pending| pending.extend([(0x1000, 0x1004)]));
+            segments.push([access], |_| {});
+            assert_eq!(segments.finish(), [1, 2]);
+        }
+    }
+
+    #[test]
+    fn dependent_chain_and_repeated_occurrences_are_kept_in_order() {
+        let mut chain = Segments::default();
+        chain.push([], |pending| pending.extend([(0x1000, 0x1004)]));
+        chain.push([Access::Range(0x1000, 4)], |pending| {
+            pending.extend([(0x2000, 0x2004)]);
+        });
+        chain.push([Access::Range(0x2000, 4)], |_| {});
+        assert_eq!(chain.finish(), [1, 2, 3]);
+
+        let mut repeated = Segments::default();
+        for list in [0, 1, 0, 1] {
+            match list {
+                0 => repeated.push([], |pending| pending.extend([(0x1000, 0x1004)])),
+                _ => repeated.push([Access::Range(0x1000, 4)], |_| {}),
+            }
+        }
+        assert_eq!(repeated.finish(), [1, 3, 4]);
+    }
+
+    #[test]
+    fn empty_work_and_same_list_dependencies_do_not_invent_empty_prefixes() {
+        assert_eq!(Segments::default().finish(), [0]);
+        let mut segments = Segments::default();
+        segments.push([Access::Range(0x1000, 4)], |pending| {
+            pending.extend([(0x1000, 0x1004)]);
+        });
+        segments.push([Access::Range(0x1000, 0)], |_| {});
+        assert_eq!(segments.finish(), [2]);
+    }
 
     /// Two separate submissions: the first texture copy has not landed
     /// when the second's CPU-side buffer copy is prepared. Its source must
