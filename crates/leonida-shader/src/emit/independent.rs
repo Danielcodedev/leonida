@@ -22,7 +22,7 @@ impl IndependentWaves {
             return None;
         }
         let count = x.checked_mul(y)?.checked_mul(z)?;
-        (count > 64 && count <= 1024 && count.is_multiple_of(64))
+        ((64..=1024).contains(&count) && count.is_multiple_of(64))
             .then_some(Self { original_threads })
     }
 
@@ -50,7 +50,9 @@ pub(super) fn enabled() -> bool {
 }
 
 /// Eligibility is about original semantics, not a title hash or a captured resource layout.
-/// This first mode excludes group communication, atomics and unmodelled cache/system scopes.
+/// Multi-wave groups exclude LDS/GDS, group barriers, atomics and unmodelled cache/system scopes;
+/// a single-wave 64-thread group may use private LDS (including integer LDS atomics), buffer
+/// atomics and intra-wave `s_barrier`, since its dispatch shape is unchanged.
 pub(super) fn admit(
     native: &NativeProgram,
     p: &ir::Program,
@@ -118,10 +120,18 @@ fn eligibility(native: &NativeProgram, p: &ir::Program) -> Option<IndependentWav
     let StageIo::Cs(cs) = native.io else {
         return None;
     };
-    if native.stage != HwStage::Cs || !native.wave64 || cs.lds_bytes() != 0 {
+    if native.stage != HwStage::Cs || !native.wave64 {
         return None;
     }
     let plan = IndependentWaves::new(cs.threads)?;
+    let single_wave = plan.wave_count() == 1;
+    // Only a 64-thread group is a single original Wave64 whose LDS stays private to that wave.
+    if cs.lds_bytes() != 0 && !single_wave {
+        return None;
+    }
+    // Lowering places its own exchange dwords after the shader's LDS: a program that allocates
+    // none must not reach them through DS loads and stores.
+    let private_lds = single_wave && cs.lds_bytes() != 0;
     if cs
         .system_sgprs()
         .1
@@ -133,12 +143,16 @@ fn eligibility(native: &NativeProgram, p: &ir::Program) -> Option<IndependentWav
     let instructions = crate::gfx10::decode(&native.code).ok()?;
     for inst in &instructions {
         let name = inst.name()?;
-        if name.contains("atomic") || matches!(name, "v_pipeflush" | "v_clrexcp") {
+        let group_atomic = single_wave
+            && (name.starts_with("buffer_atomic_") || name.starts_with("image_atomic_"));
+        if (name.contains("atomic") && !group_atomic) || matches!(name, "v_pipeflush" | "v_clrexcp")
+        {
             return None;
         }
         let allowed = match inst.fields(native.wave64) {
             Fields::Sopp { .. } => {
                 ir::wave_memory_wait(name)
+                    || (single_wave && name == "s_barrier")
                     || matches!(
                         name,
                         "s_endpgm"
@@ -155,10 +169,12 @@ fn eligibility(native: &NativeProgram, p: &ir::Program) -> Option<IndependentWav
                     )
             }
             Fields::Sop { imm, src, .. } if name.starts_with("s_setreg") => {
-                // Per-wave scratch-base setup, not MODE or a hardware/group identity register.
-                name == "s_setreg_imm32_b32"
-                    && imm.is_some_and(|v| matches!(v & 63, 20 | 21) && v & !63 == 0xf800)
-                    && matches!(src.as_slice(), [Operand::Literal(_)])
+                // Per-wave scratch-base setup, or round to nearest (dropped by `program`);
+                // not other MODE bits or a hardware/group identity register.
+                ir::sets_nearest_rounding(name, &inst.fields(native.wave64))
+                    || (name == "s_setreg_imm32_b32"
+                        && imm.is_some_and(|v| matches!(v & 63, 20 | 21) && v & !63 == 0xf800)
+                        && matches!(src.as_slice(), [Operand::Literal(_)]))
             }
             Fields::Sop { src, .. } if ir::wave_memory_wait(name) => {
                 // The non-null SOPK form adds a register contribution to its wait count.
@@ -199,6 +215,7 @@ fn eligibility(native: &NativeProgram, p: &ir::Program) -> Option<IndependentWav
                     && !cache.slc
                     && !cache.dlc
             }
+            Fields::Buffer { lds, cache, .. } if group_atomic => !lds && !cache.slc && !cache.dlc,
             Fields::Buffer { lds, cache, .. } => {
                 !lds && (name.contains("load") || name.contains("store"))
                     && !cache.glc
@@ -211,12 +228,14 @@ fn eligibility(native: &NativeProgram, p: &ir::Program) -> Option<IndependentWav
                     && !cache.slc
                     && !cache.dlc
             }
+            Fields::Image { cache, .. } if group_atomic => !cache.slc && !cache.dlc,
             Fields::Image { cache, .. } => !cache.glc && !cache.slc && !cache.dlc,
             Fields::Ds { gds, .. } => {
-                !gds && matches!(
+                !gds && (matches!(
                     name,
                     "ds_swizzle_b32" | "ds_permute_b32" | "ds_bpermute_b32"
-                )
+                ) || (private_lds
+                    && (is_single_wave_lds_access(name) || is_single_wave_lds_atomic(name))))
             }
             Fields::Valu(v) => !matches!(v.dpp,
                 Some(crate::gfx10::Dpp::Row { row_mask, .. })
@@ -228,6 +247,62 @@ fn eligibility(native: &NativeProgram, p: &ir::Program) -> Option<IndependentWav
         }
     }
     Some(plan)
+}
+
+/// Non-atomic DS loads and stores permitted only when the entire original group is one Wave64.
+fn is_single_wave_lds_access(name: &str) -> bool {
+    matches!(
+        name,
+        "ds_read_b32"
+            | "ds_read2_b32"
+            | "ds_read2st64_b32"
+            | "ds_read_b64"
+            | "ds_read2_b64"
+            | "ds_read2st64_b64"
+            | "ds_read_b96"
+            | "ds_read_b128"
+            | "ds_read_i8"
+            | "ds_read_u8"
+            | "ds_read_i16"
+            | "ds_read_u16"
+            | "ds_read_u8_d16"
+            | "ds_read_u8_d16_hi"
+            | "ds_read_i8_d16"
+            | "ds_read_i8_d16_hi"
+            | "ds_read_u16_d16"
+            | "ds_read_u16_d16_hi"
+            | "ds_write_b32"
+            | "ds_write2_b32"
+            | "ds_write2st64_b32"
+            | "ds_write_b64"
+            | "ds_write2_b64"
+            | "ds_write2st64_b64"
+            | "ds_write_b96"
+            | "ds_write_b128"
+            | "ds_write_b8"
+            | "ds_write_b16"
+            | "ds_write_b8_d16_hi"
+            | "ds_write_b16_d16_hi"
+    )
+}
+
+/// Integer LDS atomics lower to group-shared `atomicrmw`/`cmpxchg`, atomic across the whole
+/// host group however it is split into waves.
+fn is_single_wave_lds_atomic(name: &str) -> bool {
+    matches!(
+        name.replace("_rtn", "").as_str(),
+        "ds_add_u32"
+            | "ds_sub_u32"
+            | "ds_and_b32"
+            | "ds_or_b32"
+            | "ds_xor_b32"
+            | "ds_min_i32"
+            | "ds_max_i32"
+            | "ds_min_u32"
+            | "ds_max_u32"
+            | "ds_wrxchg_b32"
+            | "ds_cmpst_b32"
+    )
 }
 
 pub(super) fn program(native: &NativeProgram) -> Result<ir::Program, ShaderError> {

@@ -148,6 +148,22 @@ pub(crate) fn wave_memory_wait(name: &str) -> bool {
     )
 }
 
+/// `s_setreg_imm32_b32` writing 0 only into MODE's FP_ROUND bits [3:0]: round to nearest
+/// even, the only rounding DXIL has, so the host already runs what follows that way.
+pub(crate) fn sets_nearest_rounding(name: &str, fields: &Fields) -> bool {
+    let Fields::Sop {
+        imm: Some(imm), src, ..
+    } = fields
+    else {
+        return false;
+    };
+    let (id, offset, size) = (imm & 63, u32::from(imm >> 6 & 31), u32::from(imm >> 11) + 1);
+    name == "s_setreg_imm32_b32"
+        && id == 1
+        && offset + size <= 4
+        && matches!(src.as_slice(), [Operand::Literal(v)] if v & ((1 << size) - 1) == 0)
+}
+
 fn build_with_waits(
     code: &[u8],
     wave64: bool,
@@ -227,6 +243,8 @@ fn build_with_waits(
         }
         let effects = if keep_wave_waits && wave_memory_wait(name) {
             Some((Vec::new(), Vec::new()))
+        } else if keep_wave_waits && sets_nearest_rounding(name, &fields) {
+            None
         } else {
             effects(&machine, &fields, name, lanes, vgprs)?
         };

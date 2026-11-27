@@ -17,7 +17,7 @@ void main() {
     // buffer. No wave can alter this private snapshot through title bindings.
     uint3 groups = src_args.Load3(args_offset);
     if (any(groups > 65535u) || any(groups == 0u)
-            || original_threads < 128u || original_threads > 1024u
+            || original_threads < 64u || original_threads > 1024u
             || (original_threads & 63u) != 0u) {
         groups = uint3(0, 0, 0);
     } else if (groups.x * groups.y > GROUPS / groups.z) {
