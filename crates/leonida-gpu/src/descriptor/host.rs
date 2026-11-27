@@ -66,6 +66,10 @@ pub(crate) struct HostHeap {
     /// Of those and of the slots that left the set: the ones written since
     /// [`HostHeap::buffer_changes`] last took them.
     changed: Mutex<std::collections::HashSet<u32>>,
+    /// Opt-in indexed-buffer discovery belongs to this heap, not its address
+    /// in a global map. The revision is published after adding a changed slot.
+    buffer_revision: std::sync::atomic::AtomicU64,
+    buffer_readiness: std::sync::OnceLock<Mutex<crate::heap_readiness::Cache<crate::shadow::Shadow>>>,
     /// Title slots holding a view of a texture the title may fill itself (a
     /// placed texture, a texture object), with the frame from which they
     /// are due: such a texture is uploaded when a draw reads it through a
@@ -987,6 +991,8 @@ impl HostHeap {
             strides,
             buffers: Mutex::default(),
             changed: Mutex::default(),
+            buffer_revision: std::sync::atomic::AtomicU64::new(0),
+            buffer_readiness: std::sync::OnceLock::new(),
             textures: Mutex::default(),
             tabled: (0..if sampler { 0 } else { count })
                 .map(|_| std::sync::atomic::AtomicU32::new(0))
@@ -1562,6 +1568,36 @@ impl HostHeap {
         std::mem::take(&mut *changed).into_iter().collect()
     }
 
+    /// Resolve changed descriptors once, then share the exact retained copies
+    /// with each recording that consumes this heap. No GPU copies happen here.
+    pub(crate) fn buffer_snapshot(
+        &self,
+        heap: &super::Heap,
+        frame: u64,
+    ) -> (crate::heap_readiness::Snapshot<crate::shadow::Shadow>, usize) {
+        use crate::heap_readiness::Span;
+        let mut cache = self.buffer_readiness.get_or_init(Mutex::default)
+            .lock().unwrap_or_else(|e| e.into_inner());
+        // Read before draining: a concurrent later write remains a reason to
+        // rebuild, even if this pass happened to see its descriptor already.
+        let revision = self.buffer_revision.load(std::sync::atomic::Ordering::Acquire);
+        let mut inspected = 0;
+        let snapshot = cache.snapshot(
+            frame,
+            revision,
+            || self.buffer_changes(),
+            || self.buffer_slots(),
+            |index| {
+                inspected += 1;
+                let view = self.mirror(index, heap.handle(index)?, true)?;
+                let (copy, from, len) = buffer_copy(&view)?;
+                let extent = copy.span();
+                Span::bounded(copy, extent, from, len)
+            },
+        );
+        (snapshot, inspected)
+    }
+
     /// Records what title slot `index` now holds for shaders that pick
     /// buffers from the heap: its element stride in the table, and whether
     /// it is a buffer view at all.
@@ -1660,10 +1696,15 @@ impl HostHeap {
             buffers.remove(&index)
         };
         if was {
-            self.changed
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .insert(index);
+            let mut changed = self.changed.lock().unwrap_or_else(|e| e.into_inner());
+            changed.insert(index);
+            if crate::heap_readiness::enabled() {
+                self.buffer_revision.fetch_update(
+                    std::sync::atomic::Ordering::Release,
+                    std::sync::atomic::Ordering::Relaxed,
+                    |n| n.checked_add(1),
+                ).expect("heap buffer revision exhausted");
+            }
         }
         stale
     }
