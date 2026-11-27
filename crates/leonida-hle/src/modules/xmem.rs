@@ -62,6 +62,9 @@ const PAGES_64K: u32 = PAGES_2M | PAGES_64K_BIT;
 /// adds GPU access bits (0x800-0x40000). Write-combining and uncached are
 /// dropped too: our GPU side reads this memory through the CPU.
 const HOST_PROTECTION: u32 = 0x1ff;
+/// Write-combined: memory the title's CPU writes and does not read, noted
+/// for `leonida_gpu` (`LEONIDA_WC_NO_BACK`) before the bit is dropped.
+const WRITE_COMBINE: u32 = 0x400;
 /// XMem flags of memory both processors reach: all of ours.
 const GRAPHICS: u64 = 3;
 /// XMem flag bit of 32-bit graphics memory.
@@ -102,6 +105,7 @@ pub extern "system" fn XMemVirtualAlloc(
             0
         },
     };
+    let write_combined = protect & WRITE_COMBINE != 0;
     let mut protect = match protect & HOST_PROTECTION {
         0 => PAGE_NOACCESS,
         p => p,
@@ -162,6 +166,9 @@ pub extern "system" fn XMemVirtualAlloc(
             at = format_args!("{at:p}"),
             "XMemVirtualAlloc"
         );
+    }
+    if !at.is_null() {
+        leonida_gpu::title_memory_write_combined(at as usize, size, write_combined);
     }
     at
 }

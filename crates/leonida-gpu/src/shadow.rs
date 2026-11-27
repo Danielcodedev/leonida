@@ -2824,6 +2824,17 @@ impl Shadow {
             return;
         }
         let len = len.min(self.left(address));
+        // A big copy of write-combined title memory, with
+        // `LEONIDA_WC_NO_BACK=1`: what shaders write stays on the card. Not
+        // when unwatched: its whole-range refreshes would overwrite them.
+        if self.card.is_some()
+            && crate::wcback::left_on_card(self.start, self.len)
+            && !self.unwatched()
+        {
+            #[cfg(feature = "diagnostics")]
+            crate::wcback::left(len);
+            return;
+        }
         list.defer_gpu_write(self, address as usize, len as usize);
     }
 
