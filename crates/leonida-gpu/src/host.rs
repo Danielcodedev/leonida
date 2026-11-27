@@ -7315,6 +7315,14 @@ impl HostList {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn keeps_for_test(&self, object: &impl Interface) -> bool {
+        let Ok(object) = object.cast::<windows::core::IUnknown>() else {
+            return false;
+        };
+        self.deferred().kept.iter().any(|kept| kept.as_raw() == object.as_raw())
+    }
+
     /// Whether this is the first time since the reset that the list asks
     /// about `key` (a texture to bring up to date).
     pub(crate) fn first_use(&self, key: usize) -> bool {

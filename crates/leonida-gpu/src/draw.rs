@@ -4250,3 +4250,6 @@ mod tests {
         assert_eq!(bake_named(&constants, 0, record), ((100..105).collect(), (0, 0)));
     }
 }
+
+#[cfg(test)]
+mod heap_readiness_tests;
