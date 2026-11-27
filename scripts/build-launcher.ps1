@@ -1,7 +1,7 @@
 ﻿# Builds Leonida-Launcher.exe, a small window to pick a branch of this repository, switch to it and
 # start run-gta6.ps1. Run it once from the repository's folder:
 #
-#   powershell -ExecutionPolicy Bypass -File .\build-launcher.ps1
+#   powershell -ExecutionPolicy Bypass -File .\scripts\build-launcher.ps1
 #
 # The launcher's code is below, in $LauncherSource. The repository holds no images
 # (docs/asset-policy.md), so the logo is fetched at build time:
@@ -19,7 +19,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-Set-Location -LiteralPath $PSScriptRoot
+Set-Location -LiteralPath (Split-Path -Parent $PSScriptRoot)
 Add-Type -AssemblyName System.Drawing
 
 $work = Join-Path ([System.IO.Path]::GetTempPath()) ('leonida-launcher-' + [guid]::NewGuid().ToString('N'))
@@ -918,7 +918,7 @@ try {
     }
     Import-Module ps2exe
 
-    $exe = Join-Path $PSScriptRoot 'Leonida-Launcher.exe'
+    $exe = Join-Path (Split-Path -Parent $PSScriptRoot) 'Leonida-Launcher.exe'
     Invoke-ps2exe -inputFile $script -outputFile $exe -iconFile $ico -noConsole -STA -title 'Leonida Launcher'
     if (-not (Test-Path -LiteralPath $exe)) { throw 'ps2exe did not produce Leonida-Launcher.exe' }
     Write-Host ''

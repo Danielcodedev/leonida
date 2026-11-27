@@ -106,10 +106,10 @@ powershell -ExecutionPolicy Bypass -File .\run-gta6.ps1
 To switch between branches and start `run-gta6.ps1` from a window instead, build the launcher once:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\build-launcher.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\build-launcher.ps1
 ```
 
-It creates `Leonida-Launcher.exe` in the same folder (git ignores it; it stays when you switch
+It creates `Leonida-Launcher.exe` in the repository's root folder (git ignores it; it stays when you switch
 branches). Start it, pick a branch and click **Load and start**: it switches to that branch and
 runs `run-gta6.ps1`. Switching discards your changes to tracked files, after asking. If Git is
 missing, the launcher offers to install it with winget; if the Visual Studio C++ build tools or
@@ -119,7 +119,7 @@ the launcher's language (English or French); settings are kept in
 `%APPDATA%\LeonidaLauncher\config.json`. The first build installs the `ps2exe` module for your
 Windows user and downloads the logo; without network it uses a plain logo.
 
-`measure-gta6.ps1` does the same with the diagnostics build, the frame log and the card meter on, and saves
+`scripts\measure-gta6.ps1` does the same with the diagnostics build, the frame log and the card meter on, and saves
 everything the game prints to `%LOCALAPPDATA%\leonida\logs`. `-SpeedSwitches off` runs it without the frame-rate
 switches or your graphics overrides, for a comparison in the same place.
 
@@ -150,7 +150,7 @@ repository. Its `x64` folder must contain matching `d3d12.dll` and `d3d12core.dl
 Then run:
 
 ```sh
-./run-gta6-linux.sh \
+./scripts/run-gta6-linux.sh \
   --game-dir "$HOME/Games/GTA6" \
   --proton "$HOME/.var/app/com.valvesoftware.Steam/data/Steam/steamapps/common/Proton 11.0" \
   --compiler "$HOME/WindowsSDK/x64/d3dcompiler_47.dll" \
@@ -241,7 +241,7 @@ backtick escapes or negated character classes report an error. Unknown profile n
 Run it once with the speed switches on and once with them off, in the same place: the pair is what lets us add a
 profile for your card to `gpu-profiles.json`. Reports are kept in `%LOCALAPPDATA%\leonida\reports`.
 
-`shot-run.ps1` runs the game unattended and takes frame shots (`-ShotAt`, with `-Keys` to get through the menus) into
+`scripts\shot-run.ps1` runs the game unattended and takes frame shots (`-ShotAt`, with `-Keys` to get through the menus) into
 `%LOCALAPPDATA%\leonida\shots`. Shots come from your game: keep them on your PC.
 
 If the GPU driver crashes while building one shader's pipeline, `LEONIDA_SKIP_PIPELINES=<16-digit shader hash>` keeps

@@ -26,7 +26,7 @@ and reuses the snapshot for every wave. Unsupported forms are refused before rep
 inherits the existing readable-source state contract of the indirect path; refreshing a CPU
 shadow is not proof of a native resource-state transition.
 
-Validation so far: 205 native shader tests pass (two pre-existing ignored), the focused CPU
+Validation so far: 206 native shader tests pass (two pre-existing ignored), the focused CPU
 emission tests pass, and Microsoft DXIL validation accepts six authored examples, including
 different wave loops, early returns, a guarded loop, and store/load ordering across halves.
 The emitted half-swap example contains all four original memory waits as synchronization
@@ -50,7 +50,8 @@ The pinned full-corpus feature comparison reconciled 26,148 program identities. 
 switch off, all 25,754 emitted outputs were byte-identical and the same 394 programs were
 refused. With it on, every existing output remained identical, one additional program
 emitted and passed Microsoft DXIL validation, and no new refusal appeared. The integrated
-Windows workspace passed Clippy with all targets/features and warnings denied.
+Windows workspace passed both default and all-features Clippy with all targets and warnings
+denied after integrating current main.
 
 A bounded opening-cutscene run created the new native pipeline, and its emitted bytes
 matched the SDK-validated corpus output exactly. A private observation at the second world

@@ -3,7 +3,7 @@
 # per shot, the frame's commands (events.txt), the card's clock (stamps.txt) and the picture each
 # pass left (snap-*.png). They come from your game: keep them on your PC, never post them.
 #
-#   powershell -ExecutionPolicy Bypass -File .\shot-run.ps1 -Keys '30:Enter,35:Enter' -ShotAt '300,600'
+#   powershell -ExecutionPolicy Bypass -File .\scripts\shot-run.ps1 -Keys '30:Enter,35:Enter' -ShotAt '300,600'
 #
 # -Keys      LEONIDA_KEYS: <seconds>:<key>,... pressed after start, to get from the menus into play
 # -ShotAt    frames to shoot, counted from the first frame of 500 draws or more (the world)
@@ -18,14 +18,15 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-. (Join-Path $PSScriptRoot 'scripts\leonida-settings.ps1')
+$repoRoot = Split-Path -Parent $PSScriptRoot
+. (Join-Path $PSScriptRoot 'leonida-settings.ps1')
 $environmentBefore = Save-LeonidaEnvironment
 
-Push-Location $PSScriptRoot
+Push-Location $repoRoot
 try {
     cargo build --profile diag -p leonida --features diagnostics
     if ($LASTEXITCODE -ne 0) { throw "cargo build failed (exit $LASTEXITCODE); is leonida.exe still running?" }
-    $exe = Join-Path $PSScriptRoot 'target\diag\leonida.exe'
+    $exe = Join-Path $repoRoot 'target\diag\leonida.exe'
 
     $line = & $exe config | Where-Object { $_ -match '^game_dir\s*:' } | Select-Object -First 1
     if ($line -notmatch '^game_dir\s*:\s*(.+?)\s*$' -or $Matches[1] -match '\(not set\)|\(does not exist\)') {
