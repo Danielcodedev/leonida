@@ -5,7 +5,7 @@
 //! (unless `LEONIDA_LATE_WAIT=1`, see [`late`]);
 //! overlap them with per-submission fences once more than clears run.
 
-use crate::readback::{Access as ReadBackAccess, ReadBacks, join_ranges, touches};
+use crate::readback::{Access as ReadBackAccess, ReadBacks, Segments, join_ranges, touches};
 
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -2579,6 +2579,8 @@ type Declared = (std::sync::Arc<crate::shadow::Shadow>, Vec<(usize, usize)>);
 struct Sent {
     /// Its number among the submissions started.
     number: u64,
+    /// First ordered occurrence still in flight; dependency prefixes landed.
+    first_run: usize,
     card: Option<CardPlan>,
     back: Vec<Declared>,
     /// Destinations of texture readbacks, copied before completion is signalled.
@@ -2594,11 +2596,25 @@ struct Flight {
     number: u64,
     /// The value signalled on the host's fence behind it.
     fence: u64,
+    /// All original objects stay alive: a list can occur in prefix and tail.
     lists: Vec<crate::list::Detached>,
+    /// Only the tail still in flight: prefix readbacks must not land twice.
     order: Vec<usize>,
+    /// When split, all original occurrences whose owned lists remain held.
+    recycle_order: Option<Vec<usize>>,
     card: Option<CardPlan>,
     back: Vec<Declared>,
     read_backs: ReadBacks,
+}
+
+impl Flight {
+    fn retained_len(&self) -> usize {
+        self.recycle_order
+            .as_ref()
+            .unwrap_or(&self.order)
+            .len()
+            .max(1)
+    }
 }
 
 /// One thing in the line of what waits for the card, in order.
@@ -3785,18 +3801,40 @@ pub(crate) fn readback_order() -> bool {
 fn pending_read_backs(runs: &[&HostList]) -> ReadBacks {
     let mut pending = ReadBacks::default();
     for list in runs {
-        let deferred = list.deferred();
-        pending.extend(deferred.texture_backs.iter().map(crate::texback::Back::range));
-        if !readback_order() {
-            continue;
-        }
-        for (_, at, layout) in &deferred.backs {
-            if !pending.rows(*at, *layout) {
-                fail(format_args!("texture readback destination range overflow"));
-            }
-        }
+        add_read_backs(&list.deferred(), &mut pending);
     }
     pending
+}
+
+fn add_read_backs(deferred: &Deferred, pending: &mut ReadBacks) {
+    pending.extend(
+        deferred
+            .texture_backs
+            .iter()
+            .map(crate::texback::Back::range),
+    );
+    if !readback_order() {
+        return;
+    }
+    for (_, at, layout) in &deferred.backs {
+        if !pending.rows(*at, *layout) {
+            fail(format_args!("texture readback destination range overflow"));
+        }
+    }
+}
+
+/// With readback ordering enabled, plan after queue joining, before any
+/// CPU preparation. One lock at a time handles repeated list occurrences.
+/// The disabled path does not inspect deferred steps or split the batch.
+fn readback_segments(runs: &[&HostList]) -> Vec<usize> {
+    Segments::plan(readback_order(), runs.len(), |segments| {
+        for list in runs {
+            let deferred = list.deferred();
+            segments.push(deferred.copies.iter().map(Step::readback_access), |pending| {
+                add_read_backs(&deferred, pending);
+            });
+        }
+    })
 }
 
 /// After `list` has run: the texels its read-backs copied into host
@@ -5098,7 +5136,7 @@ impl Host {
                     if let Some(card) = flight.card {
                         self.card_done(card);
                     }
-                    landed.push((flight.lists, flight.order));
+                    landed.push((flight.lists, flight.recycle_order.unwrap_or(flight.order)));
                 }
                 Late::Write(at, what, bytes) => what.write(at as *mut u8, bytes),
                 Late::Signal(fence, value) => crate::fence::set(fence as crate::object::This, value),
@@ -5133,7 +5171,7 @@ impl Host {
             let mut ranges = Vec::new();
             for item in items.iter() {
                 if let Late::Run(flight) = item {
-                    *lists += flight.order.len().max(1);
+                    *lists += flight.retained_len();
                     ranges.extend(flight.back.iter().flat_map(|(_, r)| r.iter().copied()));
                     read_backs.extend(flight.read_backs.ranges().iter().copied());
                 }
@@ -5319,7 +5357,7 @@ impl Host {
     /// the air, at the next point where what they do can be observed
     /// ([`late`] lists those points); their host lists are reset and kept
     /// for reuse then, as a queue does for the lists it ran.
-    pub(crate) fn execute_late(&self, lists: Vec<crate::list::Detached>, order: Vec<usize>) {
+    pub(crate) fn execute_late(&self, lists: Vec<crate::list::Detached>, mut order: Vec<usize>) {
         if order.is_empty() {
             crate::list::recycle(lists, &order);
             return;
@@ -5335,6 +5373,13 @@ impl Host {
             return;
         };
         let told = !sent.writes.is_empty();
+        let retained = order.len();
+        let recycle_order = if sent.first_run == 0 {
+            None
+        } else {
+            let tail = order[sent.first_run..].to_vec();
+            Some(std::mem::replace(&mut order, tail))
+        };
         let most = {
             let mut line = line();
             let Line { line: items, written, read_backs, lists: flying, target, .. } = &mut *line;
@@ -5346,13 +5391,14 @@ impl Host {
                     .chain(sent.read_backs.ranges().iter().copied()),
             );
             read_backs.extend(sent.read_backs.ranges().iter().copied());
-            *flying += order.len();
+            *flying += retained;
             *target = *submitted;
             items.push(Late::Run(Flight {
                 number: sent.number,
                 fence: *target,
                 lists,
                 order,
+                recycle_order,
                 card: sent.card,
                 back: sent.back,
                 read_backs: sent.read_backs,
@@ -5386,6 +5432,7 @@ impl Host {
         let Some((submitted, sent)) = self.submit(&[list], true) else {
             return 0;
         };
+        debug_assert_eq!(sent.first_run, 0);
         let number = sent.number;
         {
             let mut line = line();
@@ -5405,6 +5452,7 @@ impl Host {
                 fence: *target,
                 lists: Vec::new(),
                 order: Vec::new(),
+                recycle_order: None,
                 card: sent.card,
                 back: sent.back,
                 read_backs: sent.read_backs,
@@ -5547,7 +5595,7 @@ impl Host {
                         if let Some(card) = flight.card {
                             self.card_done(card);
                         }
-                        landed.push((flight.lists, flight.order));
+                        landed.push((flight.lists, flight.recycle_order.unwrap_or(flight.order)));
                     }
                     Late::Write(at, what, bytes) => what.write(at as *mut u8, bytes),
                     Late::Signal(fence, value) => crate::fence::set(fence as crate::object::This, value),
@@ -5576,23 +5624,61 @@ impl Host {
     /// [`Host::execute_late`]: the lists are prepared and sent, and what is
     /// to be done once they have run comes back with the submission lock
     /// still held.
-    fn submit<'a>(&'a self, runs: &[&HostList], late: bool) -> Option<(std::sync::MutexGuard<'a, u64>, Sent)> {
+    fn submit<'a>(
+        &'a self,
+        runs: &[&HostList],
+        late: bool,
+    ) -> Option<(std::sync::MutexGuard<'a, u64>, Sent)> {
         #[cfg(feature = "diagnostics")]
-        let called = std::time::Instant::now();
+        let mut called = std::time::Instant::now();
+        // Hold this across all segments: another submitter must not prepare
+        // snapshots or overwrite shared card results between a producer
+        // landing and its dependent CPU preparation.
+        let mut submitted = self.submitted.lock().unwrap_or_else(|e| e.into_inner());
+        let mut first = 0;
+        for end in readback_segments(runs) {
+            let tail = end == runs.len();
+            let sent = self.submit_segment(
+                &runs[first..end],
+                late && tail,
+                &mut submitted,
+                #[cfg(feature = "diagnostics")]
+                called,
+            );
+            if let Some(mut sent) = sent {
+                sent.first_run = first;
+                return Some((submitted, sent));
+            }
+            first = end;
+            #[cfg(feature = "diagnostics")]
+            {
+                called = std::time::Instant::now();
+            }
+        }
+        None
+    }
+
+    /// Prepare and run one dependency-free segment. Every prefix uses the
+    /// complete synchronous landing path before a fresh Batch/CardPlan is
+    /// made for its consumer; only the final segment may stay in flight.
+    fn submit_segment(
+        &self,
+        runs: &[&HostList],
+        late: bool,
+        submitted: &mut u64,
+        #[cfg(feature = "diagnostics")] called: std::time::Instant,
+    ) -> Option<Sent> {
         #[cfg(feature = "diagnostics")]
         crate::copystat::submission_begins();
         #[cfg(feature = "diagnostics")]
         crate::profile::seen(crate::profile::Seen::Submit);
-        // One submission at a time from preparation to copy-back: snapshots
-        // and the ranges shaders write are per host copy, not per submission.
-        let mut submitted = self.submitted.lock().unwrap_or_else(|e| e.into_inner());
         let was_working = working(true);
         submitting(1, runs.len());
         // Flights in the air ([`late`]): a submission that is waited for
         // settles them first, one sent ahead only if preparing it reads
         // what they write.
         if !late {
-            self.settle(&mut submitted, WHY_SYNC);
+            self.settle(submitted, WHY_SYNC);
         } else if let Some(why) = late_blocked(runs) {
             if relay_exact() && why == WHY_READ {
                 // Only until the flights that may write what is read have
@@ -5601,7 +5687,7 @@ impl Host {
                     blocked_by(&line.written, &line.read_backs, runs, false).is_none()
                 });
             } else {
-                self.settle(&mut submitted, why);
+                self.settle(submitted, why);
             }
         }
         // Descriptors the title copied into placed heaps directly, before
@@ -5619,7 +5705,7 @@ impl Host {
         } else if late_free_present() && now_ms() > SWEPT.load(Ordering::Relaxed) + 1500 {
             // With the present sent ahead nothing else brings a moment
             // with nothing in the air: one is made for the sweep.
-            self.settle(&mut submitted, WHY_SYNC);
+            self.settle(submitted, WHY_SYNC);
             sweep();
             SWEPT.store(now_ms(), Ordering::Relaxed);
         }
@@ -5667,13 +5753,13 @@ impl Host {
             // title memory, which other copies of it must see.
             if behind && stale_under_flights(runs) {
                 let settling = std::time::Instant::now();
-                self.settle(&mut submitted, WHY_STALE);
+                self.settle(submitted, WHY_STALE);
                 settled += settling.elapsed();
                 crate::watch::ask_once(&ranges);
             }
         } else if behind && stale_under_flights(runs) {
             let settling = std::time::Instant::now();
-            self.settle(&mut submitted, WHY_STALE);
+            self.settle(submitted, WHY_STALE);
             settled += settling.elapsed();
         }
         for list in runs {
@@ -5702,7 +5788,7 @@ impl Host {
         let flown = late && relay();
         if flown && self.card_results_low() {
             let settling = std::time::Instant::now();
-            self.settle(&mut submitted, WHY_MOST);
+            self.settle(submitted, WHY_MOST);
             settled += settling.elapsed();
         }
         let card = self.card_before(runs, flown, *submitted);
@@ -5730,13 +5816,14 @@ impl Host {
             crate::copystat::submission_ends(lock);
             let sent = Sent {
                 number: this_submission,
+                first_run: 0,
                 card,
                 back,
                 read_backs,
                 writes,
             };
             working(was_working);
-            return Some((submitted, sent));
+            return Some(sent);
         }
         // Diagnostics: each list on its own, timed (`LEONIDA_GPU_TIMING`).
         #[cfg(feature = "diagnostics")]
@@ -5840,7 +5927,7 @@ impl Host {
         // For copies in the card's memory the compare has run there: the
         // pieces that differ are fetched and merged.
         if let Some(card) = &card {
-            self.card_back(card, &mut submitted, &mut std::collections::HashSet::new());
+            self.card_back(card, submitted, &mut std::collections::HashSet::new());
         }
         let back = declared_writes(runs);
         hand_back(&back);
@@ -9430,25 +9517,59 @@ void main() {
 /// LEONIDA_D3D12_WARP=1 LEONIDA_LATE_WAIT=3
 /// LEONIDA_RELAY=0 (also 1 and 2), with diagnostics and one test thread.
 /// A hardware adapter requires LEONIDA_TEST_READBACK_HARDWARE=1 instead of WARP.
-/// No device is created without explicit test and adapter opt-ins. This tests separate
-/// submissions; dependencies inside one submission need command-list splitting.
+/// No device is created without explicit test and adapter opt-ins. Covers
+/// separate submissions and dependent lists in one synchronous or late call.
 #[cfg(all(test, feature = "diagnostics"))]
 mod readback_order_tests {
     use super::*;
 
     static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+    #[derive(Clone, Copy)]
+    enum Delivery {
+        Separate,
+        SameSync,
+        SameLate,
+        Overwrite,
+        Repeated,
+    }
+
     #[test]
     fn later_submission_copies_texture_readback_after_completion() {
-        later_submission_reads_texture_readback(false);
+        submission_reads_texture_readback(false, Delivery::Separate);
     }
 
     #[test]
     fn later_submission_host_reads_texture_readback_after_completion() {
-        later_submission_reads_texture_readback(true);
+        submission_reads_texture_readback(true, Delivery::Separate);
     }
 
-    fn later_submission_reads_texture_readback(host_read: bool) {
+    #[test]
+    fn same_submission_copies_texture_readback_synchronously() {
+        submission_reads_texture_readback(false, Delivery::SameSync);
+    }
+
+    #[test]
+    fn same_submission_copies_texture_readback_asynchronously() {
+        submission_reads_texture_readback(false, Delivery::SameLate);
+    }
+
+    #[test]
+    fn same_submission_host_reads_texture_readback() {
+        submission_reads_texture_readback(true, Delivery::SameLate);
+    }
+
+    #[test]
+    fn completed_prefix_readback_does_not_land_again_over_tail_write() {
+        submission_reads_texture_readback(false, Delivery::Overwrite);
+    }
+
+    #[test]
+    fn repeated_lists_keep_their_execution_and_landing_order() {
+        submission_reads_texture_readback(false, Delivery::Repeated);
+    }
+
+    fn submission_reads_texture_readback(host_read: bool, delivery: Delivery) {
         let hardware = std::env::var("LEONIDA_TEST_READBACK_HARDWARE").as_deref() == Ok("1");
         if std::env::var("LEONIDA_TEST_READBACK_ORDER").as_deref() != Ok("1")
             || (!hardware && std::env::var("LEONIDA_D3D12_WARP").as_deref() != Ok("1"))
@@ -9465,19 +9586,27 @@ mod readback_order_tests {
             .as_ref()
             .and_then(|a| unsafe { a.GetDesc1() }.ok())
             .is_some_and(|d| d.Flags & DXGI_ADAPTER_FLAG_SOFTWARE.0 as u32 != 0);
-        assert!(software || hardware, "hardware execution was not explicitly requested");
+        assert!(
+            software || hardware,
+            "hardware execution was not explicitly requested"
+        );
         assert!(
             late(),
             "readback order test requires asynchronous submissions"
         );
-        assert!(late_most() > 1, "producer must remain in flight for this test");
+        assert!(
+            late_most() > 1,
+            "producer must remain in flight for this test"
+        );
         assert!(
             fill_ahead::on(),
             "exercise the default speculative-read path"
         );
         settle_now(WHY_SYNC);
 
-        let mut title = Box::new([0u32; 2]);
+        let same_call = !matches!(delivery, Delivery::Separate);
+        let overwrite = matches!(delivery, Delivery::Overwrite | Delivery::Repeated);
+        let mut title = Box::new([0u32, 0, 91, 0]);
         let source = title.as_mut_ptr().cast::<u8>();
         // SAFETY: the second dword of this allocation, alive through settling.
         let destination = unsafe { source.add(4) };
@@ -9555,22 +9684,23 @@ mod readback_order_tests {
             producer
                 .list
                 .CopyTextureRegion(&rows(&back), 0, 0, 0, &whole, None);
+            // Reusing the same closed list is legal in the repeated case.
+            producer.list.ResourceBarrier(&[transition(
+                &texture,
+                D3D12_RESOURCE_STATE_COPY_SOURCE,
+                D3D12_RESOURCE_STATE_COPY_DEST,
+            )]);
         }
         producer.defer_read_back(back, source, [4, 1, 256]);
+        if same_call {
+            producer.defer_write(source.wrapping_add(12), crate::queue::Written::Value(17), 4);
+        }
         producer.close();
 
-        // Hold the GPU before the first submission. Release only after the
-        // consumer either enters the real dependency wait or has already
-        // copied stale bytes (the old bug). No elapsed-time guess decides
-        // which happened; the deadline only prevents a broken test hanging.
-        // SAFETY: a fence owned by the test, signalled by the coordinator.
-        let gate: ID3D12Fence = unsafe {
-            host.device
-                .CreateFence(0, D3D12_FENCE_FLAG_NONE)
-                .expect("test gate")
-        };
         let consumer = host.new_list().expect("consumer list");
         let observed_value = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let completion_value = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let repeated_values = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         if host_read {
             let at = source as usize;
             let result = observed_value.clone();
@@ -9582,38 +9712,92 @@ mod readback_order_tests {
         } else {
             consumer.defer_copy(destination, source, 4);
         }
+        if matches!(delivery, Delivery::Repeated) {
+            let at = destination as usize;
+            let result = repeated_values.clone();
+            consumer.defer_title_read(at, 4, move || {
+                // SAFETY: the copied dword stays live through every occurrence.
+                result.lock().unwrap().push(unsafe { (at as *const u32).read() });
+            });
+        }
+        if same_call {
+            let at = source.wrapping_add(12) as usize;
+            let result = completion_value.clone();
+            consumer.defer_title_read(at, 4, move || {
+                // SAFETY: the test's completion dword stays live through settling.
+                result.store(unsafe { (at as *const u32).read() }, Ordering::Release);
+            });
+        }
+        if overwrite {
+            consumer.defer_copy(source, source.wrapping_add(8), 4);
+        }
         let (copied, observed) = std::sync::mpsc::channel();
         consumer.defer_host(move || {
             let _ = copied.send(());
         });
         consumer.close();
-        let before_wait = LATE_STATS[WHY_READ].load(Ordering::Relaxed);
-        // SAFETY: the gate will be signalled independently of this queue.
-        unsafe { host.queue.Wait(&gate, 1).expect("hold first submission") };
-        let coordinator = std::thread::spawn(move || {
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
-            let reason = loop {
-                if LATE_STATS[WHY_READ].load(Ordering::Relaxed) != before_wait {
-                    break "dependency wait";
-                }
-                if observed.try_recv().is_ok() {
-                    break "copy before completion";
-                }
-                if std::time::Instant::now() >= deadline {
-                    break "deadline";
-                }
-                std::thread::yield_now();
-            };
-            // SAFETY: release the test's gate even if its deadline expired.
-            unsafe { gate.Signal(1).expect("release test gate") };
-            reason
-        });
-        host.execute_late(vec![crate::list::Detached::for_test(producer)], vec![0]);
-        host.execute_late(vec![crate::list::Detached::for_test(consumer)], vec![0]);
+        let reason = match delivery {
+            Delivery::Separate => {
+                // Release the GPU when the consumer either waits for its
+                // dependency or has already read stale bytes. Time only
+                // bounds the test; it does not decide correctness.
+                // SAFETY: a fence owned and signalled by the test.
+                let gate: ID3D12Fence = unsafe {
+                    host.device
+                        .CreateFence(0, D3D12_FENCE_FLAG_NONE)
+                        .expect("test gate")
+                };
+                let before_wait = LATE_STATS[WHY_READ].load(Ordering::Relaxed);
+                // SAFETY: another thread signals the gate independently.
+                unsafe { host.queue.Wait(&gate, 1).expect("hold first submission") };
+                let coordinator = std::thread::spawn(move || {
+                    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+                    let reason = loop {
+                        if LATE_STATS[WHY_READ].load(Ordering::Relaxed) != before_wait {
+                            break "dependency wait";
+                        }
+                        if observed.try_recv().is_ok() {
+                            break "copy before completion";
+                        }
+                        if std::time::Instant::now() >= deadline {
+                            break "deadline";
+                        }
+                        std::thread::yield_now();
+                    };
+                    // SAFETY: release even if the failsafe deadline expired.
+                    unsafe { gate.Signal(1).expect("release test gate") };
+                    reason
+                });
+                host.execute_late(vec![crate::list::Detached::for_test(producer)], vec![0]);
+                host.execute_late(vec![crate::list::Detached::for_test(consumer)], vec![0]);
+                Some(coordinator.join().expect("test coordinator"))
+            }
+            Delivery::SameSync => {
+                host.execute(&[&producer, &consumer]);
+                None
+            }
+            Delivery::SameLate | Delivery::Overwrite | Delivery::Repeated => {
+                let order = if matches!(delivery, Delivery::Repeated) {
+                    vec![0, 1, 0, 1]
+                } else {
+                    vec![0, 1]
+                };
+                host.execute_late(
+                    vec![
+                        crate::list::Detached::for_test(producer),
+                        crate::list::Detached::for_test(consumer),
+                    ],
+                    order,
+                );
+                None
+            }
+        };
         settle_now(WHY_SYNC);
-        let reason = coordinator.join().expect("test coordinator");
-        assert_ne!(reason, "deadline", "consumer made no observable progress");
-        assert_eq!(title[0], 37, "texture readback did not land");
+        assert_eq!(
+            title[0],
+            if overwrite { 91 } else { 37 },
+            "readback landed out of order"
+        );
         let value = if host_read {
             observed_value.load(Ordering::Acquire)
         } else {
@@ -9623,6 +9807,19 @@ mod readback_order_tests {
             value, 37,
             "later submission read before readback completion"
         );
-        assert_eq!(reason, "dependency wait");
+        if same_call {
+            assert_eq!(
+                completion_value.load(Ordering::Acquire),
+                17,
+                "prefix completion write"
+            );
+        }
+        if matches!(delivery, Delivery::Repeated) {
+            assert_eq!(*repeated_values.lock().unwrap(), [37, 37]);
+        }
+        if let Some(reason) = reason {
+            assert_ne!(reason, "deadline", "consumer made no observable progress");
+            assert_eq!(reason, "dependency wait");
+        }
     }
 }
