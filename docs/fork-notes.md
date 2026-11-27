@@ -493,45 +493,6 @@ cargo test -p leonida-gpu --lib --release --locked `
 cargo test -p leonida-gpu --lib --release --locked `
   bench_single_record_clamp -- --ignored --nocapture --test-threads=1
 ```
-**Texture refreshes wait for unrelated remaps (P-4).** In an opening
-scene run on `0a1a17b`, base profile, Ryzen 9 7900X and RTX 4070 Ti SUPER
-(621.40), the median measured frame window was 1,706 ms. One window
-spent 1,038 ms per frame waiting for the mapping lock across texture
-refresh threads. A refresh needs its own mapped bytes to stay put, while
-the current lock also makes it wait for changes elsewhere in the title's
-address space. A remap can temporarily unmap a whole view to replace one
-page, so any narrower lock has to cover the full span of that view.
-`LEONIDA_TEXTURE_RANGE_LOCK=1` enables range protection for texture
-refreshes. It keeps overlapping views locked through the remap and its
-notifications. Reads of unrelated ranges can continue, unless they share
-a lock in the fixed table. The switch is off by default.
-
-Series X opening-scene runs on `e8aa615` and the range-lock patch used the
-same start state and copies of the same warmed shader and pipeline caches.
-The hardware and driver were as above. Each run took 330 seconds and added
-its listed switch to `base`. FPS and frame times are the median of the
-script's windows after 170 seconds. Waits and deferred refreshes are
-medians for windows with at least 500 draws per frame in that interval.
-
-| Switch added to `base` | FPS | Frame (ms) | Mapping wait (ms/frame) | Deferred refreshes/frame |
-|---|---:|---:|---:|---:|
-| None | 0.2 | 4034.3 | 2995.4 | 0 |
-| `LEONIDA_TEXTURE_NO_WAIT=1` | 2.2 | 449.4 | 0 | 16.2 |
-| `LEONIDA_TEXTURE_RANGE_LOCK=1` | 3.2 | 307.8 | 3.8 | 0 |
-
-The existing switch used kernel reads during contention and retried some
-refreshes on later frames. Range locking kept the normal texture refresh
-path. All three runs reached the opening scene and ended without a title
-crash or device loss. The runs reached different points in the cutscene,
-so these numbers cover the sampled windows of each run. Three early
-range-lock samples had near-black centers while hundreds of pipelines
-were pending. Shorter repeats in reverse order used a more complete
-common pipeline cache and sampled from 100 to 190 seconds. The range
-lock had visible output in all eight early samples. The existing switch
-had one near-black sample. Median FPS in these shorter runs was 1.1 with
-range locking and 4.0 with the existing switch. Equivalent gameplay
-views are still needed to compare picture quality and frame rate. The
-cost of the page remaps themselves remains part of P-4.
 
 **The passes over copies in the card's memory hash a piece with 64
 threads.** The compare after a submission and the rehash after ranges go
