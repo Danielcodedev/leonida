@@ -13,9 +13,13 @@ use crate::resource::{Memory, PAGEABLE_IIDS};
 #[cfg(windows)]
 pub(crate) mod host;
 #[cfg(any(windows, test))]
+mod records;
+#[cfg(any(windows, test))]
 pub(crate) mod constant;
 #[cfg(all(windows, test))]
 mod constant_tests;
+#[cfg(all(windows, test))]
+mod sync_tests;
 
 const HEAP_IIDS: [Iid; 4] = [
     guid(
@@ -98,7 +102,10 @@ impl Heap {
         self.host
             .get_or_init(|| {
                 let step = u64::from(increment(self.desc.kind)?);
-                let h = host::HostHeap::new(self.samplers(), self.desc.count)?;
+                let mut h = host::HostHeap::new(self.samplers(), self.desc.count)?;
+                if self.written.is_some() {
+                    h.track_raw_records();
+                }
                 for i in pending.drain(..) {
                     h.mirror(i, self.start + u64::from(i) * step, false);
                 }
@@ -185,11 +192,16 @@ fn mirror(handle: u64) {
 /// `LEONIDA_HEAP_SYNC=0`: not done, as before. [`SYNCED`] counts.
 #[cfg(windows)]
 pub(crate) fn sync_heaps() {
-    use std::sync::atomic::Ordering::Relaxed;
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     if !*ON.get_or_init(|| std::env::var_os("LEONIDA_HEAP_SYNC").is_none_or(|v| v != "0")) {
         return;
     }
+    sync_heaps_with_page(page_at_once());
+}
+
+#[cfg(windows)]
+fn sync_heaps_with_page(page_at_once: bool) {
+    use std::sync::atomic::Ordering::Relaxed;
     let started = std::time::Instant::now();
     let (mut pages, mut looked, mut mirrored) = (0u64, 0u64, 0u64);
     let mut page_bytes: Vec<u8> = Vec::new();
@@ -222,7 +234,7 @@ pub(crate) fn sync_heaps() {
                     // The page's records in one go, under one lock
                     // (`HostHeap::mirror_copied_page`); one by one below
                     // with `LEONIDA_HEAP_SYNC_PAGE=0`.
-                    let slots = if page_at_once() {
+                    let slots = if page_at_once {
                         let (seen, made) = host.mirror_copied_page(slots, (start, step), from, &page_bytes);
                         looked += seen;
                         mirrored += made;
