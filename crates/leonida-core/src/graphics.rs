@@ -36,6 +36,7 @@ pub struct GraphicsSettings {
     pub window_upload: Option<bool>,
     pub card_windows_mb: Option<u64>,
     pub texture_room_percent: Option<u8>,
+    pub texture_stage_mb: Option<u64>,
 }
 
 impl GraphicsSettings {
@@ -52,6 +53,10 @@ impl GraphicsSettings {
             self.texture_room_percent
                 .is_none_or(|n| (50..=97).contains(&n)),
             "[graphics].texture_room_percent must be between 50 and 97"
+        );
+        ensure!(
+            self.texture_stage_mb.is_none_or(|n| (64..=4096).contains(&n)),
+            "[graphics].texture_stage_mb must be between 64 and 4096"
         );
         if let Some(names) = &self.profiles {
             ensure!(
@@ -85,6 +90,7 @@ impl GraphicsSettings {
                 "TEXTURE_ROOM_PERCENT",
                 self.texture_room_percent.map(u64::from),
             ),
+            ("TEXTURE_STAGE_MB", self.texture_stage_mb),
         ] {
             if let Some(value) = value {
                 values.insert(format!("LEONIDA_{name}"), value.to_string());
@@ -577,6 +583,42 @@ mod tests {
         assert_eq!(plan.settings["LEONIDA_CARD_WINDOWS_MB"], "3072");
         assert_eq!(plan.settings["LEONIDA_WINDOW_UPLOAD"], "1");
         assert_eq!(plan.settings["LEONIDA_TEXTURE_ROOM_PERCENT"], "70");
+    }
+
+    #[test]
+    fn texture_stage_mb_is_validated_and_mapped() {
+        let settings = GraphicsSettings {
+            texture_stage_mb: Some(512),
+            ..Default::default()
+        };
+        let plan = resolve(&settings, gpu(), &env(&[]), None).unwrap();
+        assert_eq!(plan.settings["LEONIDA_TEXTURE_STAGE_MB"], "512");
+        assert_eq!(plan.sources["LEONIDA_TEXTURE_STAGE_MB"], "config");
+
+        for bad in [0, 32, 5000] {
+            let settings = GraphicsSettings {
+                texture_stage_mb: Some(bad),
+                ..Default::default()
+            };
+            assert!(
+                resolve(&settings, gpu(), &env(&[]), None).is_err(),
+                "{bad} must be refused"
+            );
+        }
+
+        let settings = GraphicsSettings {
+            texture_stage_mb: Some(512),
+            ..Default::default()
+        };
+        let plan = resolve(
+            &settings,
+            gpu(),
+            &env(&[("LEONIDA_TEXTURE_STAGE_MB", "256")]),
+            None,
+        )
+        .unwrap();
+        assert_eq!(plan.settings["LEONIDA_TEXTURE_STAGE_MB"], "256");
+        assert_eq!(plan.sources["LEONIDA_TEXTURE_STAGE_MB"], "environment");
     }
 
     #[test]
