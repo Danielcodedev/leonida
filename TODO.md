@@ -14,6 +14,8 @@ The goal: a console-like experience on PC. The game starts straight into play, h
 - **Numbers** come from [docs/fork-notes.md](docs/fork-notes.md) unless a row says otherwise, and most were measured
   on one RTX 4070. Measure on your machine before and after a change, and put both figures in the pull request.
   Post figures, never log files: logs can quote game data (see [docs/asset-policy.md](docs/asset-policy.md)).
+- **Focus right now: cutscenes.** They are the first thing a player sees. R-9 (they look right) and P-9 (they hold
+  30 fps) come first, and fixes ported from other forks (UP-2 to UP-4) that help them are welcome.
 
 ## Rendering: looks like the console
 
@@ -27,6 +29,7 @@ The goal: a console-like experience on PC. The game starts straight into play, h
 | R-6 | Render-target metadata planes are not handled. | `leonida-formats`, `leonida-gpu` | game, GPU |
 | R-7 | Shaders that don't translate drop their draws. Count them again on this tree with `leonida translate --list` (the upstream counts in the fork notes are from 2026-11-23) and work down the list. Counted 2026-11-26 in the fork notes: the 195 `GS_VoxelizeGeneric` failures drop no draws (geometry programs are never translated); the 5 `CS_TraceShadowRays_*` need view addresses by heap slot from `leonida-gpu`. | `leonida-shader` | game |
 | R-8 | Mapping pool pages in a row as one view made remaps cheaper but broke texture streaming (black or red faces, garbage in 3 of 3 runs). Find out why before trying it again; see P-4. | `leonida-hle` (`xmem`) | game, GPU |
+| R-9 | Cutscenes should look like they do on the console. Run the opening cutscene unattended with `scripts/measure-run.ps1`, look at the shots, and add each glitch you see as a new row, one fix per pull request. R-2 (the room after the cutscene) and R-3 (washed-out frames) may turn out to be part of it. | `leonida-gpu`, `leonida-shader` | game, GPU |
 
 ## Performance: a steady 30 fps
 
@@ -39,6 +42,7 @@ The goal: a console-like experience on PC. The game starts straight into play, h
 | P-5 | The title paces itself with `monitorx` / `mwaitx`, which only AMD processors have: about 280,000 emulated exceptions a second on an Intel processor. Find a cheaper way. | `leonida-loader` | game; an Intel CPU to measure |
 | P-6 | Translated shaders are too expensive: about 50 ms of a 97 ms frame are the title's own passes as translated. With every pass of the layer's gone, the first rooms would still be near 20 fps. On an RTX 3080, after #23 took the layer's own hash and compare passes from about 21 to 3.6 ms of card time a frame, the title's passes are about 95 ms of it. | `leonida-shader` | game, GPU |
 | P-8 | About 24 GB of memory is in use during play. | all | game |
+| P-9 | Cutscenes should hold 30 fps without stutter. Measure the opening cutscene with `scripts/measure-run.ps1` and write down where the frame goes. P-4's page-mapping copies already cost 32 ms of every cutscene frame, so start there. | `leonida-hle`, `leonida-gpu` | game, GPU |
 
 ## Stability
 
@@ -79,3 +83,6 @@ The goal: a console-like experience on PC. The game starts straight into play, h
 | ID | Task | Where | Needs |
 |----|------|-------|-------|
 | UP-1 | Upstream VIctory has 265 commits this fork lacks (counted on 2026-11-25 with `git cherry`). Go through them and cherry-pick the useful ones: `git remote add victory https://github.com/Marvisak/VIctory.git`, `git fetch victory`, `git cherry-pick <hash>`, then `scripts/rename-from-upstream.ps1` and `cargo check --workspace --all-targets`. Candidates by title, none tried yet: `4ab20fc` (indirect budget, C-2), `534e1dd` (AVX2 check), `e9cb14a` (missing title DLLs message), `42961e8` (warns when GPU hang settings would freeze the PC), `a3acc87` (checks the required startup archive). Many of the GPU commits touch code victory-gta6 changed, so expect conflicts there. | whole tree | - |
+| UP-2 | [Belobug/VIctory-Belobug-AMD](https://github.com/Belobug/VIctory-Belobug-AMD) (branch `a-publier`, GPL-3.0) ranks first among public forks on [PortWatch](https://portwatch-vi.xyz/) at about 22 fps, but is tuned for AMD only. Go through its merged pull requests and commits and port the useful ones, one (or a few related) per pull request, with the hash or pull request link in the description. Run `scripts/rename-from-upstream.ps1` after each (it uses `VICTORY_*` names). A switch that only helps AMD goes into an AMD profile in `gpu-profiles.json`, not `base`; check every port on an NVIDIA card too before calling it done. Its open pull requests (ports of VIctory #2012, #2825, #3053 and others) are candidates once merged there. | whole tree | game, GPU |
+| UP-3 | [stellarr-studio/kelvaroq](https://github.com/stellarr-studio/kelvaroq) (GPL-3.0, `research/` GPL-2.0-or-later) is PortWatch's best NVIDIA-only fork (about 10 fps, a 36-minute run without a crash on an RTX 4090). Its work is a numbered patch series against pinned upstream revisions, not plain commits, so port it patch by patch. Most patches are off by default there: measure each one before turning it on, and keep NVIDIA-only switches in an NVIDIA profile. Leave out its Python scripts (the policy forbids them) and its launcher. | whole tree | game, GPU |
+| UP-4 | Other public forks ranked on PortWatch: [avatarmanz/VIctory-7900XTX](https://github.com/avatarmanz/VIctory-7900XTX) (AMD, about 16 fps) and [DexNom/VIctory](https://github.com/DexNom/VIctory) (AMD, the best picture score, 0.85). Both GPL-3.0. Look for rendering fixes first, since they help R-9. Same rules as UP-2. | whole tree | game, GPU |
