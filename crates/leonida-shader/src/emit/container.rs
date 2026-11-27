@@ -116,6 +116,63 @@ pub(crate) fn signature(elements: &[SigElement], input: bool) -> Vec<u8> {
     out
 }
 
+/// The start register, start column and interpolation mode `PSV0` (runtime
+/// info version 1 or later) gives each allocated element of signature
+/// `which` (0 inputs, 1 outputs, 2 patch constants or primitives); `None`
+/// if the part lists no signature elements or is cut short.
+pub(crate) fn psv_modes(psv: &[u8], which: usize) -> Option<Vec<(u32, u8, u8)>> {
+    let u32_at = |at: usize| -> Option<usize> {
+        let b = psv.get(at..at.checked_add(4)?)?;
+        Some(u32::from_le_bytes(b.try_into().ok()?) as usize)
+    };
+    let info = u32_at(0)?;
+    if info < 36 || which > 2 {
+        return None;
+    }
+    let counts: Vec<usize> = psv.get(4 + 28..4 + 31)?.iter().map(|&n| n.into()).collect();
+    if counts.iter().sum::<usize>() == 0 {
+        return None;
+    }
+    let mut at = 4 + info;
+    let resources = u32_at(at)?;
+    at += 4;
+    if resources > 0 {
+        at += 4 + u32_at(at)?.checked_mul(resources)?;
+    }
+    at += 4 + u32_at(at)?;
+    at += 4 + 4 * u32_at(at)?;
+    let size = u32_at(at)?;
+    if size < 14 {
+        return None;
+    }
+    let first = at + 4 + size * counts[..which].iter().sum::<usize>();
+    let mut out = Vec::new();
+    for k in 0..counts[which] {
+        let e = psv.get(first + size * k..first + size * k + 14)?;
+        if e[10] & 0x40 != 0 {
+            out.push((u32::from(e[9]), (e[10] >> 4) & 3, e[13]));
+        }
+    }
+    Some(out)
+}
+
+/// Each element of `elements` takes the interpolation mode `PSV0` gives the
+/// element at its register and column in signature `which`, if any.
+pub(crate) fn take_modes(psv: &[u8], which: usize, elements: &mut [SigElement]) {
+    let Some(modes) = psv_modes(psv, which) else {
+        return;
+    };
+    for e in elements {
+        if let Some(&(_, _, mode)) = modes
+            .iter()
+            .find(|&&(row, col, _)| e.row == Some(row) && e.col == col)
+            && mode != 0
+        {
+            e.interp = mode;
+        }
+    }
+}
+
 /// The most a mesh shader's outputs may take, in bytes (D3D12).
 pub(crate) const MESH_OUTPUT_LIMIT: u64 = 32 * 1024;
 
@@ -445,5 +502,53 @@ mod tests {
             |row: usize| u32::from_le_bytes(part[8 + 32 * row + 4..][..4].try_into().unwrap());
         assert_eq!(name_offset(0), 8 + 64);
         assert_eq!(part[8 + 24], 0b1000);
+    }
+
+    fn psv_element(interp: u8, comp: u8, row: u32, col: u8, cols: u8) -> SigElement {
+        SigElement {
+            name: "TEXCOORD".into(),
+            index: row,
+            kind: 0,
+            comp,
+            interp,
+            row: Some(row),
+            col,
+            cols,
+            usage: (1 << cols) - 1,
+            half: false,
+        }
+    }
+
+    #[test]
+    fn elements_take_the_modes_psv0_gives_their_register() {
+        // As the console packs them: a constant float beside a constant
+        // uint, which the default table would make linear.
+        let console = [
+            psv_element(2, 9, 1, 0, 4),
+            psv_element(1, 9, 7, 0, 1),
+            psv_element(1, 5, 7, 1, 1),
+        ];
+        let part = psv(&Psv {
+            stage: 1,
+            flag: false,
+            inputs: &[],
+            outputs: &console,
+            prims: &[],
+            mesh: None,
+            geometry: None,
+            bindings: &[],
+            threads: [0; 3],
+            wave_size: None,
+        });
+        let mut ours = console.clone();
+        for e in &mut ours {
+            e.interp = if e.comp == 9 { 2 } else { 1 };
+        }
+        take_modes(&part, 0, &mut ours);
+        assert_eq!(ours[1].interp, 2);
+        take_modes(&part, 1, &mut ours);
+        assert_eq!(ours, console);
+        // A part cut short leaves the modes alone.
+        assert_eq!(psv_modes(&part[..40], 1), None);
     }
 }

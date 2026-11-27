@@ -636,6 +636,18 @@ fn emit_program(
             _ => 0,
         };
     }
+    // The console's own modes where its PSV0 lists them: the table above
+    // makes a constant float linear, splitting a register the console packed
+    // with one mode (the validator wants one per register). The stage it
+    // links with takes the same modes from its own PSV0.
+    if let Some(psv) = c.part(FourCC::PSV0) {
+        let (which, els) = if pixel {
+            (0, &mut inputs)
+        } else {
+            (1, &mut outputs)
+        };
+        container::take_modes(psv.data, which, els);
+    }
     // With a conservative depth output (SV_DepthLessEqual, GreaterEqual) DXIL
     // wants the position centroid (or per sample), as DXC declares it then.
     if pixel && outputs.iter().any(|e| matches!(e.kind, 18 | 19)) {
