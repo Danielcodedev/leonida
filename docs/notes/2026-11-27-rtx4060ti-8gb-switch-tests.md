@@ -60,5 +60,30 @@ are described here, not added. Frame figures are the title bar's:
 So how bad the picture is depends on the place: the prison yard looked whole and the robbery
 did not, at similar draw counts.
 
-Not measured: any run with all eight on, in the same place on the same day; any run after the
-warm-up; the `nvidia-8gb` profile.
+## The `nvidia-8gb` pair, after the warm-up
+
+Two more runs, same tester, same build, both during the boat mission, hand-played. The shader
+warm-up ran before the first; the second used the cache it left. The tester's download is older
+than the `nvidia-8gb` profile in the catalog, so they defined the same two switches as an opt-in
+profile in `gpu-profiles.local.json`; the second report lists `ASYNC_PRESENT` and
+`TEXTURE_STAGE_MB=512` on, with the eight `base` switches.
+
+| Run | Last minute | fps | Median frame | Longest frame | Whole run fps | Whole run median |
+|---|---|---|---|---|---|---|
+| `base` | 373 in 61.7 s | 6.0 | 148 ms | 1,087 ms | 10.9 | 34 ms |
+| `base` and `nvidia-8gb` | 350 in 61.8 s | 5.7 | 157 ms | 545 ms | 10.6 | 33 ms |
+
+- No gain on this card: the median went 148 -> 157 ms. One hand-played pair, so the 9 ms is
+  within what a rerun could move. The longest frame halved (1,087 -> 545 ms), but that is one
+  frame in a minute, so one pair doesn't make it a result. No crash report in either run.
+- On the RTX 3060 Ti 8 GB the same pair took the first room from 312-489 ms to 130 ms
+  ([the 8 GB pair note](2026-11-27-nvidia-8gb-pair.md)). That card's baseline was two to three
+  times slower, in another scene, with a Ryzen 5 5600 and 16 GB of RAM. A guess: there was more
+  to gain there. Nothing here says which difference matters.
+- So `nvidia-8gb` has helped on one of the two 8 GB cards measured, and stays opt-in.
+- The picture was the same in both runs, and the same as before the warm-up: the water drawn but
+  poorly, the boat slightly distorted, heavy stuttering. So at the boat the warm-up did not fix
+  the picture. Whether it fixes the robbery's blur was not tested.
+
+Not measured: any run with all eight on in the prison, on the same day as runs 1 to 7; the
+robbery after the warm-up.
