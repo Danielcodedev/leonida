@@ -5,6 +5,12 @@ The status summary is in [README.md](../README.md).
 
 ## Newest (2026-11-26)
 
+**`scripts/measure-run.ps1` reads frame lines under Windows PowerShell 5.1.**
+The colour codes of `stderr.log` were stripped with the `` `e `` escape,
+which only PowerShell 7 knows; under 5.1 no frame line matched and
+`summary.txt` gave `lines: 0` and `NaN` for every figure. The escape is now
+`[char]27`, the same under both.
+
 **R-7: a sampler chosen by control flow between immediate samplers.**
 40 programs (cascade shadows, terrain, `PS_TexturedLit*`,
 `PS_TexturedDeferred`, `PS_PuddleDetect`...) failed with a descriptor
