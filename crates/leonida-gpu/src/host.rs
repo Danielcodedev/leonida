@@ -3775,7 +3775,7 @@ pub(crate) fn walls_trace() -> bool {
 /// dependent submissions (`LEONIDA_READBACK_ORDER=1`; off by default).
 /// Synthetic correctness is measured; gameplay frame-time cost is not yet.
 /// With it off, keep the old texture-back ranges and speculative waits.
-fn readback_order() -> bool {
+pub(crate) fn readback_order() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
     *ON.get_or_init(|| std::env::var_os("LEONIDA_READBACK_ORDER").is_some_and(|v| v == "1"))
 }
