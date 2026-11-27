@@ -35,6 +35,40 @@ seconds and terminates on failure while submitted resources remain owned.
 
 ## Newest (2026-11-26)
 
+**Preserve null constant buffers when rebuilding descriptor tables.** A null or
+empty constant-buffer view now stays a zero-address, zero-size CBV. It allocates
+no upload scratch and schedules no copy. If a nonempty CBV's upload allocation
+fails, the fallback is also a CBV, rather than a null texture SRV. Nonempty
+uploads keep their existing byte count and 256-byte native alignment.
+
+The [DirectX resource binding specification](https://microsoft.github.io/DirectX-Specs/d3d/ResourceBinding.html#null-descriptors)
+makes a zero-sized CBV unbound and ignores its address. The old rebuilt-table
+path needlessly allocated scratch for that view, then passed its nonzero address
+with size zero. That is an allowed D3D12 representation, but vkd3d-proton's
+embedded-descriptor path turned it into a Vulkan uniform-buffer descriptor with
+zero range. Canonicalizing the null preserves D3D12 semantics and avoids that
+Proton compatibility problem; growing an empty view to 256 bytes would not.
+This is contract preservation, not a new rendering or performance mode.
+
+Five CPU tests cover original title descriptor records through the production
+upload helper, null/empty variants, no allocation or fill for them, allocation
+failure, and unchanged nonempty uploads. The original upload behavior failed
+the null allocation/descriptor regression. An additional device test uses the
+full table walker and an authored one-thread shader to check zero reads from
+three null variants and known reads from a nonempty control. All four cases
+passed locally on an RTX 5090, NVIDIA 580.173.02, Proton 11, and official
+vkd3d-proton 3.2.0 (`ec20719452e916b`), with Vulkan core/synchronization validation
+enabled and no unexpected validation errors. The runtime's deliberate validation
+activation canary is excluded. This device test skips by default in CI; to run it
+explicitly in PowerShell:
+
+```powershell
+$env:LEONIDA_TEST_NULL_CBV = '1'
+cargo test -p leonida-gpu fresh_table_null_cbvs_read_zero_on_the_device
+```
+
+No gameplay picture, stability, or frame-rate improvement is claimed by these checks.
+
 **Wait for texture readbacks before preparing dependent submissions.**
 `LEONIDA_READBACK_ORDER=1`, or the `readback-order` opt-in graphics profile,
 enables this fix. It is **off by default** until a paired
