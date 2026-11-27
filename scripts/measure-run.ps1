@@ -86,7 +86,7 @@ $since = $start.AddSeconds($From)
 $fps = @(); $ms = @(); $gpu = @(); $prep = @(); $back = @(); $draws = @(); $usual = @(); $median = @()
 $world = $null; $bad = @()
 foreach ($raw in [System.IO.File]::ReadLines((Join-Path $run 'stderr.log'))) {
-    $line = $raw -replace "`e\[[0-9;]*m", ''
+    $line = $raw -replace "$([char]27)\[[0-9;]*m", ''
     if ($line -notmatch '^(\d{4}-\d\d-\d\dT[\d:.]+)Z') { continue }
     $t = [datetime]::Parse($Matches[1], [Globalization.CultureInfo]::InvariantCulture)
     if ($line -match 'device removed|DEVICE_REMOVED|DEVICE_HUNG|panicked' -or ($line -match 'leonida_gpu::drvwatch' -and $line -notmatch 'are watched')) {
