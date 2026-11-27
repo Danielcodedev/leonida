@@ -1,4 +1,4 @@
-# Independent Wave64 groups (experimental, off by default)
+# R-7: independent Wave64 groups (experimental, off by default)
 
 `LEONIDA_WAVE64_GROUPS=1` enables an additional compute translation attempt on hosts with
 32-lane waves. An eligible original group of 128 through 1,024 threads is replayed once per
@@ -26,7 +26,7 @@ and reuses the snapshot for every wave. Unsupported forms are refused before rep
 inherits the existing readable-source state contract of the indirect path; refreshing a CPU
 shadow is not proof of a native resource-state transition.
 
-Validation so far: 204 native shader tests pass (two pre-existing ignored), the focused CPU
+Validation so far: 205 native shader tests pass (two pre-existing ignored), the focused CPU
 emission tests pass, and Microsoft DXIL validation accepts six authored examples, including
 different wave loops, early returns, a guarded loop, and store/load ordering across halves.
 The emitted half-swap example contains all four original memory waits as synchronization
@@ -45,3 +45,20 @@ frame-rate or rendering improvement is established by these authored tests.
 The original vector-store wait is `s_waitcnt_vscnt`; a vector-load wait alone does not stand
 in for it. See AMD's [RDNA 2 ISA reference](https://www.amd.com/content/dam/amd/en/documents/radeon-tech-docs/instruction-set-architectures/rdna2-shader-instruction-set-architecture.pdf)
 and Microsoft's [group synchronization contract](https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/groupmemorybarrierwithgroupsync).
+
+The pinned full-corpus feature comparison reconciled 26,148 program identities. With the
+switch off, all 25,754 emitted outputs were byte-identical and the same 394 programs were
+refused. With it on, every existing output remained identical, one additional program
+emitted and passed Microsoft DXIL validation, and no new refusal appeared. The integrated
+Windows workspace passed Clippy with all targets/features and warnings denied.
+
+A bounded opening-cutscene run created the new native pipeline, and its emitted bytes
+matched the SDK-validated corpus output exactly. A private observation at the second world
+frame offset confirmed one replay submission completed and its recording retired, but the
+sampled post-budget indirect arguments requested zero work. It therefore does not prove a
+nonzero live shader dispatch. The captured yard was populated, with rectangular character
+and clothing artifacts still visible; neither a visual improvement nor a frame-rate gain
+is claimed. Existing WSI and buffer-alignment validation categories remained. The observer
+is a private diagnostic and is not part of the feature.
+
+Native Windows behavior and a matched before/after performance run were not tested.
