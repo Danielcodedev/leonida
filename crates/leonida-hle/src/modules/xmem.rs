@@ -372,9 +372,27 @@ impl Slice {
 }
 
 #[derive(Default)]
-struct Physical {
+struct PageCatalog {
     next_page: usize,
     pages: HashMap<usize, Slice>,
+}
+
+// A page's section and index never change while it is allocated. Looking
+// them up must not wait for unrelated title views to finish remapping.
+static CATALOG: LazyLock<Mutex<PageCatalog>> = LazyLock::new(|| {
+    Mutex::new(PageCatalog {
+        // Page numbers are opaque to titles; 0 stays unused.
+        next_page: 0x10_0000,
+        ..Default::default()
+    })
+});
+
+fn catalog() -> MutexGuard<'static, PageCatalog> {
+    CATALOG.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+#[derive(Default)]
+struct Physical {
     /// Mapped views by address: their length and what they show.
     views: BTreeMap<usize, (usize, Slice)>,
     /// Where each page shows: by its section and its index there, the
@@ -385,14 +403,11 @@ struct Physical {
     shown: HashMap<(usize, usize), Vec<usize>>,
 }
 
-static PHYSICAL: LazyLock<Mutex<Physical>> = LazyLock::new(|| {
-    Mutex::new(Physical {
-        // Page numbers are opaque to titles; 0 stays unused.
-        next_page: 0x10_0000,
-        ..Default::default()
-    })
-});
+static PHYSICAL: LazyLock<Mutex<Physical>> = LazyLock::new(|| Mutex::new(Physical::default()));
 
+// When both are needed, take PHYSICAL before CATALOG. No catalog guard
+// crosses a host mapping call or a GPU notification; owned Slice snapshots
+// keep their sections alive after a concurrent free removes page numbers.
 fn physical() -> MutexGuard<'static, Physical> {
     PHYSICAL.lock().unwrap_or_else(|e| e.into_inner())
 }
@@ -445,16 +460,16 @@ pub extern "system" fn XMemAllocatePhysicalPages(
     // opened as a host heap.
     leonida_gpu::title_memory_section(handle as usize, size as u64, on_wine());
     let section = Arc::new(Section(handle));
-    let mut physical = physical();
-    let first = physical.next_page;
-    physical.next_page += n * FRAMES;
+    let mut catalog = catalog();
+    let first = catalog.next_page;
+    catalog.next_page += n * FRAMES;
     for index in 0..n {
         let slice = Slice {
             section: section.clone(),
             index,
         };
         let number = first + index * FRAMES;
-        physical.pages.insert(number, slice);
+        catalog.pages.insert(number, slice);
         // SAFETY: the title passes room for `n` page numbers.
         unsafe { pages.add(index).write(number) };
     }
@@ -471,10 +486,10 @@ pub extern "system" fn XMemFreePhysicalPages(n: usize, pages: *const usize) -> B
     if pages.is_null() {
         return 0;
     }
-    let mut physical = physical();
+    let mut catalog = catalog();
     for i in 0..n {
         // SAFETY: the title passes `n` page numbers.
-        physical.pages.remove(&unsafe { *pages.add(i) });
+        catalog.pages.remove(&unsafe { *pages.add(i) });
     }
     1
 }
@@ -524,18 +539,16 @@ impl Drop for View {
     }
 }
 
-/// The pages behind bytes `[offset, offset + len)` of `pages` (64 KiB
-/// each), as runs of consecutive slices of one section: each run's first
-/// slice and its length in pages. One look at the page table, which the
-/// title's own mapping calls share with every DirectStorage worker. `None`
-/// if a page is unknown or `pages` ends early.
-fn runs(pages: &[usize], offset: usize, len: usize) -> Option<Vec<(Slice, usize)>> {
-    let end = offset.checked_add(len)?;
-    let pages = pages.get(offset / PAGE..end.div_ceil(PAGE))?;
-    let physical = physical();
+/// Snapshot consecutive runs and the first unknown page, if any. Retain
+/// each section until its caller has mapped or written the snapshot; the
+/// catalog lock is only for lookup, never for those host calls.
+fn page_runs(pages: &[usize]) -> (Vec<(Slice, usize)>, Option<usize>) {
+    let catalog = catalog();
     let mut runs: Vec<(Slice, usize)> = Vec::new();
     for page in pages {
-        let slice = physical.pages.get(page)?;
+        let Some(slice) = catalog.pages.get(page) else {
+            return (runs, Some(*page));
+        };
         match runs.last_mut() {
             Some((first, n))
                 if Arc::ptr_eq(&first.section, &slice.section)
@@ -546,7 +559,18 @@ fn runs(pages: &[usize], offset: usize, len: usize) -> Option<Vec<(Slice, usize)
             _ => runs.push((slice.clone(), 1)),
         }
     }
-    Some(runs)
+    (runs, None)
+}
+
+/// The pages behind bytes `[offset, offset + len)` of `pages` (64 KiB
+/// each), as runs of consecutive slices of one section: each run's first
+/// slice and its length in pages. `None` if a page is unknown or `pages`
+/// ends early, so a DirectStorage write validates the whole range first.
+fn runs(pages: &[usize], offset: usize, len: usize) -> Option<Vec<(Slice, usize)>> {
+    let end = offset.checked_add(len)?;
+    let pages = pages.get(offset / PAGE..end.div_ceil(PAGE))?;
+    let (runs, unknown) = page_runs(pages);
+    unknown.is_none().then_some(runs)
 }
 
 /// Whether every page under `[offset, offset + len)` is known (a write that
@@ -628,8 +652,13 @@ pub(crate) fn shown_at(pages: &[usize], offset: usize, len: usize) -> Vec<(usize
     let mut pieces: Vec<(usize, usize)> = Vec::new();
     {
         let physical = physical();
+        let catalog = catalog();
         for (i, page) in touched.iter().enumerate() {
-            let Some(addresses) = physical.pages.get(page).and_then(|slice| physical.shown.get(&slice.key(0))) else {
+            let Some(addresses) = catalog
+                .pages
+                .get(page)
+                .and_then(|slice| physical.shown.get(&slice.key(0)))
+            else {
                 continue;
             };
             // The bytes of this page that the write covers.
@@ -670,37 +699,33 @@ pub extern "system" fn XMemMapPhysicalPages(
 ) -> *mut c_void {
     let base = address as usize;
     let mut physical = physical();
+    let snapshot = if pages.is_null() {
+        None
+    } else {
+        // SAFETY: the title passes `n` page numbers. Snapshot under the
+        // catalog lock, then release it before any host mapping calls.
+        Some(page_runs(unsafe { std::slice::from_raw_parts(pages, n) }))
+    };
     // Until the pages are mapped again: `unmap` takes whole views away and
     // maps what stays of them again, and a mapped view is a reservation
     // until it is committed. A read of title memory in place must not fall
     // into that gap (`leonida_gpu::title_memory_remapping`).
     let _changing = leonida_gpu::title_memory_remapping();
     unmap(&mut physical, base, n * PAGE);
-    if pages.is_null() {
+    let Some((runs, unknown)) = snapshot else {
         return address;
-    }
-    // SAFETY: the title passes `n` page numbers.
-    let pages = unsafe { std::slice::from_raw_parts(pages, n) };
+    };
     let mut i = 0;
-    while i < n {
-        let Some(first) = physical.pages.get(&pages[i]).cloned() else {
-            tracing::warn!(page = pages[i], "XMemMapPhysicalPages: unknown page");
-            return std::ptr::null_mut();
-        };
+    for (first, run) in runs {
         // One view per run of consecutive slices of one section.
-        let run = 1 + pages[i + 1..]
-            .iter()
-            .zip(1..)
-            .take_while(|&(page, k)| {
-                physical.pages.get(page).is_some_and(|s| {
-                    Arc::ptr_eq(&s.section, &first.section) && s.index == first.index + k
-                })
-            })
-            .count();
         if !map(&mut physical, base + i * PAGE, run * PAGE, first) {
             return std::ptr::null_mut();
         }
         i += run;
+    }
+    if let Some(page) = unknown {
+        tracing::warn!(page, "XMemMapPhysicalPages: unknown page");
+        return std::ptr::null_mut();
     }
     address
 }
@@ -1331,7 +1356,7 @@ mod tests {
 
     /// The bytes of one page, through a view of our own.
     fn page_bytes(page: usize) -> Vec<u8> {
-        let slice = physical().pages.get(&page).cloned().expect("known page");
+        let slice = catalog().pages.get(&page).cloned().expect("known page");
         View::map(&slice, 1).expect("mapped").bytes().to_vec()
     }
 
@@ -1451,5 +1476,83 @@ mod tests {
         assert!(page_window(&[a[0], b[0]], 0, PAGE).is_some());
         assert_eq!(XMemFreePhysicalPages(3, a.as_ptr()), 1);
         assert_eq!(XMemFreePhysicalPages(1, b.as_ptr()), 1);
+    }
+
+    #[test]
+    fn page_windows_do_not_wait_for_unrelated_title_remapping() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let pages = allocate(1);
+        assert!(write_physical(&pages, 7, &[11, 23, 47]));
+        // A remapping holds this guard while it changes the title's views.
+        // DirectStorage's own view does not use any of those addresses.
+        let mapping = physical();
+        let (started, ready) = mpsc::channel();
+        let (sent, received) = mpsc::channel();
+        let page = pages[0];
+        let worker = std::thread::spawn(move || {
+            started.send(()).unwrap();
+            let bytes = page_window(&[page], 7, 3).map(|mut window| window.bytes().to_vec());
+            sent.send(bytes).unwrap();
+        });
+        ready.recv().unwrap();
+        let result = received.recv_timeout(Duration::from_secs(5));
+        // Release and join even on failure, so a regression cannot strand
+        // another test behind the mapping guard.
+        drop(mapping);
+        worker.join().unwrap();
+        assert_eq!(XMemFreePhysicalPages(1, pages.as_ptr()), 1);
+        assert_eq!(
+            result.expect("unrelated remapping must not block a page window"),
+            Some(vec![11, 23, 47])
+        );
+    }
+
+    #[test]
+    fn pending_page_snapshot_keeps_its_section_after_free() {
+        let pages = allocate(2);
+        assert!(write_physical(&pages, PAGE - 1, &[11, 23, 47]));
+        let snapshot = runs(&pages, PAGE - 1, 3).expect("known pages");
+        assert_eq!(XMemFreePhysicalPages(2, pages.as_ptr()), 1);
+        assert!(!pages_known(&pages, 0, 2 * PAGE));
+        assert!(page_window(&pages, PAGE - 1, 3).is_none());
+
+        // No title mapping or PageWindow keeps the section open. The
+        // pending snapshot alone must retain it across catalog removal.
+        let [(slice, n)] = snapshot.as_slice() else {
+            panic!("the adjacent pages are one run");
+        };
+        let mut view = View::map(slice, *n).expect("snapshot still owns its section");
+        assert_eq!(&view.bytes()[PAGE - 1..PAGE + 2], &[11, 23, 47]);
+    }
+
+    #[test]
+    fn unknown_page_keeps_the_mapped_valid_prefix() {
+        let pages = allocate(3);
+        assert!(write_physical(&pages, 0, &[57]));
+        let at = XMemVirtualAlloc(
+            std::ptr::null_mut(),
+            3 * PAGE,
+            MEM_RESERVE | PAGES_64K,
+            0,
+            PAGE_READWRITE,
+        );
+        assert!(!at.is_null());
+        assert_eq!(XMemMapPhysicalPages(at, 3, pages.as_ptr()), at);
+
+        let invalid = [pages[0], 0x10, pages[2]];
+        assert!(XMemMapPhysicalPages(at, 3, invalid.as_ptr()).is_null());
+        assert_eq!(query(at).host.State, MEM_COMMIT);
+        assert_eq!(query(at.wrapping_byte_add(PAGE)).host.State, MEM_RESERVE);
+        assert_eq!(
+            query(at.wrapping_byte_add(2 * PAGE)).host.State,
+            MEM_RESERVE
+        );
+        // SAFETY: the valid prefix stays mapped after the later error.
+        assert_eq!(unsafe { at.cast::<u8>().read() }, 57);
+        assert_eq!(shown_at(&pages, 0, 3 * PAGE), vec![(at as usize, PAGE)]);
+        assert_eq!(XMemMapPhysicalPages(at, 1, std::ptr::null()), at);
+        assert_eq!(XMemFreePhysicalPages(3, pages.as_ptr()), 1);
     }
 }

@@ -53,6 +53,20 @@ grouped in one submission still need command-list splitting. This synthetic
 correctness result does not establish the cause of the washed-out game frames
 or claim a gameplay or frame-rate improvement.
 
+**R-7: an unread input takes the mode read in its register.**
+`PS_RasterizeWaterVolumeExposedSurface` and the two
+`PS_RasterizeVehicle*InterfaceDepth` read one input of a packed register per
+vertex (`attributeAtVertex`, so constant mode), beside an element they never
+read that keeps the linear mode the console's `PSV0` gives the whole
+register. The console does not mix modes; the DXIL validator refused ours
+("interpolation mode that differs from another element packed into the
+same row"). `container::share_row_modes`, called by `Shader::finish` for
+pixel inputs, gives an unread arbitrary element the mode its register's read
+elements agree on (an integer only a constant one). No register or mask
+changes, and the elements it changes are not read, so the picture cannot
+change. A unit test covers a register read one way, one read two ways (left
+alone) and an unread uint.
+
 **R-7: a level query on an array leaves the slice undefined.**
 `PS_VfxVBuffer_AlphaClip`, `PS_DeferredTextured_AlphaClip` and `PS_MirrorReflectionDeferredTextured_AlphaClip` failed the DXIL validator with "out of bound coord must be undef": `image_get_lod` on a 2D array became a `calculateLOD` that passed the slice as its third coordinate. Only the spatial coordinates are passed now, undef after them; the level does not depend on the slice, so the result is the same.
 
@@ -1029,6 +1043,28 @@ default for the same reason ("sank in every one" without it, its
 driver 621.24: with `LEONIDA_TEXTURE_BACK=1` the boat stayed up and the
 mission went on. Cost: about a megabyte copied back per list that writes
 one of the four kinds (`shortcut:` in `texback.rs`).
+
+## P-4: page catalog lookups during remapping (2026-11-27)
+
+DirectStorage used the title mapping mutex just to resolve page numbers to section
+slices. An unrelated alias remap held that mutex across host mapping calls, delaying
+workers whose own views never touch the title addresses being changed. Page numbers
+now have a separate catalog lock. Mapping snapshots retain section ownership across
+a concurrent page free; native mapping calls run after releasing the catalog lock.
+
+Title view extents and reverse aliases stay under their existing mutex. DirectStorage
+written-page publication takes that mutex before the catalog and releases both before
+its GPU notifications. Map/remap notifications still hold their original protection.
+The texture-read/remapping guard, native mapping calls, mapping granularity and
+valid-prefix behavior on an unknown page are unchanged. This complements PR #34's
+texture range locks; it does not implement those locks or complete P-4.
+
+The synthetic `page_windows_do_not_wait_for_unrelated_title_remapping` regression
+times out after five seconds on the prior implementation and returns the expected
+bytes with the split. All 15 xmem tests passed in an isolated, headless Proton 11.0
+prefix with GPU devices disabled, including pending-section lifetime after page free,
+unknown-page prefix mapping and 2,000 remaps with a protected concurrent reader.
+These are CPU memory tests; no gameplay frame-rate improvement is claimed.
 
 ## Debugging
 
