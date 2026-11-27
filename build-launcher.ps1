@@ -126,7 +126,7 @@ function Save-Icon([string]$Path, [scriptblock]$MakeBitmap) {
 # ---------------------------------------------------------------- The launcher's code
 $LauncherSource = @'
 # ==========================================================
-#  Leonida Launcher - choisir une branche puis lancer le .ps1
+#  Leonida Launcher - pick a branch, then start the .ps1
 # ==========================================================
 
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing
@@ -135,23 +135,137 @@ Add-Type -AssemblyName System.Windows.Forms, System.Drawing
 $Here = if ($PSScriptRoot) { $PSScriptRoot } else { [AppDomain]::CurrentDomain.BaseDirectory }
 
 # ---------------------------------------------------------- Configuration
-# Enregistrée dans %APPDATA%\LeonidaLauncher\config.json
+# Saved in %APPDATA%\LeonidaLauncher\config.json
 $CfgDir  = Join-Path $env:APPDATA 'LeonidaLauncher'
 $CfgPath = Join-Path $CfgDir 'config.json'
 
 $script:Cfg = [pscustomobject]@{
     RepoUrl = 'https://github.com/ProjectLeonidaL/leonida.git'
-    RepoDir = ''      # vide = le dépôt qui contient l'exe
-    Ps1     = ''      # vide = run-gta6.ps1 à la racine du dépôt
+    RepoDir = ''      # empty = the repository that holds the exe
+    Ps1     = ''      # empty = run-gta6.ps1 at the root of the repository
     GtaDir  = ''
-    Args    = '-GameDir {GTA}'   # {GTA} = dossier du jeu ; ignoré si aucun dossier n'est choisi
+    Args    = '-GameDir {GTA}'   # {GTA} = game folder; left out if no folder is chosen
+    Lang    = 'en'               # launcher language, picked in Settings: en or fr
+}
+
+# ---------------------------------------------------------- Texts
+# One table per language. A key missing from a language falls back to English.
+$LangCodes = @('en', 'fr')
+$Texts = @{
+    en = @{
+        LangName      = 'English'
+        CurrentBranch = 'Current branch: {0}'
+        CurrentTag    = '(current)'
+        BtnSettings   = '⚙  Settings'
+        Settings      = 'Settings'
+        Branches      = 'Available branches'
+        Filter        = 'Filter:'
+        Refresh       = 'Refresh'
+        Clean         = 'Also delete untracked files (git clean -fd)'
+        CloseAfter    = 'Close the launcher after starting'
+        Go            = '▶   Load and start'
+        RowRepoUrl    = 'GitHub repository URL'
+        RowRepoDir    = 'Repository folder (local clone)'
+        RowPs1        = '.ps1 script to start'
+        RowGtaDir     = 'Game folder (optional)'
+        RowArgs       = 'Script arguments  ({GTA} = game folder)'
+        RowLang       = 'Language'
+        Browse        = 'Browse...'
+        Ps1Filter     = 'PowerShell scripts (*.ps1)|*.ps1|All files (*.*)|*.*'
+        ConfigPath    = 'Config: {0}'
+        Save          = 'Save'
+        Cancel        = 'Cancel'
+        SaveAnyway    = "Warning:`n- {0}`n`nSave anyway?"
+        ErrRepoUrl    = 'Repository URL is empty'
+        ErrRepoDir    = 'Repository folder is not valid (no .git)'
+        ErrPs1        = '.ps1 script not found'
+        ErrGtaDir     = 'Game folder not found'
+        SetUpHint     = 'Set up the launcher in "Settings".'
+        Fetching      = 'Fetching branches...'
+        Failed        = 'Failed: {0}'
+        BranchesFound = '{0} branch(es) found.'
+        PickBranch    = 'Pick a branch.'
+        LocalChanges  = "{0} locally modified file(s) will be overwritten.`n`nContinue?"
+        LocalTitle    = 'Local changes'
+        Cancelled     = 'Cancelled.'
+        Downloading   = 'Downloading "{0}"...'
+        FetchFailed   = 'Fetch failed: {0}'
+        CheckoutFail  = 'Checkout failed: {0}'
+        BranchLoaded  = 'Branch "{0}" loaded.'
+        NoScript      = 'Script not found: {0}'
+        Starting      = 'Starting {0}...'
+        Saved         = 'Settings saved.'
+        Welcome       = 'Welcome! Start by setting up the launcher.'
+        GitMissing    = 'Git is not installed. The launcher needs it to list and load branches.'
+        GitAsk        = "Git is not installed, and the launcher needs it.`n`nInstall it now with winget? Windows may ask for admin rights."
+        GitInstalling = 'Installing Git with winget...'
+        GitInstalled  = 'Git installed.'
+        GitByHand     = 'Install Git from https://git-scm.com/download/win, then start the launcher again.'
+        ToolsStop     = 'The build tools or Rust are still missing, so the game was not started. Close this window and press "Load and start" again once they are installed.'
+    }
+    fr = @{
+        LangName      = 'Français'
+        CurrentBranch = 'Branche actuelle : {0}'
+        CurrentTag    = '(actuelle)'
+        BtnSettings   = '⚙  Paramètres'
+        Settings      = 'Paramètres'
+        Branches      = 'Branches disponibles'
+        Filter        = 'Filtrer :'
+        Refresh       = 'Actualiser'
+        Clean         = 'Supprimer aussi les fichiers non suivis (git clean -fd)'
+        CloseAfter    = 'Fermer le lanceur après le lancement'
+        Go            = '▶   Charger et lancer'
+        RowRepoUrl    = 'URL du repo GitHub'
+        RowRepoDir    = 'Dossier du repo (clone local)'
+        RowPs1        = 'Script .ps1 à lancer'
+        RowGtaDir     = 'Dossier du jeu (optionnel)'
+        RowArgs       = 'Arguments du script  ({GTA} = dossier du jeu)'
+        RowLang       = 'Langue'
+        Browse        = 'Parcourir...'
+        Ps1Filter     = 'Scripts PowerShell (*.ps1)|*.ps1|Tous les fichiers (*.*)|*.*'
+        ConfigPath    = 'Config : {0}'
+        Save          = 'Enregistrer'
+        Cancel        = 'Annuler'
+        SaveAnyway    = "Attention :`n- {0}`n`nEnregistrer quand même ?"
+        ErrRepoUrl    = 'URL du repo vide'
+        ErrRepoDir    = 'Dossier du repo invalide (pas de .git)'
+        ErrPs1        = 'Script .ps1 introuvable'
+        ErrGtaDir     = 'Dossier du jeu introuvable'
+        SetUpHint     = 'Configure le lanceur via « Paramètres ».'
+        Fetching      = 'Récupération des branches...'
+        Failed        = 'Échec : {0}'
+        BranchesFound = '{0} branche(s) trouvée(s).'
+        PickBranch    = 'Sélectionne une branche.'
+        LocalChanges  = "{0} fichier(s) modifié(s) localement seront écrasés.`n`nContinuer ?"
+        LocalTitle    = 'Modifications locales'
+        Cancelled     = 'Annulé.'
+        Downloading   = 'Téléchargement de « {0} »...'
+        FetchFailed   = 'Échec du fetch : {0}'
+        CheckoutFail  = 'Échec du checkout : {0}'
+        BranchLoaded  = 'Branche « {0} » chargée.'
+        NoScript      = 'Script introuvable : {0}'
+        Starting      = 'Lancement de {0}...'
+        Saved         = 'Paramètres enregistrés.'
+        Welcome       = 'Bienvenue ! Commence par configurer le lanceur.'
+        GitMissing    = "Git n'est pas installé. Le lanceur en a besoin pour lister et charger les branches."
+        GitAsk        = "Git n'est pas installé, et le lanceur en a besoin.`n`nL'installer maintenant avec winget ? Windows peut demander les droits d'administrateur."
+        GitInstalling = 'Installation de Git avec winget...'
+        GitInstalled  = 'Git installé.'
+        GitByHand     = 'Installe Git depuis https://git-scm.com/download/win, puis relance le lanceur.'
+        ToolsStop     = "Les outils de build ou Rust manquent encore, le jeu n'a pas été lancé. Ferme cette fenêtre et clique de nouveau sur « Charger et lancer » une fois qu'ils sont installés."
+    }
+}
+
+function T([string]$Key) {
+    $table = $Texts[[string]$script:Cfg.Lang]
+    if ($table -and $table.ContainsKey($Key)) { $table[$Key] } else { $Texts['en'][$Key] }
 }
 
 function Import-Config {
     if (Test-Path $CfgPath) {
         try {
             $j = Get-Content $CfgPath -Raw -Encoding UTF8 | ConvertFrom-Json
-            foreach ($k in 'RepoUrl', 'RepoDir', 'Ps1', 'GtaDir', 'Args') {
+            foreach ($k in 'RepoUrl', 'RepoDir', 'Ps1', 'GtaDir', 'Args', 'Lang') {
                 if ($null -ne $j.$k) { $script:Cfg.$k = [string]$j.$k }
             }
         } catch { }
@@ -166,16 +280,16 @@ function Export-Config {
 function Test-Config {
     $Cfg = $script:Cfg
     $errs = @()
-    if (-not $Cfg.RepoUrl)                                        { $errs += "URL du repo vide" }
-    if (-not $Cfg.RepoDir -or -not (Test-Path (Join-Path $Cfg.RepoDir '.git'))) { $errs += "Dossier du repo invalide (pas de .git)" }
-    if (-not $Cfg.Ps1 -or -not (Test-Path $Cfg.Ps1))              { $errs += "Script .ps1 introuvable" }
-    if ($Cfg.GtaDir -and -not (Test-Path $Cfg.GtaDir))            { $errs += "Dossier du jeu introuvable" }
+    if (-not $Cfg.RepoUrl)                                        { $errs += T 'ErrRepoUrl' }
+    if (-not $Cfg.RepoDir -or -not (Test-Path (Join-Path $Cfg.RepoDir '.git'))) { $errs += T 'ErrRepoDir' }
+    if (-not $Cfg.Ps1 -or -not (Test-Path $Cfg.Ps1))              { $errs += T 'ErrPs1' }
+    if ($Cfg.GtaDir -and -not (Test-Path $Cfg.GtaDir))            { $errs += T 'ErrGtaDir' }
     $errs
 }
 
 Import-Config
 
-# Valeurs par défaut : l'exe est à la racine du dépôt (ou dans un sous-dossier), et lance run-gta6.ps1
+# Defaults: the exe sits at the root of the repository (or in a subfolder) and starts run-gta6.ps1
 if (-not $script:Cfg.RepoDir) {
     foreach ($d in @($Here, (Split-Path -Parent $Here))) {
         if ($d -and (Test-Path (Join-Path $d '.git'))) { $script:Cfg.RepoDir = $d; break }
@@ -186,7 +300,7 @@ if (-not $script:Cfg.Ps1 -and $script:Cfg.RepoDir) {
     if (Test-Path $def) { $script:Cfg.Ps1 = $def }
 }
 
-# --- Couleurs (reprises du logo) ---
+# --- Colors (taken from the logo) ---
 $cBg     = [System.Drawing.ColorTranslator]::FromHtml('#170d22')
 $cPanel  = [System.Drawing.ColorTranslator]::FromHtml('#26163a')
 $cField  = [System.Drawing.ColorTranslator]::FromHtml('#1f122f')
@@ -207,7 +321,7 @@ $fontLog   = New-Object System.Drawing.Font('Consolas', 9)
 $script:Branches = @()
 $script:Current  = ''
 
-# Même dessin que l'icône de secours de build-launcher.ps1
+# Same drawing as the fallback icon of build-launcher.ps1
 function Draw-Logo($g, [int]$S) {
     $g.SmoothingMode = 'AntiAlias'
     $g.TextRenderingHint = 'AntiAliasGridFit'
@@ -232,7 +346,7 @@ function Draw-Logo($g, [int]$S) {
     $br.Dispose(); $f.Dispose(); $path.Dispose()
 }
 
-# ---------------------------------------------------------- Fenetre
+# ---------------------------------------------------------- Window
 $form = New-Object System.Windows.Forms.Form
 $form.Text = 'Leonida Launcher'
 $form.ClientSize = New-Object System.Drawing.Size(580, 600)
@@ -248,15 +362,15 @@ try {
     else { $form.Icon = [System.Drawing.Icon]::ExtractAssociatedIcon([Diagnostics.Process]::GetCurrentProcess().MainModule.FileName) }
 } catch { }
 
-# ---------------------------------------------------------- En-tete
+# ---------------------------------------------------------- Header
 $header = New-Object System.Windows.Forms.Panel
 $header.SetBounds(0, 0, 580, 90)
 $header.BackColor = $cPanel
 $form.Controls.Add($header)
 
-# Logo : le dépôt ne contient aucune image (docs/asset-policy.md). build-launcher.ps1 remplit la ligne
-# ci-dessous dans une copie temporaire de ce script, avec le logo téléchargé au moment du build.
-# Vide (script lancé tel quel, ou téléchargement impossible) : le logo est dessiné par le code.
+# Logo: the repository holds no images (docs/asset-policy.md). build-launcher.ps1 fills in the line
+# below in a temporary copy of this script, with the logo downloaded at build time.
+# Empty (script run as is, or download failed): the logo is drawn by the code.
 $LogoB64 = ''
 $script:LogoImage = $null
 if ($LogoB64) {
@@ -284,14 +398,12 @@ $title.Location = New-Object System.Drawing.Point(92, 14)
 $header.Controls.Add($title)
 
 $lblCurrent = New-Object System.Windows.Forms.Label
-$lblCurrent.Text = 'Branche actuelle : ...'
 $lblCurrent.ForeColor = $cMuted
 $lblCurrent.AutoSize = $true
 $lblCurrent.Location = New-Object System.Drawing.Point(95, 54)
 $header.Controls.Add($lblCurrent)
 
 $btnSettings = New-Object System.Windows.Forms.Button
-$btnSettings.Text = '⚙  Paramètres'
 $btnSettings.SetBounds(450, 30, 114, 30)
 $btnSettings.FlatStyle = 'Flat'
 $btnSettings.FlatAppearance.BorderColor = $cPurple
@@ -302,7 +414,7 @@ $btnSettings.Cursor = [System.Windows.Forms.Cursors]::Hand
 $header.Controls.Add($btnSettings)
 $lblCurrent.MaximumSize = New-Object System.Drawing.Size(350, 0)
 
-# Liseré dégradé sous l'en-tête
+# Gradient stripe under the header
 $stripe = New-Object System.Windows.Forms.Panel
 $stripe.SetBounds(0, 90, 580, 3)
 $stripe.Add_Paint({
@@ -313,16 +425,14 @@ $stripe.Add_Paint({
 })
 $form.Controls.Add($stripe)
 
-# ---------------------------------------------------------- Liste des branches
+# ---------------------------------------------------------- Branch list
 $lblBranches = New-Object System.Windows.Forms.Label
-$lblBranches.Text = 'Branches disponibles'
 $lblBranches.Font = $fontBold
 $lblBranches.AutoSize = $true
 $lblBranches.Location = New-Object System.Drawing.Point(14, 106)
 $form.Controls.Add($lblBranches)
 
 $lblFilter = New-Object System.Windows.Forms.Label
-$lblFilter.Text = 'Filtrer :'
 $lblFilter.ForeColor = $cMuted
 $lblFilter.AutoSize = $true
 $lblFilter.Location = New-Object System.Drawing.Point(246, 106)
@@ -336,7 +446,6 @@ $txtFilter.BorderStyle = 'FixedSingle'
 $form.Controls.Add($txtFilter)
 
 $btnRefresh = New-Object System.Windows.Forms.Button
-$btnRefresh.Text = 'Actualiser'
 $btnRefresh.SetBounds(480, 101, 84, 27)
 $btnRefresh.FlatStyle = 'Flat'
 $btnRefresh.FlatAppearance.BorderColor = $cPurple
@@ -362,7 +471,7 @@ $list.Add_DrawItem({
     $br = New-Object System.Drawing.SolidBrush($bg)
     $e.Graphics.FillRectangle($br, $e.Bounds); $br.Dispose()
     $txt = $name
-    if ($name -eq $script:Current) { $txt = "$name   (actuelle)" }
+    if ($name -eq $script:Current) { $txt = "$name   $(T 'CurrentTag')" }
     $fg = if ($selected) { [System.Drawing.Color]::White } elseif ($name -eq $script:Current) { $cGreen } else { $cText }
     $tb = New-Object System.Drawing.SolidBrush($fg)
     $e.Graphics.DrawString($txt, $fontList, $tb, ($e.Bounds.X + 10), ($e.Bounds.Y + 4)); $tb.Dispose()
@@ -371,23 +480,20 @@ $form.Controls.Add($list)
 
 # ---------------------------------------------------------- Options
 $chkClean = New-Object System.Windows.Forms.CheckBox
-$chkClean.Text = 'Supprimer aussi les fichiers non suivis (git clean -fd)'
 $chkClean.AutoSize = $true
 $chkClean.ForeColor = $cMuted
 $chkClean.Location = New-Object System.Drawing.Point(16, 324)
 $form.Controls.Add($chkClean)
 
 $chkClose = New-Object System.Windows.Forms.CheckBox
-$chkClose.Text = 'Fermer le lanceur après le lancement'
 $chkClose.AutoSize = $true
 $chkClose.Checked = $true
 $chkClose.ForeColor = $cMuted
 $chkClose.Location = New-Object System.Drawing.Point(16, 350)
 $form.Controls.Add($chkClose)
 
-# ---------------------------------------------------------- Bouton principal
+# ---------------------------------------------------------- Main button
 $btnGo = New-Object System.Windows.Forms.Button
-$btnGo.Text = '▶   Charger et lancer'
 $btnGo.SetBounds(16, 382, 548, 44)
 $btnGo.FlatStyle = 'Flat'
 $btnGo.FlatAppearance.BorderSize = 0
@@ -405,7 +511,7 @@ $progress.MarqueeAnimationSpeed = 25
 $progress.Visible = $false
 $form.Controls.Add($progress)
 
-# ---------------------------------------------------------- Journal
+# ---------------------------------------------------------- Log
 $log = New-Object System.Windows.Forms.RichTextBox
 $log.SetBounds(16, 448, 548, 136)
 $log.BackColor = $cField
@@ -416,7 +522,7 @@ $log.ReadOnly = $true
 $form.Controls.Add($log)
 
 # ==========================================================
-#  Fonctions
+#  Functions
 # ==========================================================
 function Write-Log([string]$Text, $Color = $cMuted) {
     $log.SelectionStart = $log.TextLength
@@ -433,17 +539,35 @@ function Set-Busy([bool]$Busy) {
     $form.Cursor = if ($Busy) { [System.Windows.Forms.Cursors]::WaitCursor } else { [System.Windows.Forms.Cursors]::Default }
 }
 
-# Lance git sans bloquer l'interface
-function Invoke-Git([string[]]$GitArgs) {
+# Every text of the main window, again after the language changes
+$script:CurrentLine = '...'
+function Update-Texts {
+    $btnSettings.Text = T 'BtnSettings'
+    $lblBranches.Text = T 'Branches'
+    $lblFilter.Text = T 'Filter'
+    $btnRefresh.Text = T 'Refresh'
+    $chkClean.Text = T 'Clean'
+    $chkClose.Text = T 'CloseAfter'
+    $btnGo.Text = T 'Go'
+    $lblCurrent.Text = (T 'CurrentBranch') -f $script:CurrentLine
+    $list.Invalidate()
+}
+
+function Invoke-Git([string[]]$GitArgs) { Invoke-Hidden 'git' $GitArgs $script:Cfg.RepoDir }
+
+# Runs a program without blocking the interface. The exe has no console, so a console program
+# started with & would open a window of its own.
+function Invoke-Hidden([string]$File, [string[]]$ArgList, [string]$Dir) {
     $psi = New-Object System.Diagnostics.ProcessStartInfo
-    $psi.FileName = 'git'
-    $psi.Arguments = ($GitArgs | ForEach-Object { if ($_ -match '\s') { '"' + $_ + '"' } else { $_ } }) -join ' '
-    $psi.WorkingDirectory = $script:Cfg.RepoDir
+    $psi.FileName = $File
+    $psi.Arguments = ($ArgList | ForEach-Object { if ($_ -match '\s') { '"' + $_ + '"' } else { $_ } }) -join ' '
+    if ($Dir) { $psi.WorkingDirectory = $Dir }
     $psi.UseShellExecute = $false
     $psi.RedirectStandardOutput = $true
     $psi.RedirectStandardError = $true
     $psi.CreateNoWindow = $true
-    $p = [System.Diagnostics.Process]::Start($psi)
+    try { $p = [System.Diagnostics.Process]::Start($psi) }
+    catch { return [pscustomobject]@{ Code = -1; Out = ''; Err = $_.Exception.Message } }
     $out = $p.StandardOutput.ReadToEndAsync()
     $err = $p.StandardError.ReadToEndAsync()
     while (-not $p.HasExited) {
@@ -458,14 +582,15 @@ function Update-Current {
     $r = Invoke-Git @('rev-parse', '--abbrev-ref', 'HEAD')
     $s = Invoke-Git @('log', '-1', '--format=%h  %s')
     $script:Current = $r.Out.Trim()
-    $lblCurrent.Text = "Branche actuelle : $($script:Current)   ·   $($s.Out.Trim())"
+    $script:CurrentLine = "$($script:Current)   ·   $($s.Out.Trim())"
+    $lblCurrent.Text = (T 'CurrentBranch') -f $script:CurrentLine
 }
 
-# Fenêtre de paramètres - renvoie $true si enregistré
+# Settings window - returns $true when saved
 function Show-Settings {
     $dlg = New-Object System.Windows.Forms.Form
-    $dlg.Text = 'Paramètres'
-    $dlg.ClientSize = New-Object System.Drawing.Size(560, 420)
+    $dlg.Text = T 'Settings'
+    $dlg.ClientSize = New-Object System.Drawing.Size(560, 484)
     $dlg.StartPosition = 'CenterParent'
     $dlg.FormBorderStyle = 'FixedDialog'
     $dlg.MaximizeBox = $false; $dlg.MinimizeBox = $false
@@ -475,11 +600,11 @@ function Show-Settings {
     $fields = @{}
     $y = 16
     $rows = @(
-        @{ Key = 'RepoUrl'; Label = 'URL du repo GitHub';                 Browse = $null },
-        @{ Key = 'RepoDir'; Label = 'Dossier du repo (clone local)';      Browse = 'folder' },
-        @{ Key = 'Ps1';     Label = 'Script .ps1 à lancer';               Browse = 'ps1' },
-        @{ Key = 'GtaDir';  Label = 'Dossier du jeu (optionnel)';                     Browse = 'folder' },
-        @{ Key = 'Args';    Label = 'Arguments du script  ({GTA} = dossier du jeu)'; Browse = $null }
+        @{ Key = 'RepoUrl'; Label = T 'RowRepoUrl'; Browse = $null },
+        @{ Key = 'RepoDir'; Label = T 'RowRepoDir'; Browse = 'folder' },
+        @{ Key = 'Ps1';     Label = T 'RowPs1';     Browse = 'ps1' },
+        @{ Key = 'GtaDir';  Label = T 'RowGtaDir';  Browse = 'folder' },
+        @{ Key = 'Args';    Label = T 'RowArgs';    Browse = $null }
     )
     foreach ($row in $rows) {
         $l = New-Object System.Windows.Forms.Label
@@ -497,11 +622,11 @@ function Show-Settings {
 
         if ($row.Browse) {
             $b = New-Object System.Windows.Forms.Button
-            $b.Text = 'Parcourir...'
+            $b.Text = T 'Browse'
             $b.SetBounds(452, ($y + 22), 92, 28)
             $b.FlatStyle = 'Flat'; $b.FlatAppearance.BorderColor = $cPurple
             $b.BackColor = $cPanel; $b.ForeColor = $cText
-            $b.Tag = @{ Box = $t; Kind = $row.Browse }
+            $b.Tag = @{ Box = $t; Kind = $row.Browse; Filter = T 'Ps1Filter' }
             $b.Add_Click({
                 param($s, $e)
                 $box = $s.Tag.Box
@@ -511,7 +636,7 @@ function Show-Settings {
                     if ($fb.ShowDialog() -eq 'OK') { $box.Text = $fb.SelectedPath }
                 } else {
                     $of = New-Object System.Windows.Forms.OpenFileDialog
-                    $of.Filter = 'Scripts PowerShell (*.ps1)|*.ps1|Tous les fichiers (*.*)|*.*'
+                    $of.Filter = $s.Tag.Filter
                     if ($box.Text -and (Test-Path $box.Text)) { $of.InitialDirectory = Split-Path -Parent $box.Text }
                     elseif ($fields['RepoDir'].Text -and (Test-Path $fields['RepoDir'].Text)) { $of.InitialDirectory = $fields['RepoDir'].Text }
                     if ($of.ShowDialog() -eq 'OK') { $box.Text = $of.FileName }
@@ -522,22 +647,37 @@ function Show-Settings {
         $y += 64
     }
 
+    $l = New-Object System.Windows.Forms.Label
+    $l.Text = T 'RowLang'; $l.Font = $fontBold; $l.AutoSize = $true
+    $l.Location = New-Object System.Drawing.Point(16, $y)
+    $dlg.Controls.Add($l)
+
+    $cmbLang = New-Object System.Windows.Forms.ComboBox
+    $cmbLang.DropDownStyle = 'DropDownList'
+    $cmbLang.FlatStyle = 'Flat'
+    $cmbLang.BackColor = $cField; $cmbLang.ForeColor = $cText
+    $cmbLang.SetBounds(16, ($y + 24), 200, 26)
+    foreach ($code in $LangCodes) { [void]$cmbLang.Items.Add($Texts[$code]['LangName']) }
+    $cmbLang.SelectedIndex = [Math]::Max(0, [array]::IndexOf($LangCodes, [string]$script:Cfg.Lang))
+    $dlg.Controls.Add($cmbLang)
+    $y += 64
+
     $hint = New-Object System.Windows.Forms.Label
-    $hint.Text = "Config : $CfgPath"
+    $hint.Text = (T 'ConfigPath') -f $CfgPath
     $hint.ForeColor = $cMuted; $hint.AutoSize = $true
     $hint.Location = New-Object System.Drawing.Point(16, ($y + 2))
     $dlg.Controls.Add($hint)
 
     $ok = New-Object System.Windows.Forms.Button
-    $ok.Text = 'Enregistrer'
-    $ok.SetBounds(336, 374, 104, 32)
+    $ok.Text = T 'Save'
+    $ok.SetBounds(336, 438, 104, 32)
     $ok.FlatStyle = 'Flat'; $ok.FlatAppearance.BorderSize = 0
     $ok.BackColor = $cPink; $ok.ForeColor = [System.Drawing.Color]::White
     $dlg.Controls.Add($ok)
 
     $cancel = New-Object System.Windows.Forms.Button
-    $cancel.Text = 'Annuler'
-    $cancel.SetBounds(448, 374, 96, 32)
+    $cancel.Text = T 'Cancel'
+    $cancel.SetBounds(448, 438, 96, 32)
     $cancel.FlatStyle = 'Flat'; $cancel.FlatAppearance.BorderColor = $cPurple
     $cancel.BackColor = $cPanel; $cancel.ForeColor = $cText
     $cancel.DialogResult = 'Cancel'
@@ -546,10 +686,11 @@ function Show-Settings {
 
     $ok.Add_Click({
         foreach ($k in $fields.Keys) { $script:Cfg.$k = $fields[$k].Text.Trim() }
+        $script:Cfg.Lang = $LangCodes[[Math]::Max(0, $cmbLang.SelectedIndex)]
         $errs = @(Test-Config)
         if ($errs.Count -gt 0) {
-            $msg = "Attention :`n- " + ($errs -join "`n- ") + "`n`nEnregistrer quand même ?"
-            if ([System.Windows.Forms.MessageBox]::Show($msg, 'Paramètres', 'YesNo', 'Warning') -ne 'Yes') { return }
+            $msg = (T 'SaveAnyway') -f ($errs -join "`n- ")
+            if ([System.Windows.Forms.MessageBox]::Show($msg, (T 'Settings'), 'YesNo', 'Warning') -ne 'Yes') { return }
         }
         Export-Config
         $dlg.DialogResult = 'OK'
@@ -562,11 +703,34 @@ function Show-Settings {
     return ($res -eq 'OK')
 }
 
+# A PowerShell string literal for the command line of the window that starts the script
+function ConvertTo-Literal([string]$Text) { "'" + $Text.Replace("'", "''") + "'" }
+
+# Git lists and loads the branches. Offers to install it with winget when it is missing.
+function Initialize-Git {
+    if (Get-Command git -ErrorAction SilentlyContinue) { return $true }
+    Write-Log (T 'GitMissing') $cOrange
+    if (-not (Get-Command winget -ErrorAction SilentlyContinue)) { Write-Log (T 'GitByHand') $cOrange; return $false }
+    $ans = [System.Windows.Forms.MessageBox]::Show((T 'GitAsk'), 'Git', 'YesNo', 'Question')
+    if ($ans -ne 'Yes') { Write-Log (T 'GitByHand') $cOrange; return $false }
+    Set-Busy $true
+    Write-Log (T 'GitInstalling')
+    [void](Invoke-Hidden 'winget' @('install', '--id', 'Git.Git', '--exact', '--silent',
+        '--accept-package-agreements', '--accept-source-agreements') '')
+    Set-Busy $false
+    # The installer adds Git to PATH for new processes only
+    $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' +
+        [Environment]::GetEnvironmentVariable('Path', 'User')
+    if (Get-Command git -ErrorAction SilentlyContinue) { Write-Log (T 'GitInstalled') $cGreen; return $true }
+    Write-Log (T 'GitByHand') $cRed
+    $false
+}
+
 function Initialize-Launcher {
     $errs = @(Test-Config)
     if ($errs.Count -gt 0) {
         foreach ($e in $errs) { Write-Log $e $cOrange }
-        Write-Log 'Configure le lanceur via « Paramètres ».' $cOrange
+        Write-Log (T 'SetUpHint') $cOrange
         $btnGo.Enabled = $false
         if (-not $script:Cfg.RepoDir -or -not (Test-Path (Join-Path $script:Cfg.RepoDir '.git'))) {
             $script:Branches = @(); Show-Branches
@@ -591,16 +755,16 @@ function Show-Branches {
 
 function Get-Branches {
     Set-Busy $true
-    Write-Log 'Récupération des branches...'
+    Write-Log (T 'Fetching')
     $r = Invoke-Git @('ls-remote', '--heads', $script:Cfg.RepoUrl)
     if ($r.Code -ne 0) {
-        Write-Log "Échec : $($r.Err)" $cRed
+        Write-Log ((T 'Failed') -f $r.Err) $cRed
     } else {
         $found = foreach ($line in ($r.Out -split "`n")) {
             if ($line -match 'refs/heads/(\S+)') { $Matches[1] }
         }
         $script:Branches = @($found | Sort-Object)
-        Write-Log "$($script:Branches.Count) branche(s) trouvée(s)." $cGreen
+        Write-Log ((T 'BranchesFound') -f $script:Branches.Count) $cGreen
     }
     Update-Current
     Show-Branches
@@ -609,29 +773,29 @@ function Get-Branches {
 
 function Start-Selected {
     $br = [string]$list.SelectedItem
-    if (-not $br) { Write-Log 'Sélectionne une branche.' $cOrange; return }
+    if (-not $br) { Write-Log (T 'PickBranch') $cOrange; return }
     $errs = @(Test-Config)
     if ($errs.Count -gt 0) { foreach ($x in $errs) { Write-Log $x $cRed }; return }
 
-    # Avertir si des modifications locales vont être écrasées
+    # Warn when local changes are about to be overwritten
     $st = Invoke-Git @('status', '--porcelain', '--untracked-files=no')
     $changed = @($st.Out -split "`n" | Where-Object { $_.Trim() })
     if ($changed.Count -gt 0) {
-        $msg = "$($changed.Count) fichier(s) modifié(s) localement seront écrasés.`n`nContinuer ?"
-        $ans = [System.Windows.Forms.MessageBox]::Show($msg, 'Modifications locales', 'YesNo', 'Warning')
-        if ($ans -ne 'Yes') { Write-Log 'Annulé.' $cOrange; return }
+        $msg = (T 'LocalChanges') -f $changed.Count
+        $ans = [System.Windows.Forms.MessageBox]::Show($msg, (T 'LocalTitle'), 'YesNo', 'Warning')
+        if ($ans -ne 'Yes') { Write-Log (T 'Cancelled') $cOrange; return }
     }
 
     Set-Busy $true
     [void](Invoke-Git @('merge', '--abort'))
     [void](Invoke-Git @('rebase', '--abort'))
 
-    Write-Log "Téléchargement de « $br »..."
+    Write-Log ((T 'Downloading') -f $br)
     $r = Invoke-Git @('fetch', $script:Cfg.RepoUrl, $br)
-    if ($r.Code -ne 0) { Write-Log "Échec du fetch : $($r.Err)" $cRed; Set-Busy $false; return }
+    if ($r.Code -ne 0) { Write-Log ((T 'FetchFailed') -f $r.Err) $cRed; Set-Busy $false; return }
 
     $r = Invoke-Git @('checkout', '-f', '-B', $br, 'FETCH_HEAD')
-    if ($r.Code -ne 0) { Write-Log "Échec du checkout : $($r.Err)" $cRed; Set-Busy $false; return }
+    if ($r.Code -ne 0) { Write-Log ((T 'CheckoutFail') -f $r.Err) $cRed; Set-Busy $false; return }
 
     if ($chkClean.Checked) {
         $r = Invoke-Git @('clean', '-fd')
@@ -640,34 +804,46 @@ function Start-Selected {
 
     Update-Current
     $list.Invalidate()
-    Write-Log "Branche « $br » chargée." $cGreen
+    Write-Log ((T 'BranchLoaded') -f $br) $cGreen
 
     $ps1Path = $script:Cfg.Ps1
     if (-not $ps1Path -or -not (Test-Path $ps1Path)) {
-        Write-Log "Script introuvable : $ps1Path" $cRed
+        Write-Log ((T 'NoScript') -f $ps1Path) $cRed
         Set-Busy $false; return
     }
     $gta = $script:Cfg.GtaDir
-    $env:LEONIDA_GTA_DIR  = $gta          # dispo dans le script via $env:LEONIDA_GTA_DIR
+    $env:LEONIDA_GTA_DIR  = $gta          # available to the script as $env:LEONIDA_GTA_DIR
     $env:LEONIDA_REPO_DIR = $script:Cfg.RepoDir
     $env:LEONIDA_BRANCH   = $br
 
-    $argLine = "-NoProfile -ExecutionPolicy Bypass -NoExit -File `"$ps1Path`""
     $extra = $script:Cfg.Args
     if ($extra -and $extra.Contains('{GTA}')) {
-        # Sans dossier choisi, run-gta6.ps1 le demande lui-même : on n'envoie pas l'argument
-        $extra = if ($gta) { $extra.Replace('{GTA}', "`"$gta`"") } else { '' }
+        # Without a chosen folder, run-gta6.ps1 asks for it itself, so the argument is left out
+        $extra = if ($gta) { $extra.Replace('{GTA}', (ConvertTo-Literal $gta)) } else { '' }
     }
-    if ($extra) { $argLine += ' ' + $extra }
 
-    Write-Log "Lancement de $(Split-Path -Leaf $ps1Path)..." $cPink
+    # The build tools and Rust first: scripts\check-tools.ps1 offers to install what is missing,
+    # in the same window, so its questions and progress show there. Branches without it skip this.
+    $cmd = ''
+    $check = Join-Path $script:Cfg.RepoDir 'scripts\check-tools.ps1'
+    if (Test-Path -LiteralPath $check) {
+        $cmd += "& $(ConvertTo-Literal $check)`n"
+        $cmd += "if (-not `$?) { Write-Host $(ConvertTo-Literal (T 'ToolsStop')) -ForegroundColor Yellow; return }`n"
+        # rustup installed a moment ago is not on this window's PATH yet
+        $cmd += "`$env:Path = `$env:USERPROFILE + '\.cargo\bin;' + `$env:Path`n"
+    }
+    $cmd += "& $(ConvertTo-Literal $ps1Path) $extra"
+    $enc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($cmd))
+    $argLine = "-NoProfile -ExecutionPolicy Bypass -NoExit -EncodedCommand $enc"
+
+    Write-Log ((T 'Starting') -f (Split-Path -Leaf $ps1Path)) $cPink
     Start-Process powershell -WorkingDirectory $script:Cfg.RepoDir -ArgumentList $argLine
     Set-Busy $false
     if ($chkClose.Checked) { $form.Close() }
 }
 
 # ==========================================================
-#  Événements
+#  Events
 # ==========================================================
 $btnRefresh.Add_Click({ Get-Branches })
 $btnGo.Add_Click({ Start-Selected })
@@ -676,19 +852,22 @@ $txtFilter.Add_TextChanged({ Show-Branches })
 $form.AcceptButton = $btnGo
 $btnSettings.Add_Click({
     if (Show-Settings) {
-        Write-Log 'Paramètres enregistrés.' $cGreen
+        Update-Texts
+        Write-Log (T 'Saved') $cGreen
         Initialize-Launcher
     }
 })
 $form.Add_Shown({
+    if (-not (Initialize-Git)) { $btnGo.Enabled = $false; $btnRefresh.Enabled = $false; return }
     if (@(Test-Config).Count -gt 0) {
-        Write-Log 'Bienvenue ! Commence par configurer le lanceur.' $cPink
-        [void](Show-Settings)
+        Write-Log (T 'Welcome') $cPink
+        if (Show-Settings) { Update-Texts }
     }
     Initialize-Launcher
     $txtFilter.Focus()
 })
 
+Update-Texts
 [void]$form.ShowDialog()
 '@
 
